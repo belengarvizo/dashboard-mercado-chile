@@ -38,16 +38,16 @@ El dashboard tiene 8 pestañas:
    retorno de 0% por dato repetido no es volatilidad real cero.
 
    **CAPM y prima de riesgo país (CRP):** "CAPM local" = Rf local (PDBC 14
-   días) + Beta × prima de mercado local (retorno histórico anualizado del
-   proxy del IPSA menos Rf local). "CAPM + CRP" suma el spread PDBC−UST10Y
-   como proxy de la prima de riesgo país. Se muestran **ambas versiones a
-   propósito**, porque sumar el spread completo puede implicar doble conteo
-   del riesgo país (el Beta y la Rf locales ya lo capturan en parte
-   implícitamente). Es una aproximación al estilo Damodaran, no el EMBI+
-   oficial (que requiere una fuente de pago); además PDBC (14 días) y UST10Y
-   (10 años) tienen plazos distintos, así que el spread puede salir negativo
-   sin que eso implique que el mercado ve a Chile como menos riesgoso que
-   EEUU.
+   días, la tasa libre de riesgo de corto plazo) + Beta × prima de mercado
+   local (retorno histórico anualizado del proxy del IPSA menos PDBC).
+   "CAPM + CRP" suma el spread entre el **bono BCCh en pesos (BCP) a 10
+   años** (tasa de mercado secundario) y el UST10Y — mismo plazo en ambos
+   lados, sin descalce. PDBC se mantiene como Rf del CAPM base; el bono a 10
+   años se usa únicamente para calcular el CRP, no reemplaza a PDBC. Se
+   muestran **ambas versiones a propósito**, porque sumar el spread completo
+   puede implicar doble conteo del riesgo país (el Beta y la Rf locales ya
+   lo capturan en parte implícitamente). Es una aproximación al estilo
+   Damodaran, no el EMBI+ oficial (que requiere una fuente de pago).
 4. **Riesgo** — Value at Risk (VaR) histórico y paramétrico, a 95% y 99%, para
    las 5 acciones principales y un portafolio hipotético equiponderado, sobre
    los últimos ~2 años (mismo filtro de días congelados); y una matriz de
@@ -138,6 +138,8 @@ hora de la última actualización de cada fuente de datos.
 - Precio del cobre (USD/oz troy)
 - Swap Promedio Cámara nominal (90 días)
 - Tasa libre de riesgo CLP (PDBC a 14 días)
+- Bono BCCh en pesos (BCP) a 10 años, tasa de mercado secundario — usado
+  junto al UST10Y para calcular el CRP (spread plazo contra plazo)
 
 **Yahoo Finance (vía `yfinance`, sin autenticación):**
 - Las 30 acciones del índice IPSA

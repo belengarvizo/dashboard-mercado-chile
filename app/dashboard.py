@@ -109,11 +109,14 @@ def calcular_retornos_reales(serie: pd.Series) -> pd.Series:
 
 @st.cache_data(ttl=3600)
 def calcular_crp_y_prima_mercado(df_macro: pd.DataFrame, df_acciones: pd.DataFrame) -> dict:
-    """Tasa libre de riesgo local (PDBC), tasa libre de riesgo EEUU (UST10),
-    spread PDBC-UST10 como proxy de prima de riesgo país (CRP, enfoque
-    Damodaran, no EMBI+), y prima de mercado local (retorno histórico
-    anualizado del proxy del IPSA menos la tasa libre de riesgo local).
-    Todo en puntos porcentuales, reutilizando series que ya están en la BD."""
+    """Tasa libre de riesgo local de corto plazo (PDBC, la base del CAPM),
+    tasa libre de riesgo EEUU a 10 años (UST10), tasa del bono BCCh en pesos
+    (BCP) a 10 años (mismo plazo que UST10, usada solo para el CRP — no
+    reemplaza a PDBC como Rf del CAPM), spread BCP10-UST10 como proxy de
+    prima de riesgo país (CRP, enfoque Damodaran, no EMBI+, ahora plazo
+    contra plazo), y prima de mercado local (retorno histórico anualizado
+    del proxy del IPSA menos PDBC). Todo en puntos porcentuales, reutilizando
+    series que ya están en la BD."""
     df_macro = df_macro.assign(fecha=pd.to_datetime(df_macro["fecha"]))
 
     pdbc = (
@@ -124,9 +127,14 @@ def calcular_crp_y_prima_mercado(df_macro: pd.DataFrame, df_acciones: pd.DataFra
         df_macro[df_macro["nombre"] == "Bono del Tesoro de EEUU a 10 años (UST10Y)"]
         .sort_values("fecha")["valor"]
     )
+    bcp10 = (
+        df_macro[df_macro["nombre"] == "Bono BCCh en pesos (BCP) a 10 años - tasa mercado secundario"]
+        .sort_values("fecha")["valor"]
+    )
     rf_cl = float(pdbc.iloc[-1]) if len(pdbc) else None
     rf_ust = float(ust10.iloc[-1]) if len(ust10) else None
-    crp = (rf_cl - rf_ust) if rf_cl is not None and rf_ust is not None else None
+    rf_cl_10y = float(bcp10.iloc[-1]) if len(bcp10) else None
+    crp = (rf_cl_10y - rf_ust) if rf_cl_10y is not None and rf_ust is not None else None
 
     df_acciones = df_acciones.assign(fecha=pd.to_datetime(df_acciones["fecha"]))
     proxy = (
@@ -144,7 +152,13 @@ def calcular_crp_y_prima_mercado(df_macro: pd.DataFrame, df_acciones: pd.DataFra
         else None
     )
 
-    return {"rf_cl": rf_cl, "rf_ust": rf_ust, "crp": crp, "prima_mercado_local": prima_mercado_local}
+    return {
+        "rf_cl": rf_cl,
+        "rf_ust": rf_ust,
+        "rf_cl_10y": rf_cl_10y,
+        "crp": crp,
+        "prima_mercado_local": prima_mercado_local,
+    }
 
 
 @st.cache_data(ttl=3600)
@@ -841,25 +855,29 @@ with tab_acciones:
         )
 
         if capm_insumos["rf_cl"] is not None:
+            spread_texto = (
+                f"spread BCP10−UST10 = {capm_insumos['crp']:+.2f} pp (proxy de CRP)"
+                if capm_insumos["crp"] is not None
+                else "spread BCP10−UST10 no disponible"
+            )
             st.info(
                 f"**Nota metodológica — CAPM y prima de riesgo país (CRP).** "
-                f"Rf local (PDBC 14d) = {capm_insumos['rf_cl']:.2f}%, "
-                f"Rf EEUU (UST10Y) = {capm_insumos['rf_ust']:.2f}%, "
-                f"spread PDBC−UST10 = {capm_insumos['crp']:+.2f} pp (proxy de CRP), "
-                f"prima de mercado local = {capm_insumos['prima_mercado_local']:.2f} pp "
-                "(retorno histórico anualizado del proxy del IPSA menos Rf local). "
-                "**CAPM local** = Rf local + Beta × prima de mercado local. "
-                "**CAPM + CRP** = CAPM local + el spread de arriba. Se muestran ambas "
+                f"Rf local para el CAPM base (PDBC 14 días) = {capm_insumos['rf_cl']:.2f}%. "
+                f"Para el CRP se compara **plazo contra plazo**: bono BCCh en pesos (BCP) a "
+                f"10 años = {capm_insumos['rf_cl_10y']:.2f}% vs. UST10Y = "
+                f"{capm_insumos['rf_ust']:.2f}%, {spread_texto}. La tasa a 10 años se usa "
+                "únicamente para el CRP — el CAPM base sigue usando PDBC como tasa libre de "
+                "riesgo de corto plazo, sin mezclarlas. "
+                f"Prima de mercado local = {capm_insumos['prima_mercado_local']:.2f} pp "
+                "(retorno histórico anualizado del proxy del IPSA menos PDBC). "
+                "**CAPM local** = Rf local (PDBC) + Beta × prima de mercado local. "
+                "**CAPM + CRP** = CAPM local + el spread BCP10-UST10. Se muestran ambas "
                 "versiones a propósito: sumar el spread completo puede implicar un "
                 "**doble conteo** del riesgo país, ya que el Beta y la Rf locales ya "
                 "capturan parte de ese riesgo implícitamente (el mercado chileno se mueve "
-                "distinto a EEUU en parte *por* el riesgo país). Este spread PDBC-UST10 es "
-                "una **aproximación al estilo Damodaran**, no el EMBI+ oficial (que "
-                "requiere una fuente de datos de pago que este dashboard no tiene). También "
-                "hay un **descalce de plazos**: PDBC es a 14 días y UST10Y es a 10 años, así "
-                "que el spread mezcla riesgo país con diferencias de duración/curva de "
-                "tasas — por eso puede salir negativo (como ahora) sin que eso implique que "
-                "el mercado percibe a Chile como \"menos riesgoso\" que EEUU."
+                "distinto a EEUU en parte *por* el riesgo país). Este spread es una "
+                "**aproximación al estilo Damodaran**, no el EMBI+ oficial (que requiere una "
+                "fuente de datos de pago que este dashboard no tiene)."
             )
 
     except Exception as e:

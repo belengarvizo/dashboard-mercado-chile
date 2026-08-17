@@ -27,6 +27,7 @@ SERIES_A_DESCARGAR = {
     "F019.PPB.PRE.100.D": {"nombre": "Precio del cobre (USD/oz troy)", "frecuencia": "diaria"},
     "F022.SPC.TPR.D090.NO.Z.D": {"nombre": "Swap Promedio Cámara nominal (90 días)", "frecuencia": "diaria"},
     "F022.PDBC.TIN.D014.NO.Z.D": {"nombre": "Tasa libre de riesgo CLP (PDBC 14 días)", "frecuencia": "diaria"},
+    "F022.BCLP.TIS.AN10.NO.Z.D": {"nombre": "Bono BCCh en pesos (BCP) a 10 años - tasa mercado secundario", "frecuencia": "diaria"},
 }
 
 BCCH_URL = "https://si3.bcentral.cl/SieteRestWS/SieteRestWS.ashx"
