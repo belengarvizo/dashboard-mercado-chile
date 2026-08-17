@@ -275,6 +275,23 @@ def _p_valor_normal(t_stat: float) -> float:
     return 2 * (1 - 0.5 * (1 + math.erf(abs(t_stat) / math.sqrt(2))))
 
 
+UMBRAL_SIGNIFICANCIA = 0.05
+LEYENDA_SIGNIFICANCIA = (
+    "🟢 Verde = estadísticamente significativo (p < 0.05) — "
+    "🔴 Rojo = no significativo, no se puede afirmar con esta muestra."
+)
+
+
+def _color_significancia(p_valor) -> str:
+    """Color de TEXTO (negrita), no de fondo, para no confundirse con el
+    verde/rojo de fondo que usa el heatmap de ganancia/pérdida de precios en
+    la pestaña "Acciones IPSA" — mismo par de colores, rol visual distinto."""
+    if p_valor is None or pd.isna(p_valor):
+        return ""
+    color = "#0ca30c" if p_valor < UMBRAL_SIGNIFICANCIA else "#d03b3b"
+    return f"color: {color}; font-weight: 700"
+
+
 @st.cache_data(ttl=3600)
 def calcular_event_study_tpm(df_macro: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame, int]:
     """Event study: impacto de los cambios de la TPM sobre el tipo de cambio USD/CLP.
@@ -370,6 +387,7 @@ def calcular_event_study_tpm(df_macro: pd.DataFrame) -> tuple[pd.DataFrame, pd.D
             "p-valor AAR": _p_valor_normal(t_aar) if t_aar is not None else None,
             "CAAR (%)": caar if n else None,
             "t-stat CAAR": t_caar,
+            "p-valor CAAR": _p_valor_normal(t_caar) if t_caar is not None else None,
         })
 
     df_agregado = pd.DataFrame(filas_agg)
@@ -915,9 +933,12 @@ with tab_riesgo:
         # entre acciones individuales) cerca del punto medio gris. Se oculta
         # y la escala se ajusta al rango real de los datos, no al [-1, 1]
         # teórico.
-        matriz_display = matriz_corr.copy()
-        np.fill_diagonal(matriz_display.values, np.nan)
-        max_abs_offdiag = np.nanmax(np.abs(matriz_display.values))
+        # ("mask" en vez de mutar .values directamente: el array que devuelve
+        # una función @st.cache_data puede venir de solo lectura, y
+        # np.fill_diagonal sobre esa vista lanza "underlying array is read-only".)
+        mascara_diagonal = np.eye(len(matriz_corr), dtype=bool)
+        matriz_display = matriz_corr.mask(mascara_diagonal)
+        max_abs_offdiag = np.nanmax(np.abs(matriz_display.to_numpy()))
         max_abs_offdiag = max_abs_offdiag if pd.notna(max_abs_offdiag) and max_abs_offdiag > 0 else 1
 
         fig_corr = px.imshow(
@@ -1028,16 +1049,30 @@ with tab_event_study:
             "AAR/CAAR por día relativo, con t-test simple contra cero "
             "(usando la desviación estándar de la ventana de estimación de cada evento)."
         )
+
+        def _marcar_significancia_agregado(fila):
+            color_aar = _color_significancia(fila["p-valor AAR"])
+            color_caar = _color_significancia(fila["p-valor CAAR"])
+            return [
+                color_aar if col in ("AAR (%)", "t-stat AAR", "p-valor AAR") else
+                color_caar if col in ("CAAR (%)", "t-stat CAAR", "p-valor CAAR") else ""
+                for col in fila.index
+            ]
+
         st.dataframe(
-            df_agregado.style.format({
+            df_agregado.style
+            .apply(_marcar_significancia_agregado, axis=1)
+            .format({
                 "AAR (%)": "{:+.3f}%",
                 "t-stat AAR": "{:.2f}",
                 "p-valor AAR": "{:.3f}",
                 "CAAR (%)": "{:+.3f}%",
                 "t-stat CAAR": "{:.2f}",
+                "p-valor CAAR": "{:.3f}",
             }, na_rep="—"),
             use_container_width=True,
         )
+        st.caption(LEYENDA_SIGNIFICANCIA)
 
         st.subheader(f"Eventos individuales ({n_eventos})")
         st.dataframe(
@@ -1059,22 +1094,31 @@ with tab_event_study:
             "como evidencia de que la TPM \"no importa\"."
         )
 
+        def _marcar_significancia_direccion(fila):
+            return [_color_significancia(fila["p-valor (vs 0)"])] * len(fila)
+
         st.dataframe(
-            df_direccion.style.format({
+            df_direccion.style
+            .apply(_marcar_significancia_direccion, axis=1)
+            .format({
                 "CAR medio (%)": "{:+.3f}%",
                 "t-stat (vs 0)": "{:.2f}",
                 "p-valor (vs 0)": "{:.3f}",
             }, na_rep="—"),
             use_container_width=True,
         )
+        st.caption(LEYENDA_SIGNIFICANCIA)
 
         if diferencia["t_stat"] is not None:
-            sig_dif = "sí" if diferencia["p_valor"] < 0.05 else "no"
+            sig_dif = diferencia["p_valor"] < UMBRAL_SIGNIFICANCIA
+            color_dif = "#0ca30c" if sig_dif else "#d03b3b"
+            etiqueta_dif = "significativa" if sig_dif else "no significativa"
             st.markdown(
                 f"**Diferencia de medias (Alza − Baja), test de Welch:** "
                 f"{diferencia['diferencia_medias']:+.3f} puntos porcentuales de CAR "
-                f"(t = {diferencia['t_stat']:.2f}, p = {diferencia['p_valor']:.3f}) "
-                f"— {'**significativa**' if sig_dif == 'sí' else 'no significativa'} al 5%."
+                f"(t = {diferencia['t_stat']:.2f}, p = {diferencia['p_valor']:.3f}) — "
+                f"<span style='color:{color_dif}; font-weight:700'>{etiqueta_dif}</span> al 5%.",
+                unsafe_allow_html=True,
             )
         else:
             st.markdown("No hay suficientes eventos en algún grupo para el test de diferencia de medias.")
@@ -1189,7 +1233,9 @@ with tab_backtester:
             st.plotly_chart(fig_hist, use_container_width=True)
 
             percentil = resultado["percentil_real"]
-            if percentil >= 95 or percentil <= 5:
+            distinguible_del_azar = percentil >= 95 or percentil <= 5
+            if distinguible_del_azar:
+                etiqueta_pct = "distinguible del azar"
                 interpretacion = (
                     "un resultado así de extremo es poco común bajo mezclas al azar — "
                     "compatible con que el criterio direccional (y no solo el momento "
@@ -1197,6 +1243,7 @@ with tab_backtester:
                     "esto debe leerse con cautela."
                 )
             else:
+                etiqueta_pct = "indistinguible del azar"
                 interpretacion = (
                     "el resultado real es indistinguible de simplemente elegir una "
                     "dirección al azar en esas mismas 37 fechas — no hay evidencia de "
@@ -1204,10 +1251,18 @@ with tab_backtester:
                     "aporte valor por sobre el azar, más allá de si el retorno total "
                     "fue positivo o negativo."
                 )
+            color_pct = "#0ca30c" if distinguible_del_azar else "#d03b3b"
             st.markdown(
                 f"**El resultado real ({resultado['retorno_total']:+.2f}%) cae en el "
-                f"percentil {percentil:.0f} de la distribución de mezclas al azar** "
-                f"— {interpretacion}"
+                f"percentil {percentil:.0f} de la distribución de mezclas al azar** — "
+                f"<span style='color:{color_pct}; font-weight:700'>{etiqueta_pct}</span> "
+                f"({interpretacion})",
+                unsafe_allow_html=True,
+            )
+            st.caption(
+                "🟢 Verde = cae en el 5% extremo (superior o inferior) de la distribución "
+                "aleatoria, distinguible del azar — 🔴 Rojo = cae en el rango central, "
+                "indistinguible del azar."
             )
 
             st.divider()

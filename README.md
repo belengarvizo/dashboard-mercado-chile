@@ -76,10 +76,15 @@ El dashboard tiene 8 pestañas:
    Muestra el CAAR promedio de todos los eventos con un t-test simple de
    significancia, la tabla de cada evento individual, y un t-test separado del
    CAR contra cero para alzas vs. bajas de tasa (más un test de diferencia de
-   medias entre ambos grupos). **Limitación metodológica:** solo detecta
-   cambios efectivos de tasa, no las decisiones de "mantener" en cada Reunión
-   de Política Monetaria (RPM), porque el dashboard no tiene el calendario de
-   reuniones — queda documentado en la propia pestaña.
+   medias entre ambos grupos). Las tablas de AAR/CAAR y de alzas/bajas marcan
+   cada resultado en **texto verde si p < 0,05 (significativo) o rojo si
+   p ≥ 0,05 (no significativo)** — texto en negrita, no fondo de celda, para
+   no confundirse con el verde/rojo de fondo que usa el heatmap de
+   ganancia/pérdida en "Acciones IPSA" (mismo par de colores, rol visual
+   distinto). **Limitación metodológica:** solo detecta cambios efectivos de
+   tasa, no las decisiones de "mantener" en cada Reunión de Política
+   Monetaria (RPM), porque el dashboard no tiene el calendario de reuniones
+   — queda documentado en la propia pestaña.
 
    **Hallazgo (con los datos hasta la fecha):** de 37 eventos (15 alzas,
    22 bajas), el CAR promedio es negativo tras alzas de TPM (el dólar tiende a
@@ -117,7 +122,11 @@ El dashboard tiene 8 pestañas:
    mezcla, y muestra en qué percentil de esa distribución cae el resultado
    real — para saber si el criterio direccional aporta algo por sobre el
    azar, o si el resultado es indistinguible de simplemente apostar una
-   dirección cualquiera en esas mismas fechas.
+   dirección cualquiera en esas mismas fechas. El resultado del percentil se
+   marca en **texto verde si cae en el 5% extremo de la distribución
+   (distinguible del azar) o rojo si cae en el rango central (indistinguible
+   del azar)**, con el mismo criterio visual (texto, no fondo) que las tablas
+   de significancia del Event Study.
 
    **Hallazgo:** el resultado real (-3,75% acumulado en 37 trades, Sharpe
    -0,13) cae en el **percentil ~44 de 1.000 mezclas aleatorias de
