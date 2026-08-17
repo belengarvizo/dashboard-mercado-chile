@@ -36,11 +36,27 @@ El dashboard tiene 6 pestañas:
    acumulado (CAR) en una ventana de -2 a +2 días hábiles alrededor de cada
    evento, estimados contra el retorno normal de los 30 días hábiles previos.
    Muestra el CAAR promedio de todos los eventos con un t-test simple de
-   significancia, y la tabla de cada evento individual. **Limitación
-   metodológica:** solo detecta cambios efectivos de tasa, no las decisiones
-   de "mantener" en cada Reunión de Política Monetaria (RPM), porque el
-   dashboard no tiene el calendario de reuniones — queda documentado en la
-   propia pestaña.
+   significancia, la tabla de cada evento individual, y un t-test separado del
+   CAR contra cero para alzas vs. bajas de tasa (más un test de diferencia de
+   medias entre ambos grupos). **Limitación metodológica:** solo detecta
+   cambios efectivos de tasa, no las decisiones de "mantener" en cada Reunión
+   de Política Monetaria (RPM), porque el dashboard no tiene el calendario de
+   reuniones — queda documentado en la propia pestaña.
+
+   **Hallazgo (con los datos hasta la fecha):** de 37 eventos (15 alzas,
+   22 bajas), el CAR promedio es negativo tras alzas de TPM (el dólar tiende a
+   bajar, el peso se aprecia levemente) y positivo tras bajas (el dólar tiende
+   a subir, el peso se deprecia) — dirección **económicamente consistente con
+   la teoría de paridad de tasas de interés**. Pero **ningún resultado es
+   estadísticamente significativo al 5%**: ni el AAR/CAAR agregado en ningún
+   día de la ventana de evento, ni el CAR de alzas o bajas contra cero por
+   separado (t=-0,18 y t=1,04 respectivamente), ni la diferencia de medias
+   entre ambos grupos (t=-0,91, p=0,37). Con muestras chicas (n=15 y n=22 por
+   grupo) esa falta de significancia es esperable incluso si existe un efecto
+   real, así que no debe leerse como prueba de que la TPM "no importa" — es
+   más bien consistente con la hipótesis de que **el mercado suele anticipar
+   mayormente las decisiones de política monetaria**, dejando poca sorpresa
+   (y por lo tanto poco movimiento anormal) para el día del anuncio.
 
 Arriba de las pestañas, y también en la barra lateral, se muestra la fecha y
 hora de la última actualización de cada fuente de datos.

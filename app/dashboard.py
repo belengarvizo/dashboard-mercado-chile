@@ -16,6 +16,7 @@ import pandas as pd
 import numpy as np
 import plotly.express as px
 from matplotlib.colors import LinearSegmentedColormap
+from scipy import stats
 from sqlalchemy import text
 from models import get_engine
 from constants import (
@@ -262,6 +263,41 @@ def calcular_event_study_tpm(df_macro: pd.DataFrame) -> tuple[pd.DataFrame, pd.D
 
     df_agregado = pd.DataFrame(filas_agg)
     return df_eventos, df_agregado, n
+
+
+@st.cache_data(ttl=3600)
+def calcular_tests_direccion(df_eventos: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
+    """t-test del CAR contra cero para cada dirección (alza/baja), y test de
+    diferencia de medias (Welch, sin asumir varianzas iguales) entre ambas."""
+    car_alza = df_eventos.loc[df_eventos["Dirección"] == "Alza", "CAR (%)"]
+    car_baja = df_eventos.loc[df_eventos["Dirección"] == "Baja", "CAR (%)"]
+
+    filas = []
+    for etiqueta, serie in [("Alza (sube TPM)", car_alza), ("Baja (baja TPM)", car_baja)]:
+        if len(serie) >= 2:
+            t_stat, p_valor = stats.ttest_1samp(serie, popmean=0)
+        else:
+            t_stat, p_valor = None, None
+        filas.append({
+            "Grupo": etiqueta,
+            "n": len(serie),
+            "CAR medio (%)": serie.mean() if len(serie) else None,
+            "t-stat (vs 0)": t_stat,
+            "p-valor (vs 0)": p_valor,
+        })
+    df_direccion = pd.DataFrame(filas)
+
+    if len(car_alza) >= 2 and len(car_baja) >= 2:
+        t_diff, p_diff = stats.ttest_ind(car_alza, car_baja, equal_var=False)
+        diferencia = {
+            "diferencia_medias": car_alza.mean() - car_baja.mean(),
+            "t_stat": t_diff,
+            "p_valor": p_diff,
+        }
+    else:
+        diferencia = {"diferencia_medias": None, "t_stat": None, "p_valor": None}
+
+    return df_direccion, diferencia
 
 
 # --- Sidebar: info de última actualización ---
@@ -557,6 +593,49 @@ with tab_event_study:
         st.dataframe(
             df_eventos.style.format({"CAR (%)": "{:+.3f}%"}),
             use_container_width=True,
+        )
+
+        # --- Tests por dirección: ¿el CAR es distinto de cero en alzas / bajas, y entre sí? ---
+        st.subheader("¿Alzas y bajas de TPM mueven el dólar de forma distinta?")
+
+        df_direccion, diferencia = calcular_tests_direccion(df_eventos)
+
+        n_alza = int(df_direccion.loc[df_direccion["Grupo"].str.startswith("Alza"), "n"].iloc[0])
+        n_baja = int(df_direccion.loc[df_direccion["Grupo"].str.startswith("Baja"), "n"].iloc[0])
+        st.warning(
+            f"⚠️ Muestra chica: n={n_alza} alzas y n={n_baja} bajas. Con tan pocos eventos "
+            "por grupo, es esperable que ninguno de estos tests alcance significancia "
+            "estadística aunque exista un efecto real — no interpretar un t-stat bajo "
+            "como evidencia de que la TPM \"no importa\"."
+        )
+
+        st.dataframe(
+            df_direccion.style.format({
+                "CAR medio (%)": "{:+.3f}%",
+                "t-stat (vs 0)": "{:.2f}",
+                "p-valor (vs 0)": "{:.3f}",
+            }, na_rep="—"),
+            use_container_width=True,
+        )
+
+        if diferencia["t_stat"] is not None:
+            sig_dif = "sí" if diferencia["p_valor"] < 0.05 else "no"
+            st.markdown(
+                f"**Diferencia de medias (Alza − Baja), test de Welch:** "
+                f"{diferencia['diferencia_medias']:+.3f} puntos porcentuales de CAR "
+                f"(t = {diferencia['t_stat']:.2f}, p = {diferencia['p_valor']:.3f}) "
+                f"— {'**significativa**' if sig_dif == 'sí' else 'no significativa'} al 5%."
+            )
+        else:
+            st.markdown("No hay suficientes eventos en algún grupo para el test de diferencia de medias.")
+
+        st.caption(
+            "El CAR promedio es negativo tras alzas de TPM (el dólar tiende a bajar, el "
+            "peso se aprecia) y positivo tras bajas (el dólar tiende a subir, el peso se "
+            "deprecia) — dirección consistente con la teoría de paridad de tasas de "
+            "interés. Pero ninguno de los dos t-test contra cero, ni la diferencia entre "
+            "grupos, es significativo al 5%: no se puede descartar que el efecto "
+            "observado sea puro ruido con esta muestra."
         )
 
         st.info(
