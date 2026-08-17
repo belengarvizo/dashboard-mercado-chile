@@ -5,7 +5,7 @@ Usamos SQLAlchemy para no escribir SQL a mano.
 
 import os
 from dotenv import load_dotenv
-from sqlalchemy import create_engine, Column, Integer, String, Date, Numeric, BigInteger, DateTime
+from sqlalchemy import create_engine, Column, Integer, String, Date, Numeric, BigInteger, DateTime, Text
 from sqlalchemy.orm import declarative_base, sessionmaker
 
 load_dotenv()
@@ -54,6 +54,16 @@ class Noticia(Base):
     link = Column(String, nullable=False)
     fecha_publicacion = Column(DateTime, nullable=False)
     fecha_descarga = Column(DateTime, nullable=False)
+
+
+class BriefDiario(Base):
+    """Resumen diario generado por IA (Gemini) para el Brief Premercado.
+    Se regenera una vez al día en el cron, no en cada visita al dashboard."""
+    __tablename__ = "brief_diario"
+
+    fecha = Column(Date, primary_key=True)
+    contenido = Column(Text, nullable=False)
+    generado_en = Column(DateTime, nullable=False)
 
 
 def get_engine():

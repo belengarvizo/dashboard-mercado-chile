@@ -9,3 +9,4 @@ python-dotenv
 matplotlib
 feedparser
 scipy
+google-genai

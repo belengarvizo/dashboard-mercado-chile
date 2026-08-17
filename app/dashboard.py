@@ -26,6 +26,7 @@ from constants import (
     TICKERS_BENCHMARK,
     TICKERS_MAGNIFICAS,
 )
+from market_data import calcular_resumen_mercado
 
 st.set_page_config(page_title="Mercado Chile", layout="wide")
 
@@ -83,6 +84,15 @@ def cargar_noticias():
     return pd.read_sql(query, engine)
 
 
+@st.cache_data(ttl=3600)
+def cargar_brief_diario():
+    # El más reciente disponible, no estrictamente "hoy": si el cron todavía no
+    # corrió hoy (ej. antes de las 6 AM) es mejor mostrar el último brief real
+    # que no mostrar nada.
+    query = "SELECT fecha, contenido, generado_en FROM brief_diario ORDER BY fecha DESC LIMIT 1"
+    return pd.read_sql(query, engine)
+
+
 def calcular_retornos_reales(serie: pd.Series) -> pd.Series:
     """Retornos diarios de una serie de precios, excluyendo los días donde el
     precio no cambió respecto al anterior (dato congelado — no es volatilidad
@@ -90,18 +100,6 @@ def calcular_retornos_reales(serie: pd.Series) -> pd.Series:
     "Atraso" del heatmap: comparar cada valor con el del día anterior."""
     cambia = serie.ne(serie.shift(1))
     return serie.pct_change()[cambia]
-
-
-def calcular_cambio_reciente(serie: pd.Series) -> tuple[float, float, object] | None:
-    """(valor actual, % de cambio vs la sesión anterior, fecha) a partir de una serie ordenada por fecha."""
-    if len(serie) < 2:
-        return None
-    valor_actual = serie.iloc[-1]
-    valor_anterior = serie.iloc[-2]
-    if not valor_anterior:
-        return None
-    cambio_pct = (valor_actual / valor_anterior - 1) * 100
-    return float(valor_actual), float(cambio_pct), serie.index[-1]
 
 
 @st.cache_data(ttl=3600)
@@ -556,76 +554,82 @@ with tab_premercado:
 
     st.subheader("Importante")
 
-    # (etiqueta, tipo de tabla, nombre/ticker, unidad a mostrar)
-    INDICADORES_PREMERCADO = [
-        ("S&P 500", "accion", "^GSPC", ""),
-        ("Cobre", "macro", "Precio del cobre (USD/oz troy)", "US$"),
-        ("MSCI EM (EEM)", "accion", "EEM", "US$"),
-        ("Bovespa", "accion", "^BVSP", ""),
-        ("Bono UST 10 años", "macro", "Bono del Tesoro de EEUU a 10 años (UST10Y)", "%"),
-    ]
-
     try:
         df_macro = cargar_series_macro()
         df_acciones = cargar_precios_acciones()
+        indicadores = calcular_resumen_mercado(df_macro, df_acciones)
 
-        columnas = st.columns(len(INDICADORES_PREMERCADO))
-        for col, (etiqueta, tipo, clave, unidad) in zip(columnas, INDICADORES_PREMERCADO):
-            if tipo == "accion":
-                serie = (
-                    df_acciones[df_acciones["ticker"] == clave]
-                    .sort_values("fecha")
-                    .set_index("fecha")["precio_cierre"]
-                )
-            else:
-                serie = (
-                    df_macro[df_macro["nombre"] == clave]
-                    .sort_values("fecha")
-                    .set_index("fecha")["valor"]
-                )
-
-            resultado = calcular_cambio_reciente(serie)
+        columnas = st.columns(len(indicadores))
+        for col, ind in zip(columnas, indicadores):
             with col:
-                if resultado:
-                    valor, cambio_pct, fecha = resultado
-                    valor_texto = f"{valor:,.2f}" + (f" {unidad}" if unidad else "")
-                    st.metric(etiqueta, valor_texto, f"{cambio_pct:+.2f}%")
+                if ind["resultado"]:
+                    valor, cambio_pct, fecha = ind["resultado"]
+                    valor_texto = f"{valor:,.2f}" + (f" {ind['unidad']}" if ind["unidad"] else "")
+                    st.metric(ind["etiqueta"], valor_texto, f"{cambio_pct:+.2f}%")
                     st.caption(f"al {pd.Timestamp(fecha).strftime('%d-%m-%Y')}")
                 else:
-                    st.metric(etiqueta, "—")
+                    st.metric(ind["etiqueta"], "—")
                     st.caption("sin datos suficientes")
 
     except Exception as e:
         st.error(f"No se pudo cargar el resumen internacional: {e}")
 
     st.divider()
-    st.subheader("Titulares relevantes")
+    st.subheader("Resumen del día (generado por IA)")
 
     try:
-        df_noticias = cargar_noticias()
+        df_brief = cargar_brief_diario()
 
-        if df_noticias.empty:
-            st.info("Todavía no hay titulares descargados. Corre scripts/actualizar_noticias.py.")
+        if df_brief.empty:
+            st.info(
+                "Todavía no se ha generado el resumen diario. Corre "
+                "scripts/generar_brief.py (requiere GEMINI_API_KEY) — se genera "
+                "una vez al día como parte del cron, no en cada visita."
+            )
         else:
-            df_noticias = df_noticias.assign(fecha_publicacion=pd.to_datetime(df_noticias["fecha_publicacion"]))
-            df_noticias["dia"] = df_noticias["fecha_publicacion"].dt.date
-
-            # df_noticias ya viene ordenado desc por fecha_publicacion (ver cargar_noticias),
-            # así que agrupar sin volver a ordenar deja primero el día más reciente.
-            for dia, grupo in df_noticias.groupby("dia", sort=False):
-                st.markdown(f"**{dia.strftime('%d-%m-%Y')}**")
-                for _, fila in grupo.iterrows():
-                    hora = fila["fecha_publicacion"].strftime("%H:%M")
-                    st.markdown(f"- {hora} · *{fila['fuente']}* — [{fila['titulo']}]({fila['link']})")
+            fila_brief = df_brief.iloc[0]
+            st.caption(
+                f"Generado el {pd.Timestamp(fila_brief['generado_en']).strftime('%d-%m-%Y %H:%M')} "
+                f"para el {pd.Timestamp(fila_brief['fecha']).strftime('%d-%m-%Y')}."
+            )
+            st.markdown(fila_brief["contenido"])
+            st.warning(
+                "⚠️ Resumen generado automáticamente por IA a partir de titulares "
+                "públicos — puede contener errores o imprecisiones, no constituye "
+                "asesoría de inversión."
+            )
 
     except Exception as e:
-        st.error(f"No se pudieron cargar los titulares: {e}")
+        st.error(f"No se pudo cargar el resumen diario: {e}")
+
+    st.divider()
+
+    with st.expander("Titulares relevantes (detalle)"):
+        try:
+            df_noticias = cargar_noticias()
+
+            if df_noticias.empty:
+                st.info("Todavía no hay titulares descargados. Corre scripts/actualizar_noticias.py.")
+            else:
+                df_noticias = df_noticias.assign(fecha_publicacion=pd.to_datetime(df_noticias["fecha_publicacion"]))
+                df_noticias["dia"] = df_noticias["fecha_publicacion"].dt.date
+
+                # df_noticias ya viene ordenado desc por fecha_publicacion (ver cargar_noticias),
+                # así que agrupar sin volver a ordenar deja primero el día más reciente.
+                for dia, grupo in df_noticias.groupby("dia", sort=False):
+                    st.markdown(f"**{dia.strftime('%d-%m-%Y')}**")
+                    for _, fila in grupo.iterrows():
+                        hora = fila["fecha_publicacion"].strftime("%H:%M")
+                        st.markdown(f"- {hora} · *{fila['fuente']}* — [{fila['titulo']}]({fila['link']})")
+
+        except Exception as e:
+            st.error(f"No se pudieron cargar los titulares: {e}")
 
     st.divider()
     st.caption(
-        "**Nota metodológica.** Esta sección muestra el contexto internacional y los "
-        "titulares recientes lado a lado con el movimiento de mercado, como insumos "
-        "para leer antes de la apertura — no afirma causalidad específica entre una "
+        "**Nota metodológica.** El resumen de arriba se genera automáticamente una "
+        "vez al día a partir de los indicadores de \"Importante\" y los titulares "
+        "de la sección de detalle — no afirma causalidad específica entre una "
         "noticia puntual y un movimiento de precio. \"La Tercera Pulso\" y \"Emol "
         "Economía\" no tienen un feed RSS propio funcionando hoy, así que sus "
         "titulares se obtienen vía una búsqueda de Google Noticias filtrada por "
