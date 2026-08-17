@@ -908,14 +908,32 @@ with tab_riesgo:
         st.subheader("Matriz de correlación — retornos diarios, 30 acciones del IPSA")
 
         matriz_corr = calcular_matriz_correlacion_ipsa(df_acciones)
+
+        # La diagonal es siempre 1.0 (cada acción consigo misma) y no aporta
+        # información; si se deja en la escala, domina el rango de color y
+        # aplasta visualmente las correlaciones reales (típicamente 0.2-0.6
+        # entre acciones individuales) cerca del punto medio gris. Se oculta
+        # y la escala se ajusta al rango real de los datos, no al [-1, 1]
+        # teórico.
+        matriz_display = matriz_corr.copy()
+        np.fill_diagonal(matriz_display.values, np.nan)
+        max_abs_offdiag = np.nanmax(np.abs(matriz_display.values))
+        max_abs_offdiag = max_abs_offdiag if pd.notna(max_abs_offdiag) and max_abs_offdiag > 0 else 1
+
         fig_corr = px.imshow(
-            matriz_corr,
+            matriz_display,
             color_continuous_scale=COLORSCALE_CORRELACION,
-            zmin=-1, zmax=1,
+            zmin=-max_abs_offdiag, zmax=max_abs_offdiag,
             aspect="auto",
         )
         fig_corr.update_layout(height=750)
         st.plotly_chart(fig_corr, use_container_width=True)
+        st.caption(
+            f"Escala de color ajustada al rango real de los datos (±{max_abs_offdiag:.2f}), "
+            "no al [-1, 1] teórico — así las correlaciones moderadas típicas entre acciones "
+            "individuales no se ven aplastadas cerca de cero. La diagonal se deja en blanco "
+            "porque es trivialmente 1.0 y no aporta información."
+        )
 
         st.divider()
         st.info(
