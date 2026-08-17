@@ -1,7 +1,7 @@
 """
-Corre las dos actualizaciones diarias (series del BCCh y precios de
-acciones del IPSA) en un solo paso. Pensado para usarse como único
-comando del cron job de Railway.
+Corre las tres actualizaciones diarias (series del BCCh, precios de
+acciones del IPSA y titulares de noticias) en un solo paso. Pensado
+para usarse como único comando del cron job de Railway.
 """
 
 import os
@@ -11,6 +11,7 @@ sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
 
 from scripts.actualizar_bcch import actualizar_todas_las_series
 from scripts.actualizar_acciones import actualizar_todas_las_acciones
+from scripts.actualizar_noticias import actualizar_todas_las_noticias
 
 
 def actualizar_todo():
@@ -19,6 +20,9 @@ def actualizar_todo():
 
     print("\n== Actualizando acciones del IPSA ==")
     actualizar_todas_las_acciones()
+
+    print("\n== Actualizando titulares de noticias ==")
+    actualizar_todas_las_noticias()
 
 
 if __name__ == "__main__":

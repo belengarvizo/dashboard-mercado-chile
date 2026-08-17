@@ -44,6 +44,18 @@ class MetadataActualizacion(Base):
     ultima_actualizacion = Column(DateTime, nullable=False)
 
 
+class Noticia(Base):
+    """Titulares de noticias económicas chilenas, para el Brief Premercado."""
+    __tablename__ = "noticias"
+
+    id = Column(Integer, primary_key=True)
+    fuente = Column(String, nullable=False)
+    titulo = Column(String, nullable=False)
+    link = Column(String, nullable=False)
+    fecha_publicacion = Column(DateTime, nullable=False)
+    fecha_descarga = Column(DateTime, nullable=False)
+
+
 def get_engine():
     database_url = os.environ["DATABASE_URL"]
     return create_engine(database_url)

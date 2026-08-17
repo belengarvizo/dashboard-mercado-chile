@@ -62,6 +62,24 @@ def cargar_ultima_actualizacion():
 
 
 @st.cache_data(ttl=3600)
+def cargar_noticias():
+    query = "SELECT fuente, titulo, link, fecha_publicacion FROM noticias ORDER BY fecha_publicacion DESC"
+    return pd.read_sql(query, engine)
+
+
+def calcular_cambio_reciente(serie: pd.Series) -> tuple[float, float, object] | None:
+    """(valor actual, % de cambio vs la sesión anterior, fecha) a partir de una serie ordenada por fecha."""
+    if len(serie) < 2:
+        return None
+    valor_actual = serie.iloc[-1]
+    valor_anterior = serie.iloc[-2]
+    if not valor_anterior:
+        return None
+    cambio_pct = (valor_actual / valor_anterior - 1) * 100
+    return float(valor_actual), float(cambio_pct), serie.index[-1]
+
+
+@st.cache_data(ttl=3600)
 def calcular_resumen_ipsa(df_todas: pd.DataFrame) -> pd.DataFrame:
     """% de cambio 1D/1W/1M/YTD y Beta (vs el proxy del IPSA) para cada acción del IPSA."""
     # pd.read_sql devuelve la columna "fecha" (tipo DATE en Postgres) como
@@ -270,9 +288,94 @@ try:
 except Exception:
     st.caption("Aún no hay datos cargados. Corre los scripts de actualización primero.")
 
-tab_macro, tab_acciones, tab_magnificas, tab_benchmark, tab_event_study = st.tabs(
-    ["Indicadores macro", "Acciones IPSA", "7 Magníficas", "Benchmark", "Event Study TPM"]
+tab_premercado, tab_macro, tab_acciones, tab_magnificas, tab_benchmark, tab_event_study = st.tabs(
+    ["Brief Premercado", "Indicadores macro", "Acciones IPSA", "7 Magníficas", "Benchmark", "Event Study TPM"]
 )
+
+# --- Tab 0: Brief Premercado ---
+with tab_premercado:
+    st.caption(
+        "Para revisar antes de que abra la Bolsa de Santiago — pensado para leerse "
+        "rápido, no para analizar en vivo."
+    )
+
+    st.subheader("Importante")
+
+    # (etiqueta, tipo de tabla, nombre/ticker, unidad a mostrar)
+    INDICADORES_PREMERCADO = [
+        ("S&P 500", "accion", "^GSPC", ""),
+        ("Cobre", "macro", "Precio del cobre (USD/oz troy)", "US$"),
+        ("MSCI EM (EEM)", "accion", "EEM", "US$"),
+        ("Bovespa", "accion", "^BVSP", ""),
+        ("Bono UST 10 años", "macro", "Bono del Tesoro de EEUU a 10 años (UST10Y)", "%"),
+    ]
+
+    try:
+        df_macro = cargar_series_macro()
+        df_acciones = cargar_precios_acciones()
+
+        columnas = st.columns(len(INDICADORES_PREMERCADO))
+        for col, (etiqueta, tipo, clave, unidad) in zip(columnas, INDICADORES_PREMERCADO):
+            if tipo == "accion":
+                serie = (
+                    df_acciones[df_acciones["ticker"] == clave]
+                    .sort_values("fecha")
+                    .set_index("fecha")["precio_cierre"]
+                )
+            else:
+                serie = (
+                    df_macro[df_macro["nombre"] == clave]
+                    .sort_values("fecha")
+                    .set_index("fecha")["valor"]
+                )
+
+            resultado = calcular_cambio_reciente(serie)
+            with col:
+                if resultado:
+                    valor, cambio_pct, fecha = resultado
+                    valor_texto = f"{valor:,.2f}" + (f" {unidad}" if unidad else "")
+                    st.metric(etiqueta, valor_texto, f"{cambio_pct:+.2f}%")
+                    st.caption(f"al {pd.Timestamp(fecha).strftime('%d-%m-%Y')}")
+                else:
+                    st.metric(etiqueta, "—")
+                    st.caption("sin datos suficientes")
+
+    except Exception as e:
+        st.error(f"No se pudo cargar el resumen internacional: {e}")
+
+    st.divider()
+    st.subheader("Titulares relevantes")
+
+    try:
+        df_noticias = cargar_noticias()
+
+        if df_noticias.empty:
+            st.info("Todavía no hay titulares descargados. Corre scripts/actualizar_noticias.py.")
+        else:
+            df_noticias = df_noticias.assign(fecha_publicacion=pd.to_datetime(df_noticias["fecha_publicacion"]))
+            df_noticias["dia"] = df_noticias["fecha_publicacion"].dt.date
+
+            # df_noticias ya viene ordenado desc por fecha_publicacion (ver cargar_noticias),
+            # así que agrupar sin volver a ordenar deja primero el día más reciente.
+            for dia, grupo in df_noticias.groupby("dia", sort=False):
+                st.markdown(f"**{dia.strftime('%d-%m-%Y')}**")
+                for _, fila in grupo.iterrows():
+                    hora = fila["fecha_publicacion"].strftime("%H:%M")
+                    st.markdown(f"- {hora} · *{fila['fuente']}* — [{fila['titulo']}]({fila['link']})")
+
+    except Exception as e:
+        st.error(f"No se pudieron cargar los titulares: {e}")
+
+    st.divider()
+    st.caption(
+        "**Nota metodológica.** Esta sección muestra el contexto internacional y los "
+        "titulares recientes lado a lado con el movimiento de mercado, como insumos "
+        "para leer antes de la apertura — no afirma causalidad específica entre una "
+        "noticia puntual y un movimiento de precio. \"La Tercera Pulso\" y \"Emol "
+        "Economía\" no tienen un feed RSS propio funcionando hoy, así que sus "
+        "titulares se obtienen vía una búsqueda de Google Noticias filtrada por "
+        "sitio — no es el feed oficial del medio."
+    )
 
 # --- Tab 1: Series macro del BCCh ---
 with tab_macro:
