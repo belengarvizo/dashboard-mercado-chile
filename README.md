@@ -8,7 +8,7 @@ actualizado diariamente.
 
 ## Qué muestra
 
-El dashboard tiene 4 pestañas:
+El dashboard tiene 5 pestañas:
 
 1. **Indicadores macro** — selector para explorar cualquiera de las series del
    BCCh (ver lista completa más abajo) con su gráfico histórico y último valor.
@@ -23,6 +23,17 @@ El dashboard tiene 4 pestañas:
    a base 100 para comparar su desempeño relativo.
 4. **Benchmark** — el IPSA (vía el ETF ECH, ver nota abajo) comparado con el
    S&P 500, MSCI Emerging Markets (EEM) y el Bovespa, normalizado a base 100.
+5. **Event Study TPM** — detecta automáticamente cada cambio de la Tasa de
+   Política Monetaria (comparando la serie diaria de la TPM día a día) y mide
+   su impacto sobre el tipo de cambio USD/CLP: retorno anormal (AR) y
+   acumulado (CAR) en una ventana de -2 a +2 días hábiles alrededor de cada
+   evento, estimados contra el retorno normal de los 30 días hábiles previos.
+   Muestra el CAAR promedio de todos los eventos con un t-test simple de
+   significancia, y la tabla de cada evento individual. **Limitación
+   metodológica:** solo detecta cambios efectivos de tasa, no las decisiones
+   de "mantener" en cada Reunión de Política Monetaria (RPM), porque el
+   dashboard no tiene el calendario de reuniones — queda documentado en la
+   propia pestaña.
 
 Arriba de las pestañas, y también en la barra lateral, se muestra la fecha y
 hora de la última actualización de cada fuente de datos.
