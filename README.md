@@ -8,22 +8,29 @@ actualizado diariamente.
 
 ## Qué muestra
 
-El dashboard tiene 5 pestañas:
+El dashboard tiene 6 pestañas:
 
-1. **Indicadores macro** — selector para explorar cualquiera de las series del
+1. **Brief Premercado** — para revisar antes de que abra la Bolsa de Santiago.
+   Sección "Importante": % de cambio de la sesión más reciente de S&P 500,
+   cobre, MSCI EM (EEM), Bovespa y el bono UST a 10 años, con flecha y color
+   verde/rojo, pensado para leerse en 10 segundos. Sección "Titulares
+   relevantes": últimos titulares (24-48h) de Diario Financiero, La Tercera
+   Pulso y Emol Economía, agrupados por fecha y enlazados a la fuente original
+   (ver nota sobre las fuentes de noticias más abajo).
+2. **Indicadores macro** — selector para explorar cualquiera de las series del
    BCCh (ver lista completa más abajo) con su gráfico histórico y último valor.
-2. **Acciones IPSA** — gráfico de precios normalizables a base 100 para las 5
+3. **Acciones IPSA** — gráfico de precios normalizables a base 100 para las 5
    acciones más importantes (SQM-B, Banco de Chile, Falabella, Copec, CMPC),
    más un **heatmap de desempeño con las 30 acciones del IPSA**: % de cambio
    1D/1W/1M/YTD (coloreado verde/rojo), **Beta** de cada acción contra el
    mercado chileno (regresión de retornos diarios del último año vs el ETF
    ECH, ver limitación de datos más abajo) y la fecha del último precio
    real de cada ticker.
-3. **7 Magníficas** — AAPL, MSFT, GOOGL, AMZN, NVDA, META y TSLA, normalizadas
+4. **7 Magníficas** — AAPL, MSFT, GOOGL, AMZN, NVDA, META y TSLA, normalizadas
    a base 100 para comparar su desempeño relativo.
-4. **Benchmark** — el IPSA (vía el ETF ECH, ver nota abajo) comparado con el
+5. **Benchmark** — el IPSA (vía el ETF ECH, ver nota abajo) comparado con el
    S&P 500, MSCI Emerging Markets (EEM) y el Bovespa, normalizado a base 100.
-5. **Event Study TPM** — detecta automáticamente cada cambio de la Tasa de
+6. **Event Study TPM** — detecta automáticamente cada cambio de la Tasa de
    Política Monetaria (comparando la serie diaria de la TPM día a día) y mide
    su impacto sobre el tipo de cambio USD/CLP: retorno anormal (AR) y
    acumulado (CAR) en una ventana de -2 a +2 días hábiles alrededor de cada
@@ -60,6 +67,15 @@ hora de la última actualización de cada fuente de datos.
   series del BCCh porque el Banco Central no publica tasas de EEUU en su
   catálogo
 
+**Noticias (vía `feedparser`, RSS):**
+- **Diario Financiero** — tiene RSS propio funcionando (`df.cl/noticias/site/list/port/rss.xml`).
+- **La Tercera Pulso** y **Emol Economía** — se verificó que **no** tienen un
+  feed RSS propio funcionando (La Tercera marca `"rss": null` en toda su
+  configuración de sitio; el sistema legado de Emol en `rss.emol.com` está
+  caído). Para ambas se usa como sustituto una búsqueda de Google Noticias
+  filtrada por sitio (`news.google.com/rss/search?q=site:...`) — funciona y
+  trae titulares reales, pero no es el feed oficial del medio.
+
 ### ⚠️ Limitación conocida: precios congelados en tickers `.SN`
 
 Yahoo Finance suele repetir el mismo precio de cierre durante varias semanas
@@ -80,9 +96,9 @@ particular no es confiable.
   - El dashboard (`streamlit run app/dashboard.py`) corre como servicio web
     permanente.
   - Un **cron job diario a las 6:00 AM (hora de Chile)** corre
-    `python scripts/actualizar_todo.py`, que descarga las series del BCCh y
-    los precios de acciones en un solo paso y actualiza la base de datos
-    antes de que empiece el día bursátil.
+    `python scripts/actualizar_todo.py`, que descarga las series del BCCh,
+    los precios de acciones y los titulares de noticias en un solo paso y
+    actualiza la base de datos antes de que empiece el día bursátil.
 
 ## Estructura del proyecto
 
@@ -93,7 +109,8 @@ dashboard-mercado-chile/
 ├── scripts/
 │   ├── actualizar_bcch.py      # Descarga series del Banco Central (+ UST10 vía Yahoo)
 │   ├── actualizar_acciones.py  # Descarga precios de acciones vía Yahoo Finance
-│   └── actualizar_todo.py      # Corre los dos anteriores en secuencia (usado por el cron de Railway)
+│   ├── actualizar_noticias.py  # Descarga titulares de noticias vía RSS
+│   └── actualizar_todo.py      # Corre los tres anteriores en secuencia (usado por el cron de Railway)
 ├── constants.py                 # Listas de tickers compartidas entre scripts y dashboard
 ├── models.py                    # Define las tablas de la base de datos
 ├── requirements.txt              # Librerías necesarias
