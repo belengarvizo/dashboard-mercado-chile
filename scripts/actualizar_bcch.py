@@ -67,9 +67,15 @@ def descargar_serie(codigo_serie: str, first_date: str = "2015-01-01") -> list[d
         try:
             fecha = datetime.strptime(obs["indexDateString"], "%d-%m-%Y").date()
             valor = float(obs["value"])
+            # float("NaN") no lanza excepción: el BCCh manda value="NaN" para
+            # días sin observación (fines de semana en series diarias), así
+            # que hay que descartarlo explícitamente en vez de confiar en el
+            # try/except.
+            if valor != valor:  # NaN nunca es igual a sí mismo
+                continue
             resultado.append({"fecha": fecha, "valor": valor})
         except (ValueError, KeyError, TypeError):
-            # Algunos valores vienen vacíos ("NaN" o similar) - los saltamos
+            # Algunos valores vienen vacíos o con formato inválido - los saltamos
             continue
 
     return resultado

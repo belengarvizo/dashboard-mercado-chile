@@ -5,6 +5,7 @@ APIs directamente) para que cargue rápido sin importar quién lo abra.
 Correr localmente con: streamlit run app/dashboard.py
 """
 
+import math
 import os
 import sys
 
@@ -31,6 +32,10 @@ st.set_page_config(page_title="Mercado Chile", layout="wide")
 # selección), y diverging rojo-gris-verde para el heatmap de desempeño.
 PALETA_CATEGORICA = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#4a3aa7", "#e34948"]
 CMAP_DIVERGENTE = LinearSegmentedColormap.from_list("rojo_verde", ["#d03b3b", "#f0efec", "#0ca30c"])
+
+# Event study TPM → tipo de cambio: ventana de estimación y ventana de evento (en días hábiles).
+DIAS_ESTIMACION_EVENT_STUDY = 30
+DIAS_EVENTO_EVENT_STUDY = range(-2, 3)  # -2, -1, 0, +1, +2
 
 st.title("Dashboard de mercado chileno")
 st.caption("Datos del Banco Central de Chile y Yahoo Finance, actualizados diariamente")
@@ -135,6 +140,112 @@ def calcular_resumen_ipsa(df_todas: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(filas).set_index("Ticker")
 
 
+def _p_valor_normal(t_stat: float) -> float:
+    """p-valor a dos colas para un estadístico t, aproximando con la normal estándar."""
+    return 2 * (1 - 0.5 * (1 + math.erf(abs(t_stat) / math.sqrt(2))))
+
+
+@st.cache_data(ttl=3600)
+def calcular_event_study_tpm(df_macro: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame, int]:
+    """Event study: impacto de los cambios de la TPM sobre el tipo de cambio USD/CLP.
+
+    Eventos = fechas donde la TPM cambió respecto al día hábil anterior. Para
+    cada evento se estima el retorno "normal" del tipo de cambio (promedio de
+    los 30 días hábiles previos) y se calcula el retorno anormal (AR) en la
+    ventana de evento (-2 a +2 días hábiles). El t-test usa la desviación
+    estándar de cada ventana de estimación (enfoque simple tipo Brown &
+    Warner / MacKinlay), no la dispersión entre eventos.
+    """
+    df_macro = df_macro.assign(fecha=pd.to_datetime(df_macro["fecha"]))
+
+    tpm = (
+        df_macro[df_macro["nombre"] == "Tasa de política monetaria (TPM)"]
+        .sort_values("fecha")
+        .set_index("fecha")["valor"]
+    )
+    tco = (
+        df_macro[df_macro["nombre"] == "Tipo de cambio observado"]
+        .sort_values("fecha")
+        .set_index("fecha")["valor"]
+    )
+    retornos_tco = tco.pct_change() * 100  # en % para que AAR/CAAR queden directamente en %
+    fechas_tco = tco.index
+
+    cambia = tpm.ne(tpm.shift(1))
+    if len(cambia):
+        cambia.iloc[0] = False  # el primer dato de la serie no es un "cambio"
+    fechas_evento = tpm.index[cambia]
+    tpm_dia_anterior = tpm.shift(1)
+
+    dias_evento = list(DIAS_EVENTO_EVENT_STUDY)
+    filas_eventos = []
+    eventos_validos = []  # {"ars": {dia: AR}, "sigma": desviación de la ventana de estimación}
+
+    for fecha_evt in fechas_evento:
+        pos = fechas_tco.searchsorted(fecha_evt)
+        if pos >= len(fechas_tco) or fechas_tco[pos] != fecha_evt:
+            continue  # el evento no cae en un día con dato de tipo de cambio
+
+        inicio_estimacion = pos - DIAS_ESTIMACION_EVENT_STUDY
+        if inicio_estimacion < 1 or pos + max(dias_evento) >= len(fechas_tco):
+            continue  # sin suficiente historia antes o después del evento
+
+        ventana_estimacion = retornos_tco.iloc[inicio_estimacion:pos]
+        if len(ventana_estimacion) < DIAS_ESTIMACION_EVENT_STUDY or ventana_estimacion.isna().any():
+            continue
+
+        retorno_normal = ventana_estimacion.mean()
+        sigma_estimacion = ventana_estimacion.std()
+        if not sigma_estimacion or pd.isna(sigma_estimacion):
+            continue
+
+        retornos_evento = retornos_tco.iloc[pos + min(dias_evento): pos + max(dias_evento) + 1]
+        if len(retornos_evento) != len(dias_evento) or retornos_evento.isna().any():
+            continue
+
+        ars = {dia: retornos_evento.iloc[i] - retorno_normal for i, dia in enumerate(dias_evento)}
+        car_evento = sum(ars.values())
+        cambio_pb = round((tpm.loc[fecha_evt] - tpm_dia_anterior.loc[fecha_evt]) * 100)
+
+        filas_eventos.append({
+            "Fecha": fecha_evt.strftime("%Y-%m-%d"),
+            "Dirección": "Alza" if cambio_pb > 0 else "Baja",
+            "Magnitud (pb)": cambio_pb,
+            "CAR (%)": car_evento,
+        })
+        eventos_validos.append({"ars": ars, "sigma": sigma_estimacion})
+
+    df_eventos = pd.DataFrame(filas_eventos)
+
+    n = len(eventos_validos)
+    var_promedio = sum(e["sigma"] ** 2 for e in eventos_validos) / n if n else None
+
+    filas_agg = []
+    caar = 0.0
+    for k, dia in enumerate(dias_evento, start=1):
+        if n:
+            aar = sum(e["ars"][dia] for e in eventos_validos) / n
+            caar += aar
+            se_aar = (var_promedio / n) ** 0.5
+            se_caar = se_aar * (k ** 0.5)
+            t_aar = aar / se_aar if se_aar else None
+            t_caar = caar / se_caar if se_caar else None
+        else:
+            aar = t_aar = t_caar = None
+
+        filas_agg.append({
+            "Día relativo": dia,
+            "AAR (%)": aar,
+            "t-stat AAR": t_aar,
+            "p-valor AAR": _p_valor_normal(t_aar) if t_aar is not None else None,
+            "CAAR (%)": caar if n else None,
+            "t-stat CAAR": t_caar,
+        })
+
+    df_agregado = pd.DataFrame(filas_agg)
+    return df_eventos, df_agregado, n
+
+
 # --- Sidebar: info de última actualización ---
 with st.sidebar:
     st.subheader("Última actualización")
@@ -159,8 +270,8 @@ try:
 except Exception:
     st.caption("Aún no hay datos cargados. Corre los scripts de actualización primero.")
 
-tab_macro, tab_acciones, tab_magnificas, tab_benchmark = st.tabs(
-    ["Indicadores macro", "Acciones IPSA", "7 Magníficas", "Benchmark"]
+tab_macro, tab_acciones, tab_magnificas, tab_benchmark, tab_event_study = st.tabs(
+    ["Indicadores macro", "Acciones IPSA", "7 Magníficas", "Benchmark", "Event Study TPM"]
 )
 
 # --- Tab 1: Series macro del BCCh ---
@@ -306,3 +417,59 @@ with tab_benchmark:
 
     except Exception as e:
         st.error(f"No se pudieron cargar los datos de benchmark: {e}")
+
+# --- Tab 5: Event Study TPM ---
+with tab_event_study:
+    try:
+        df_macro = cargar_series_macro()
+        df_eventos, df_agregado, n_eventos = calcular_event_study_tpm(df_macro)
+
+        st.subheader("CAAR promedio del tipo de cambio USD/CLP ante cambios de la TPM")
+
+        fig = px.line(
+            df_agregado, x="Día relativo", y="CAAR (%)",
+            title=f"CAAR promedio — {n_eventos} eventos de cambio de TPM",
+            markers=True,
+        )
+        fig.add_hline(y=0, line_dash="dot", line_color="#898781")
+        fig.update_xaxes(dtick=1)
+        st.plotly_chart(fig, use_container_width=True)
+
+        st.caption(
+            "AAR/CAAR por día relativo, con t-test simple contra cero "
+            "(usando la desviación estándar de la ventana de estimación de cada evento)."
+        )
+        st.dataframe(
+            df_agregado.style.format({
+                "AAR (%)": "{:+.3f}%",
+                "t-stat AAR": "{:.2f}",
+                "p-valor AAR": "{:.3f}",
+                "CAAR (%)": "{:+.3f}%",
+                "t-stat CAAR": "{:.2f}",
+            }, na_rep="—"),
+            use_container_width=True,
+        )
+
+        st.subheader(f"Eventos individuales ({n_eventos})")
+        st.dataframe(
+            df_eventos.style.format({"CAR (%)": "{:+.3f}%"}),
+            use_container_width=True,
+        )
+
+        st.info(
+            "**Nota metodológica.** Los eventos se detectan automáticamente como "
+            "cambios en la serie diaria de la TPM respecto al día hábil anterior — "
+            "esto captura únicamente las reuniones de política monetaria (RPM) en "
+            "las que la tasa efectivamente cambió. No tenemos el calendario de "
+            "reuniones RPM, así que las decisiones de \"mantener\" la tasa no "
+            "quedan registradas como eventos y no forman parte de este análisis. "
+            "El retorno normal esperado se estima como el retorno diario promedio "
+            "del tipo de cambio en los 30 días hábiles previos a cada evento; el "
+            "retorno anormal (AR) es la diferencia entre el retorno real y ese "
+            "retorno normal, en la ventana de evento (-2 a +2 días hábiles). El "
+            "t-test es una aproximación simple (normal estándar) que no corrige "
+            "por autocorrelación ni por eventos superpuestos."
+        )
+
+    except Exception as e:
+        st.error(f"No se pudo calcular el event study: {e}")
