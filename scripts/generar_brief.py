@@ -20,7 +20,7 @@ from google import genai
 from models import get_session, get_engine, Noticia, BriefDiario
 from market_data import calcular_resumen_mercado
 
-MODELO_GEMINI = "gemini-2.5-flash"
+MODELO_GEMINI = "gemini-3.6-flash"
 HORAS_VENTANA_TITULARES = 48
 # Las fuentes vía Google Noticias (ver actualizar_noticias.py) traen algo de
 # ruido no económico; se limita a los más recientes para que el prompt no se

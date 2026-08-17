@@ -10,7 +10,7 @@ import pandas as pd
 # (etiqueta, tipo de tabla de origen, nombre/ticker, unidad a mostrar)
 INDICADORES_PREMERCADO = [
     ("S&P 500", "accion", "^GSPC", ""),
-    ("Cobre", "macro", "Precio del cobre (USD/oz troy)", "US$"),
+    ("Cobre", "macro", "Precio del cobre (USD/oz troy)", "US$/oz troy"),
     ("MSCI EM (EEM)", "accion", "EEM", "US$"),
     ("Bovespa", "accion", "^BVSP", ""),
     ("Bono UST 10 años", "macro", "Bono del Tesoro de EEUU a 10 años (UST10Y)", "%"),
