@@ -8,7 +8,7 @@ actualizado diariamente.
 
 ## Qué muestra
 
-El dashboard tiene 7 pestañas:
+El dashboard tiene 8 pestañas:
 
 1. **Brief Premercado** — para revisar antes de que abra la Bolsa de Santiago.
    Sección "Importante": % de cambio de la sesión más reciente de S&P 500,
@@ -78,6 +78,26 @@ El dashboard tiene 7 pestañas:
    mejora futura sería controlar por el movimiento simultáneo del dólar a
    nivel global (ej. el índice DXY) en la ventana de evento, para aislar
    mejor el componente local del CAR.
+
+8. **Backtester: Estrategia TPM** — backtest hipotético e ilustrativo sobre
+   los mismos 37 eventos del Event Study: TPM sube → posición corta en
+   USD/CLP, TPM baja → posición larga; entrada al cierre del día del evento,
+   salida al cierre 2 días hábiles después, con 8 puntos base de costo de
+   transacción por operación. Muestra la curva de equity, retorno total
+   acumulado, retorno promedio por trade, % de operaciones ganadoras, Sharpe
+   ratio (anualizado por el número de eventos/año) y máximo drawdown. La
+   pieza central de rigor es un **test de permutación**: mezcla al azar la
+   dirección de los 37 eventos 1.000 veces, corre el mismo backtest con cada
+   mezcla, y muestra en qué percentil de esa distribución cae el resultado
+   real — para saber si el criterio direccional aporta algo por sobre el
+   azar, o si el resultado es indistinguible de simplemente apostar una
+   dirección cualquiera en esas mismas fechas.
+
+   **Hallazgo:** el resultado real (-3,75% acumulado en 37 trades, Sharpe
+   -0,13) cae en el **percentil ~44 de 1.000 mezclas aleatorias de
+   dirección** — indistinguible del azar. Consistente con el hallazgo del
+   Event Study: no hay evidencia de que esta estrategia direccional le gane
+   al mercado con los datos disponibles.
 
 Arriba de las pestañas, y también en la barra lateral, se muestra la fecha y
 hora de la última actualización de cada fuente de datos.

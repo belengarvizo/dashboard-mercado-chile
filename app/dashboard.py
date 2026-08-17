@@ -46,6 +46,13 @@ DIAS_EVENTO_EVENT_STUDY = range(-2, 3)  # -2, -1, 0, +1, +2
 VENTANA_VOLATILIDAD = 21
 VENTANA_VAR = pd.DateOffset(years=2)
 
+# Backtester estrategia TPM: entrada en el cierre del día del evento, salida
+# 2 días hábiles después, costo de transacción por operación (entrada+salida).
+DIA_ENTRADA_BACKTEST = 0
+DIA_SALIDA_BACKTEST = 2
+COSTO_TRANSACCION_BACKTEST = 0.0008  # 8 puntos base por operación
+N_PERMUTACIONES_BACKTEST = 1000
+
 st.title("Dashboard de mercado chileno")
 st.caption("Datos del Banco Central de Chile y Yahoo Finance, actualizados diariamente")
 
@@ -391,6 +398,123 @@ def calcular_matriz_correlacion_ipsa(df_todas: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(retornos_por_ticker).corr()
 
 
+@st.cache_data(ttl=3600)
+def calcular_trades_backtest_tpm(df_macro: pd.DataFrame) -> pd.DataFrame:
+    """Retorno crudo del USD/CLP para cada evento de TPM (misma detección de
+    eventos que el Event Study), entre el cierre del día del evento y el
+    cierre DIA_SALIDA_BACKTEST días hábiles después."""
+    df_macro = df_macro.assign(fecha=pd.to_datetime(df_macro["fecha"]))
+
+    tpm = (
+        df_macro[df_macro["nombre"] == "Tasa de política monetaria (TPM)"]
+        .sort_values("fecha")
+        .set_index("fecha")["valor"]
+    )
+    tco = (
+        df_macro[df_macro["nombre"] == "Tipo de cambio observado"]
+        .sort_values("fecha")
+        .set_index("fecha")["valor"]
+    )
+    fechas_tco = tco.index
+
+    cambia = tpm.ne(tpm.shift(1))
+    if len(cambia):
+        cambia.iloc[0] = False
+    fechas_evento = tpm.index[cambia]
+    tpm_dia_anterior = tpm.shift(1)
+
+    filas = []
+    for fecha_evt in fechas_evento:
+        pos = fechas_tco.searchsorted(fecha_evt)
+        if pos >= len(fechas_tco) or fechas_tco[pos] != fecha_evt:
+            continue  # el evento no cae en un día con dato de tipo de cambio
+        if pos + DIA_SALIDA_BACKTEST >= len(fechas_tco):
+            continue  # sin suficientes días después del evento para salir
+
+        precio_entrada = tco.iloc[pos + DIA_ENTRADA_BACKTEST]
+        precio_salida = tco.iloc[pos + DIA_SALIDA_BACKTEST]
+        retorno_crudo = precio_salida / precio_entrada - 1
+
+        cambio_pb = round((tpm.loc[fecha_evt] - tpm_dia_anterior.loc[fecha_evt]) * 100)
+
+        filas.append({
+            "Fecha": fecha_evt,
+            "Dirección": "Alza" if cambio_pb > 0 else "Baja",
+            "Retorno crudo USD/CLP": retorno_crudo,
+        })
+
+    return pd.DataFrame(filas).sort_values("Fecha").reset_index(drop=True)
+
+
+def _retornos_netos_estrategia(retornos_crudos: pd.Series, direcciones) -> pd.Series:
+    """Retorno neto por trade: TPM sube → corto USD/CLP (gana si el dólar baja);
+    TPM baja → largo USD/CLP (gana si el dólar sube); menos el costo de
+    transacción por operación."""
+    signo = np.where(np.asarray(direcciones) == "Alza", -1, 1)
+    return signo * retornos_crudos.to_numpy() - COSTO_TRANSACCION_BACKTEST
+
+
+@st.cache_data(ttl=3600)
+def calcular_backtest_tpm(df_macro: pd.DataFrame) -> dict:
+    """Backtest de la estrategia direccional TPM → USD/CLP, con curva de
+    equity, métricas de desempeño, y un test de permutación (mezclando la
+    dirección de los eventos 1000 veces) como control de significancia."""
+    df_trades = calcular_trades_backtest_tpm(df_macro)
+    n_eventos = len(df_trades)
+
+    if n_eventos < 2:
+        return {"df_trades": df_trades, "n_eventos": n_eventos}
+
+    retornos_netos = _retornos_netos_estrategia(df_trades["Retorno crudo USD/CLP"], df_trades["Dirección"])
+    df_trades = df_trades.copy()
+    df_trades["Retorno neto"] = retornos_netos
+    df_trades["Equity"] = (1 + df_trades["Retorno neto"]).cumprod()
+
+    retorno_total = (df_trades["Equity"].iloc[-1] - 1) * 100
+    retorno_promedio = df_trades["Retorno neto"].mean() * 100
+    pct_ganadoras = (df_trades["Retorno neto"] > 0).mean() * 100
+
+    años_span = (df_trades["Fecha"].max() - df_trades["Fecha"].min()).days / 365.25
+    eventos_por_año = n_eventos / años_span if años_span > 0 else None
+
+    media, desvio = df_trades["Retorno neto"].mean(), df_trades["Retorno neto"].std()
+    sharpe = (
+        media / desvio * (eventos_por_año ** 0.5)
+        if desvio and eventos_por_año
+        else None
+    )
+
+    drawdown = df_trades["Equity"] / df_trades["Equity"].cummax() - 1
+    max_drawdown = drawdown.min() * 100
+
+    # --- Test de permutación: ¿el resultado real supera a mezclas al azar de la dirección? ---
+    rng = np.random.default_rng(42)  # semilla fija para que el resultado sea reproducible
+    direcciones_originales = df_trades["Dirección"].to_numpy()
+    retornos_crudos = df_trades["Retorno crudo USD/CLP"]
+
+    retornos_totales_perm = np.empty(N_PERMUTACIONES_BACKTEST)
+    for i in range(N_PERMUTACIONES_BACKTEST):
+        direcciones_mezcladas = rng.permutation(direcciones_originales)
+        retornos_netos_mezcla = _retornos_netos_estrategia(retornos_crudos, direcciones_mezcladas)
+        equity_mezcla = np.cumprod(1 + retornos_netos_mezcla)
+        retornos_totales_perm[i] = (equity_mezcla[-1] - 1) * 100
+
+    percentil_real = float((retornos_totales_perm < retorno_total).mean() * 100)
+
+    return {
+        "df_trades": df_trades,
+        "n_eventos": n_eventos,
+        "retorno_total": retorno_total,
+        "retorno_promedio": retorno_promedio,
+        "pct_ganadoras": pct_ganadoras,
+        "eventos_por_año": eventos_por_año,
+        "sharpe": sharpe,
+        "max_drawdown": max_drawdown,
+        "retornos_totales_perm": retornos_totales_perm,
+        "percentil_real": percentil_real,
+    }
+
+
 # --- Sidebar: info de última actualización ---
 with st.sidebar:
     st.subheader("Última actualización")
@@ -415,9 +539,13 @@ try:
 except Exception:
     st.caption("Aún no hay datos cargados. Corre los scripts de actualización primero.")
 
-tab_premercado, tab_macro, tab_acciones, tab_riesgo, tab_magnificas, tab_benchmark, tab_event_study = st.tabs(
-    ["Brief Premercado", "Indicadores macro", "Acciones IPSA", "Riesgo", "7 Magníficas", "Benchmark", "Event Study TPM"]
-)
+(
+    tab_premercado, tab_macro, tab_acciones, tab_riesgo, tab_magnificas,
+    tab_benchmark, tab_event_study, tab_backtester,
+) = st.tabs([
+    "Brief Premercado", "Indicadores macro", "Acciones IPSA", "Riesgo", "7 Magníficas",
+    "Benchmark", "Event Study TPM", "Backtester: Estrategia TPM",
+])
 
 # --- Tab 0: Brief Premercado ---
 with tab_premercado:
@@ -822,3 +950,110 @@ with tab_event_study:
 
     except Exception as e:
         st.error(f"No se pudo calcular el event study: {e}")
+
+# --- Tab 7: Backtester Estrategia TPM ---
+with tab_backtester:
+    try:
+        st.subheader("Backtest: dirección de la TPM → USD/CLP")
+        st.caption(
+            "Estrategia hipotética sobre los mismos 37 eventos del Event Study: "
+            "TPM sube → posición corta en USD/CLP; TPM baja → posición larga. "
+            "Entrada al cierre del día del evento, salida al cierre 2 días hábiles "
+            "después, con un costo de transacción de 8 puntos base por operación "
+            "(entrada + salida)."
+        )
+
+        df_macro = cargar_series_macro()
+        resultado = calcular_backtest_tpm(df_macro)
+
+        if resultado["n_eventos"] < 2:
+            st.warning("No hay suficientes eventos de TPM con datos completos para backtestear.")
+        else:
+            col1, col2, col3, col4, col5 = st.columns(5)
+            col1.metric("Retorno total acumulado", f"{resultado['retorno_total']:+.2f}%")
+            col2.metric("Retorno promedio / trade", f"{resultado['retorno_promedio']:+.3f}%")
+            col3.metric("% operaciones ganadoras", f"{resultado['pct_ganadoras']:.1f}%")
+            col4.metric("Sharpe (anualizado)", f"{resultado['sharpe']:.2f}" if resultado["sharpe"] is not None else "—")
+            col5.metric("Máximo drawdown", f"{resultado['max_drawdown']:.2f}%")
+
+            df_trades = resultado["df_trades"].copy()
+            df_trades["Retorno acumulado (%)"] = (df_trades["Equity"] - 1) * 100
+            fig_equity = px.line(
+                df_trades, x="Fecha", y="Retorno acumulado (%)",
+                title="Curva de equity (retorno acumulado de la estrategia)",
+                markers=True,
+            )
+            fig_equity.add_hline(y=0, line_dash="dot", line_color="#898781")
+            st.plotly_chart(fig_equity, use_container_width=True)
+
+            st.divider()
+            st.subheader("Test de permutación: ¿le gana la dirección elegida al azar?")
+            st.caption(
+                f"Se mezcló aleatoriamente la dirección (alza/baja) de los "
+                f"{resultado['n_eventos']} eventos {N_PERMUTACIONES_BACKTEST:,} veces, "
+                "corriendo el mismo backtest (mismas fechas de entrada/salida y mismo "
+                "costo de transacción) con cada mezcla. Esto aísla si el criterio "
+                "direccional (y no solo el momento de entrada/salida) aporta algo por "
+                "sobre el azar."
+            )
+
+            fig_hist = px.histogram(
+                x=resultado["retornos_totales_perm"],
+                nbins=50,
+                title="Distribución de retornos totales bajo 1.000 mezclas aleatorias de dirección",
+                labels={"x": "Retorno total acumulado (%)"},
+            )
+            fig_hist.add_vline(
+                x=resultado["retorno_total"], line_color="#e34948", line_width=2,
+                annotation_text="Resultado real", annotation_position="top",
+            )
+            st.plotly_chart(fig_hist, use_container_width=True)
+
+            percentil = resultado["percentil_real"]
+            if percentil >= 95 or percentil <= 5:
+                interpretacion = (
+                    "un resultado así de extremo es poco común bajo mezclas al azar — "
+                    "compatible con que el criterio direccional (y no solo el momento "
+                    "de entrada/salida) esté aportando algo, aunque con solo 37 eventos "
+                    "esto debe leerse con cautela."
+                )
+            else:
+                interpretacion = (
+                    "el resultado real es indistinguible de simplemente elegir una "
+                    "dirección al azar en esas mismas 37 fechas — no hay evidencia de "
+                    "que el criterio direccional (TPM sube → corto, TPM baja → largo) "
+                    "aporte valor por sobre el azar, más allá de si el retorno total "
+                    "fue positivo o negativo."
+                )
+            st.markdown(
+                f"**El resultado real ({resultado['retorno_total']:+.2f}%) cae en el "
+                f"percentil {percentil:.0f} de la distribución de mezclas al azar** "
+                f"— {interpretacion}"
+            )
+
+            st.divider()
+            st.subheader(f"Trades individuales ({resultado['n_eventos']})")
+            st.dataframe(
+                df_trades.drop(columns=["Retorno acumulado (%)"]).style.format({
+                    "Retorno crudo USD/CLP": "{:+.3%}",
+                    "Retorno neto": "{:+.3%}",
+                    "Equity": "{:.4f}",
+                }),
+                use_container_width=True,
+            )
+
+            st.info(
+                "**Nota metodológica.** Este es un backtest hipotético e ilustrativo, "
+                "no una recomendación de inversión. Comparte todas las limitaciones del "
+                "Event Study TPM (muestra chica de 37 eventos, posible confusión con "
+                "ciclos monetarios globales simultáneos, calendario de RPM no "
+                "disponible). Además asume que se puede entrar exactamente al cierre "
+                "del día del anuncio de TPM — en la práctica el anuncio puede ocurrir "
+                "durante o después de la sesión, lo que podría hacer inalcanzable ese "
+                "precio de entrada. El costo de transacción (8 puntos base) es una "
+                "aproximación fija; costos reales de financiamiento, spread y slippage "
+                "podrían ser mayores, especialmente en episodios de alta volatilidad."
+            )
+
+    except Exception as e:
+        st.error(f"No se pudo calcular el backtest: {e}")
