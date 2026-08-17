@@ -782,7 +782,8 @@ with tab_event_study:
         )
 
         st.info(
-            "**Nota metodológica.** Los eventos se detectan automáticamente como "
+            "**Nota metodológica.**\n\n"
+            "**Detección de eventos.** Los eventos se detectan automáticamente como "
             "cambios en la serie diaria de la TPM respecto al día hábil anterior — "
             "esto captura únicamente las reuniones de política monetaria (RPM) en "
             "las que la tasa efectivamente cambió. No tenemos el calendario de "
@@ -792,8 +793,31 @@ with tab_event_study:
             "del tipo de cambio en los 30 días hábiles previos a cada evento; el "
             "retorno anormal (AR) es la diferencia entre el retorno real y ese "
             "retorno normal, en la ventana de evento (-2 a +2 días hábiles). El "
-            "t-test es una aproximación simple (normal estándar) que no corrige "
-            "por autocorrelación ni por eventos superpuestos."
+            "t-test agregado (AAR/CAAR) es una aproximación simple (normal estándar) "
+            "que no corrige por autocorrelación ni por eventos superpuestos.\n\n"
+            "**Limitación 1 — poca potencia estadística.** Solo 37 eventos en total "
+            "(15 alzas, 22 bajas) desde 2015. Con muestras tan chicas, un test "
+            "estadístico tiene poca capacidad de detectar un efecto real aunque "
+            "exista (poca \"potencia\"): se necesitaría un efecto muy grande para "
+            "que sea detectable con este N.\n\n"
+            "**Limitación 2 — confusión con ciclos monetarios globales.** Las "
+            "decisiones de TPM del BCCh no ocurren de forma aislada: suelen coincidir "
+            "con ciclos monetarios simultáneos en otros bancos centrales (ej. el BCCh "
+            "subió tasas en 2021-2022 al mismo tiempo que la Fed subía las suyas). "
+            "Este diseño no puede aislar limpiamente el efecto de la decisión local "
+            "sobre el tipo de cambio del efecto de esos movimientos globales "
+            "simultáneos — parte del AR medido en cada evento podría deberse al "
+            "ciclo global, no a la decisión del BCCh en sí.\n\n"
+            "**\"No significativo\" no es \"no hay efecto\".** La falta de "
+            "significancia estadística (acá y en la sección de arriba) solo dice que "
+            "esta muestra no permite afirmar que el efecto es distinto de cero — no "
+            "dice que el efecto no exista. Con las dos limitaciones anteriores, es "
+            "exactamente el resultado esperable aunque la TPM sí tenga un impacto "
+            "real sobre el tipo de cambio.\n\n"
+            "**Mejora futura.** Controlar por el movimiento simultáneo del dólar a "
+            "nivel global (ej. el índice DXY) en la ventana de evento permitiría "
+            "aislar mejor el componente local del CAR, restando el efecto que ya "
+            "viene dado por el ciclo monetario global."
         )
 
     except Exception as e:

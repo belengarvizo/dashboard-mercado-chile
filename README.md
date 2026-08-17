@@ -63,12 +63,21 @@ El dashboard tiene 7 pestañas:
    estadísticamente significativo al 5%**: ni el AAR/CAAR agregado en ningún
    día de la ventana de evento, ni el CAR de alzas o bajas contra cero por
    separado (t=-0,18 y t=1,04 respectivamente), ni la diferencia de medias
-   entre ambos grupos (t=-0,91, p=0,37). Con muestras chicas (n=15 y n=22 por
-   grupo) esa falta de significancia es esperable incluso si existe un efecto
-   real, así que no debe leerse como prueba de que la TPM "no importa" — es
-   más bien consistente con la hipótesis de que **el mercado suele anticipar
-   mayormente las decisiones de política monetaria**, dejando poca sorpresa
-   (y por lo tanto poco movimiento anormal) para el día del anuncio.
+   entre ambos grupos (t=-0,91, p=0,37).
+
+   Esa falta de significancia tiene (al menos) dos causas distintas, ambas
+   documentadas en la propia pestaña: **(1) poca potencia estadística** — solo
+   37 eventos totales, 15/22 por grupo, una muestra chica para detectar un
+   efecto salvo que sea muy grande; y **(2) confusión con ciclos monetarios
+   globales** — las decisiones de TPM del BCCh suelen coincidir con ciclos
+   simultáneos en otros bancos centrales (ej. el BCCh subió tasas en 2021-2022
+   al mismo tiempo que la Fed subía las suyas), así que este diseño no puede
+   aislar limpiamente el efecto de la decisión local del efecto del ciclo
+   global. **"No significativo" no equivale a "no hay efecto"** — solo
+   significa que no se puede afirmar con esta muestra y este diseño. Una
+   mejora futura sería controlar por el movimiento simultáneo del dólar a
+   nivel global (ej. el índice DXY) en la ventana de evento, para aislar
+   mejor el componente local del CAR.
 
 Arriba de las pestañas, y también en la barra lateral, se muestra la fecha y
 hora de la última actualización de cada fuente de datos.
