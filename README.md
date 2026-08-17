@@ -14,7 +14,7 @@ El dashboard tiene 8 pestañas:
    Sección "Importante": % de cambio de la sesión más reciente de S&P 500,
    cobre, MSCI EM (EEM), Bovespa y el bono UST a 10 años, con flecha y color
    verde/rojo, pensado para leerse en 10 segundos. Debajo, un **resumen diario
-   generado por IA** (Gemini `gemini-2.5-flash`) con dos secciones — "Panorama
+   generado por IA** (Gemini `gemini-3.6-flash`) con dos secciones — "Panorama
    global" (3-5 puntos) y "Posibles efectos para Chile" (lenguaje cauteloso,
    sin afirmaciones causales categóricas) — armado a partir de esos mismos
    indicadores más los titulares recientes, con un disclaimer visible de que
@@ -141,11 +141,13 @@ hora de la última actualización de cada fuente de datos.
 
 **Resumen diario con IA (Gemini, vía `google-genai`):** `scripts/generar_brief.py`
 arma un prompt con los indicadores de "Importante" y hasta 60 titulares
-recientes, y llama a Gemini (`gemini-2.5-flash`, autenticado con
+recientes, y llama a Gemini (`gemini-3.6-flash`, autenticado con
 `GEMINI_API_KEY`) para generar el resumen de dos secciones que se muestra en
 "Brief Premercado". Se guarda en la tabla `brief_diario` y se regenera una
 vez al día en el cron — el dashboard nunca llama a Gemini directamente, solo
-lee el resultado ya guardado.
+lee el resultado ya guardado. (Se pidió originalmente `gemini-2.5-flash`,
+pero esa API key ya no tiene acceso a ese modelo — el propio catálogo de
+Google devuelve `gemini-3.6-flash` como el flash vigente.)
 
 ### ⚠️ Limitación conocida: precios congelados en tickers `.SN`
 
