@@ -31,10 +31,23 @@ El dashboard tiene 8 pestañas:
    1D/1W/1M/YTD (coloreado verde/rojo), **volatilidad anualizada** (rolling
    21 días hábiles × √252), **Beta** de cada acción contra el mercado chileno
    (regresión de retornos diarios del último año vs el ETF ECH, ver
-   limitación de datos más abajo) y la fecha del último precio real de cada
-   ticker. Tanto la volatilidad como el Beta excluyen los días de precio
-   congelado del cálculo (ver limitación de datos más abajo) — un retorno de
-   0% por dato repetido no es volatilidad real cero.
+   limitación de datos más abajo), **costo de capital CAPM** ("CAPM local" y
+   "CAPM + CRP", ver nota sobre riesgo país más abajo) y la fecha del último
+   precio real de cada ticker. Volatilidad, Beta y CAPM excluyen los días de
+   precio congelado del cálculo (ver limitación de datos más abajo) — un
+   retorno de 0% por dato repetido no es volatilidad real cero.
+
+   **CAPM y prima de riesgo país (CRP):** "CAPM local" = Rf local (PDBC 14
+   días) + Beta × prima de mercado local (retorno histórico anualizado del
+   proxy del IPSA menos Rf local). "CAPM + CRP" suma el spread PDBC−UST10Y
+   como proxy de la prima de riesgo país. Se muestran **ambas versiones a
+   propósito**, porque sumar el spread completo puede implicar doble conteo
+   del riesgo país (el Beta y la Rf locales ya lo capturan en parte
+   implícitamente). Es una aproximación al estilo Damodaran, no el EMBI+
+   oficial (que requiere una fuente de pago); además PDBC (14 días) y UST10Y
+   (10 años) tienen plazos distintos, así que el spread puede salir negativo
+   sin que eso implique que el mercado ve a Chile como menos riesgoso que
+   EEUU.
 4. **Riesgo** — Value at Risk (VaR) histórico y paramétrico, a 95% y 99%, para
    las 5 acciones principales y un portafolio hipotético equiponderado, sobre
    los últimos ~2 años (mismo filtro de días congelados); y una matriz de
@@ -44,6 +57,13 @@ El dashboard tiene 8 pestañas:
    normalidad, que en la práctica suele subestimar eventos extremos (colas
    gordas) — se muestran ambos lado a lado para que la diferencia sea
    visible.
+
+   **Ajuste por liquidez:** el VaR de cada acción individual (no el del
+   portafolio) se multiplica por 1,3× si su liquidez cae en el cuartil más
+   bajo. La liquidez se mide como el monto transado diario promedio (precio
+   × volumen) de los últimos 3 meses, comparado contra las 30 acciones del
+   IPSA. Es una **aproximación heurística simplificada**, no un modelo
+   riguroso de impacto de mercado ni de profundidad del libro de órdenes.
 5. **7 Magníficas** — AAPL, MSFT, GOOGL, AMZN, NVDA, META y TSLA, normalizadas
    a base 100 para comparar su desempeño relativo.
 6. **Benchmark** — el IPSA (vía el ETF ECH, ver nota abajo) comparado con el

@@ -47,6 +47,11 @@ DIAS_EVENTO_EVENT_STUDY = range(-2, 3)  # -2, -1, 0, +1, +2
 VENTANA_VOLATILIDAD = 21
 VENTANA_VAR = pd.DateOffset(years=2)
 
+# Ajuste de VaR por liquidez: ventana para el monto transado diario promedio,
+# y multiplicador heurístico aplicado al VaR del cuartil menos líquido.
+VENTANA_LIQUIDEZ = pd.DateOffset(months=3)
+MULTIPLICADOR_LIQUIDEZ = 1.3
+
 # Backtester estrategia TPM: entrada en el cierre del día del evento, salida
 # 2 días hábiles después, costo de transacción por operación (entrada+salida).
 DIA_ENTRADA_BACKTEST = 0
@@ -103,8 +108,50 @@ def calcular_retornos_reales(serie: pd.Series) -> pd.Series:
 
 
 @st.cache_data(ttl=3600)
-def calcular_resumen_ipsa(df_todas: pd.DataFrame) -> pd.DataFrame:
-    """% de cambio 1D/1W/1M/YTD y Beta (vs el proxy del IPSA) para cada acción del IPSA."""
+def calcular_crp_y_prima_mercado(df_macro: pd.DataFrame, df_acciones: pd.DataFrame) -> dict:
+    """Tasa libre de riesgo local (PDBC), tasa libre de riesgo EEUU (UST10),
+    spread PDBC-UST10 como proxy de prima de riesgo país (CRP, enfoque
+    Damodaran, no EMBI+), y prima de mercado local (retorno histórico
+    anualizado del proxy del IPSA menos la tasa libre de riesgo local).
+    Todo en puntos porcentuales, reutilizando series que ya están en la BD."""
+    df_macro = df_macro.assign(fecha=pd.to_datetime(df_macro["fecha"]))
+
+    pdbc = (
+        df_macro[df_macro["nombre"] == "Tasa libre de riesgo CLP (PDBC 14 días)"]
+        .sort_values("fecha")["valor"]
+    )
+    ust10 = (
+        df_macro[df_macro["nombre"] == "Bono del Tesoro de EEUU a 10 años (UST10Y)"]
+        .sort_values("fecha")["valor"]
+    )
+    rf_cl = float(pdbc.iloc[-1]) if len(pdbc) else None
+    rf_ust = float(ust10.iloc[-1]) if len(ust10) else None
+    crp = (rf_cl - rf_ust) if rf_cl is not None and rf_ust is not None else None
+
+    df_acciones = df_acciones.assign(fecha=pd.to_datetime(df_acciones["fecha"]))
+    proxy = (
+        df_acciones[df_acciones["ticker"] == TICKER_PROXY_IPSA]
+        .sort_values("fecha")
+        .set_index("fecha")["precio_cierre"]
+    )
+    retornos_proxy_reales = calcular_retornos_reales(proxy).dropna()
+    retorno_anual_mercado = (
+        retornos_proxy_reales.mean() * 252 * 100 if len(retornos_proxy_reales) >= 30 else None
+    )
+    prima_mercado_local = (
+        retorno_anual_mercado - rf_cl
+        if retorno_anual_mercado is not None and rf_cl is not None
+        else None
+    )
+
+    return {"rf_cl": rf_cl, "rf_ust": rf_ust, "crp": crp, "prima_mercado_local": prima_mercado_local}
+
+
+@st.cache_data(ttl=3600)
+def calcular_resumen_ipsa(df_todas: pd.DataFrame, df_macro: pd.DataFrame) -> pd.DataFrame:
+    """% de cambio 1D/1W/1M/YTD, Beta (vs el proxy del IPSA), volatilidad y
+    costo de capital CAPM (local y ajustado por riesgo país) para cada acción
+    del IPSA."""
     # pd.read_sql devuelve la columna "fecha" (tipo DATE en Postgres) como
     # datetime.date en vez de Timestamp; se convierte para poder comparar
     # fechas e indexar por Timedelta más abajo.
@@ -116,6 +163,11 @@ def calcular_resumen_ipsa(df_todas: pd.DataFrame) -> pd.DataFrame:
         .set_index("fecha")["precio_cierre"]
     )
     retornos_proxy = proxy.pct_change()
+
+    capm_insumos = calcular_crp_y_prima_mercado(df_macro, df_todas)
+    rf_cl = capm_insumos["rf_cl"]
+    crp = capm_insumos["crp"]
+    prima_mercado_local = capm_insumos["prima_mercado_local"]
 
     filas = []
     for ticker in TICKERS_IPSA:
@@ -175,6 +227,16 @@ def calcular_resumen_ipsa(df_todas: pd.DataFrame) -> pd.DataFrame:
             else None
         )
 
+        # Costo de capital CAPM: versión local, y ajustada sumando el spread
+        # PDBC-UST10 como proxy de prima de riesgo país (ver nota metodológica
+        # en el dashboard sobre por qué se muestran ambas).
+        if beta is not None and rf_cl is not None and prima_mercado_local is not None:
+            capm_local = rf_cl + beta * prima_mercado_local
+            capm_crp = capm_local + crp if crp is not None else None
+        else:
+            capm_local = None
+            capm_crp = None
+
         filas.append({
             "Ticker": ticker.replace(".SN", ""),
             "1D %": cambio_desde(1),
@@ -183,6 +245,8 @@ def calcular_resumen_ipsa(df_todas: pd.DataFrame) -> pd.DataFrame:
             "YTD %": cambio_ytd,
             "Beta": beta,
             "Volatilidad anualizada (%)": volatilidad_anualizada,
+            "CAPM local (%)": capm_local,
+            "CAPM + CRP (%)": capm_crp,
             "Última actualización": (
                 ("⚠️ " if atrasado else "") + ultima_fecha_real.strftime("%Y-%m-%d")
             ),
@@ -334,10 +398,37 @@ def calcular_tests_direccion(df_eventos: pd.DataFrame) -> tuple[pd.DataFrame, di
 
 
 @st.cache_data(ttl=3600)
+def calcular_cuartiles_liquidez(df_todas: pd.DataFrame) -> pd.DataFrame:
+    """Monto transado diario promedio (precio × volumen) de los últimos 3
+    meses para las 30 acciones del IPSA, clasificado en cuartiles de liquidez."""
+    df_todas = df_todas.assign(fecha=pd.to_datetime(df_todas["fecha"]))
+    fecha_corte = pd.Timestamp.now().normalize() - VENTANA_LIQUIDEZ
+
+    filas = []
+    for ticker in TICKERS_IPSA:
+        datos = df_todas[(df_todas["ticker"] == ticker) & (df_todas["fecha"] >= fecha_corte)]
+        if datos.empty:
+            continue
+        monto_diario = (datos["precio_cierre"] * datos["volumen"].fillna(0)).mean()
+        filas.append({"Activo": ticker.replace(".SN", ""), "Monto transado diario promedio": monto_diario})
+
+    df_liquidez = pd.DataFrame(filas).set_index("Activo")
+    df_liquidez["Cuartil liquidez"] = pd.qcut(
+        df_liquidez["Monto transado diario promedio"], 4,
+        labels=["Q1 (menos líquido)", "Q2", "Q3", "Q4 (más líquido)"],
+    )
+    return df_liquidez
+
+
+@st.cache_data(ttl=3600)
 def calcular_var(df_todas: pd.DataFrame) -> pd.DataFrame:
     """VaR histórico y paramétrico (95% y 99%) para las 5 acciones principales
     y un portafolio hipotético equiponderado, sobre los últimos ~2 años de
-    retornos "reales" (excluyendo días de precio congelado)."""
+    retornos "reales" (excluyendo días de precio congelado). El VaR de cada
+    acción individual se multiplica por MULTIPLICADOR_LIQUIDEZ si su liquidez
+    (monto transado diario promedio de los últimos 3 meses, contra las 30
+    acciones del IPSA) cae en el cuartil menos líquido — el portafolio no se
+    ajusta, porque esa clasificación es por acción individual."""
     df_todas = df_todas.assign(fecha=pd.to_datetime(df_todas["fecha"]))
     fecha_corte = pd.Timestamp.now().normalize() - VENTANA_VAR
 
@@ -357,19 +448,29 @@ def calcular_var(df_todas: pd.DataFrame) -> pd.DataFrame:
     # fecha completa si a algún componente le falta el dato).
     df_retornos["Portafolio (equiponderado)"] = df_retornos.mean(axis=1, skipna=False)
 
+    df_liquidez = calcular_cuartiles_liquidez(df_todas)
+
     filas = []
     for nombre in df_retornos.columns:
         r = df_retornos[nombre].dropna()
         if len(r) < 30:
             continue
         mu, sigma = r.mean(), r.std()
+
+        es_menos_liquido = (
+            nombre in df_liquidez.index
+            and df_liquidez.loc[nombre, "Cuartil liquidez"] == "Q1 (menos líquido)"
+        )
+        multiplicador = MULTIPLICADOR_LIQUIDEZ if es_menos_liquido else 1.0
+
         filas.append({
             "Activo": nombre,
             "n": len(r),
-            "VaR histórico 95% (%)": -np.percentile(r, 5) * 100,
-            "VaR paramétrico 95% (%)": -(mu + stats.norm.ppf(0.05) * sigma) * 100,
-            "VaR histórico 99% (%)": -np.percentile(r, 1) * 100,
-            "VaR paramétrico 99% (%)": -(mu + stats.norm.ppf(0.01) * sigma) * 100,
+            "Cuartil liquidez": df_liquidez.loc[nombre, "Cuartil liquidez"] if nombre in df_liquidez.index else "—",
+            "VaR histórico 95% (%)": -np.percentile(r, 5) * 100 * multiplicador,
+            "VaR paramétrico 95% (%)": -(mu + stats.norm.ppf(0.05) * sigma) * 100 * multiplicador,
+            "VaR histórico 99% (%)": -np.percentile(r, 1) * 100 * multiplicador,
+            "VaR paramétrico 99% (%)": -(mu + stats.norm.ppf(0.01) * sigma) * 100 * multiplicador,
         })
 
     return pd.DataFrame(filas).set_index("Activo")
@@ -698,15 +799,20 @@ with tab_acciones:
         # --- Heatmap de desempeño: todas las acciones del IPSA ---
         st.subheader("Resumen de desempeño — todas las acciones del IPSA")
 
-        df_resumen = calcular_resumen_ipsa(df_acciones)
+        df_macro = cargar_series_macro()
+        df_resumen = calcular_resumen_ipsa(df_acciones, df_macro)
+        capm_insumos = calcular_crp_y_prima_mercado(df_macro, df_acciones)
 
         columnas_pct = ["1D %", "1W %", "1M %", "YTD %"]
+        columnas_capm = ["CAPM local (%)", "CAPM + CRP (%)"]
         max_abs = df_resumen[columnas_pct].abs().max().max()
         max_abs = max_abs if pd.notna(max_abs) and max_abs > 0 else 1
 
         formato = {col: "{:+.2f}%" for col in columnas_pct}
         formato["Beta"] = "{:.2f}"
         formato["Volatilidad anualizada (%)"] = "{:.2f}%"
+        formato["CAPM local (%)"] = "{:.2f}%"
+        formato["CAPM + CRP (%)"] = "{:.2f}%"
 
         def marcar_datos_atrasados(fila):
             # Si el último dato "real" del ticker tiene más de 5 días hábiles de
@@ -719,7 +825,7 @@ with tab_acciones:
         estilo = (
             df_resumen.style
             .background_gradient(cmap=CMAP_DIVERGENTE, subset=columnas_pct, vmin=-max_abs, vmax=max_abs)
-            .background_gradient(cmap=CMAP_SECUENCIAL, subset=["Volatilidad anualizada (%)"])
+            .background_gradient(cmap=CMAP_SECUENCIAL, subset=["Volatilidad anualizada (%)"] + columnas_capm)
             .apply(marcar_datos_atrasados, axis=1)
             .format(formato, na_rep="—")
             .hide(["Atraso"], axis="columns")
@@ -734,6 +840,28 @@ with tab_acciones:
             "de ese ticker hace más de 5 días hábiles — el % de cambio mostrado no es confiable."
         )
 
+        if capm_insumos["rf_cl"] is not None:
+            st.info(
+                f"**Nota metodológica — CAPM y prima de riesgo país (CRP).** "
+                f"Rf local (PDBC 14d) = {capm_insumos['rf_cl']:.2f}%, "
+                f"Rf EEUU (UST10Y) = {capm_insumos['rf_ust']:.2f}%, "
+                f"spread PDBC−UST10 = {capm_insumos['crp']:+.2f} pp (proxy de CRP), "
+                f"prima de mercado local = {capm_insumos['prima_mercado_local']:.2f} pp "
+                "(retorno histórico anualizado del proxy del IPSA menos Rf local). "
+                "**CAPM local** = Rf local + Beta × prima de mercado local. "
+                "**CAPM + CRP** = CAPM local + el spread de arriba. Se muestran ambas "
+                "versiones a propósito: sumar el spread completo puede implicar un "
+                "**doble conteo** del riesgo país, ya que el Beta y la Rf locales ya "
+                "capturan parte de ese riesgo implícitamente (el mercado chileno se mueve "
+                "distinto a EEUU en parte *por* el riesgo país). Este spread PDBC-UST10 es "
+                "una **aproximación al estilo Damodaran**, no el EMBI+ oficial (que "
+                "requiere una fuente de datos de pago que este dashboard no tiene). También "
+                "hay un **descalce de plazos**: PDBC es a 14 días y UST10Y es a 10 años, así "
+                "que el spread mezcla riesgo país con diferencias de duración/curva de "
+                "tasas — por eso puede salir negativo (como ahora) sin que eso implique que "
+                "el mercado percibe a Chile como \"menos riesgoso\" que EEUU."
+            )
+
     except Exception as e:
         st.error(f"No se pudieron cargar los precios de acciones: {e}")
 
@@ -746,13 +874,15 @@ with tab_riesgo:
         st.caption(
             "Acciones principales y un portafolio hipotético equiponderado (20% cada una), "
             "sobre los últimos ~2 años de retornos diarios, excluyendo días de precio "
-            "congelado (mismo criterio que \"Atraso\" en el heatmap)."
+            "congelado (mismo criterio que \"Atraso\" en el heatmap). El VaR de las acciones "
+            "en el cuartil de liquidez más bajo (contra las 30 del IPSA, ver nota abajo) se "
+            "multiplica por 1,3× como ajuste heurístico por liquidez."
         )
 
         df_var = calcular_var(df_acciones)
-        columnas_var = [c for c in df_var.columns if c != "n"]
+        columnas_var_pct = [c for c in df_var.columns if c not in ("n", "Cuartil liquidez")]
         st.dataframe(
-            df_var.style.format({col: "{:.2f}%" for col in columnas_var}),
+            df_var.style.format({col: "{:.2f}%" for col in columnas_var_pct}),
             use_container_width=True,
         )
 
@@ -780,6 +910,15 @@ with tab_riesgo:
             "más gordas que la normal). Se muestran ambos lado a lado justamente para "
             "que la diferencia entre ellos sea visible: cuando el histórico supera "
             "claramente al paramétrico, es señal de colas gordas en los datos reales."
+        )
+        st.caption(
+            "**Ajuste de VaR por liquidez.** El cuartil de liquidez se calcula sobre el "
+            "monto transado diario promedio (precio × volumen) de los últimos 3 meses, "
+            "de las 30 acciones del IPSA. El multiplicador de 1,3× para el cuartil menos "
+            "líquido es una **aproximación heurística simplificada** — no un modelo "
+            "riguroso de impacto de mercado ni de profundidad del libro de órdenes (order "
+            "book), que requeriría datos de microestructura que este dashboard no tiene. "
+            "Solo se aplica a las acciones individuales, no al portafolio."
         )
 
     except Exception as e:
