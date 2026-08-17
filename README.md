@@ -13,10 +13,16 @@ El dashboard tiene 8 pestañas:
 1. **Brief Premercado** — para revisar antes de que abra la Bolsa de Santiago.
    Sección "Importante": % de cambio de la sesión más reciente de S&P 500,
    cobre, MSCI EM (EEM), Bovespa y el bono UST a 10 años, con flecha y color
-   verde/rojo, pensado para leerse en 10 segundos. Sección "Titulares
-   relevantes": últimos titulares (24-48h) de Diario Financiero, La Tercera
-   Pulso y Emol Economía, agrupados por fecha y enlazados a la fuente original
-   (ver nota sobre las fuentes de noticias más abajo).
+   verde/rojo, pensado para leerse en 10 segundos. Debajo, un **resumen diario
+   generado por IA** (Gemini `gemini-2.5-flash`) con dos secciones — "Panorama
+   global" (3-5 puntos) y "Posibles efectos para Chile" (lenguaje cauteloso,
+   sin afirmaciones causales categóricas) — armado a partir de esos mismos
+   indicadores más los titulares recientes, con un disclaimer visible de que
+   es contenido generado por IA. Se genera **una vez al día en el cron**, no
+   en cada visita. Los titulares crudos (24-48h de Diario Financiero, La
+   Tercera Pulso y Emol Economía) quedan como detalle secundario colapsado,
+   agrupados por fecha y enlazados a la fuente original (ver nota sobre las
+   fuentes de noticias más abajo).
 2. **Indicadores macro** — selector para explorar cualquiera de las series del
    BCCh (ver lista completa más abajo) con su gráfico histórico y último valor.
 3. **Acciones IPSA** — gráfico de precios normalizables a base 100 para las 5
@@ -133,6 +139,14 @@ hora de la última actualización de cada fuente de datos.
   filtrada por sitio (`news.google.com/rss/search?q=site:...`) — funciona y
   trae titulares reales, pero no es el feed oficial del medio.
 
+**Resumen diario con IA (Gemini, vía `google-genai`):** `scripts/generar_brief.py`
+arma un prompt con los indicadores de "Importante" y hasta 60 titulares
+recientes, y llama a Gemini (`gemini-2.5-flash`, autenticado con
+`GEMINI_API_KEY`) para generar el resumen de dos secciones que se muestra en
+"Brief Premercado". Se guarda en la tabla `brief_diario` y se regenera una
+vez al día en el cron — el dashboard nunca llama a Gemini directamente, solo
+lee el resultado ya guardado.
+
 ### ⚠️ Limitación conocida: precios congelados en tickers `.SN`
 
 Yahoo Finance suele repetir el mismo precio de cierre durante varias semanas
@@ -154,8 +168,9 @@ particular no es confiable.
     permanente.
   - Un **cron job diario a las 6:00 AM (hora de Chile)** corre
     `python scripts/actualizar_todo.py`, que descarga las series del BCCh,
-    los precios de acciones y los titulares de noticias en un solo paso y
-    actualiza la base de datos antes de que empiece el día bursátil.
+    los precios de acciones, los titulares de noticias, y genera el resumen
+    diario con Gemini, en un solo paso, antes de que empiece el día bursátil.
+    Necesita `GEMINI_API_KEY` configurada como variable de entorno en Railway.
 
 ## Estructura del proyecto
 
@@ -167,8 +182,10 @@ dashboard-mercado-chile/
 │   ├── actualizar_bcch.py      # Descarga series del Banco Central (+ UST10 vía Yahoo)
 │   ├── actualizar_acciones.py  # Descarga precios de acciones vía Yahoo Finance
 │   ├── actualizar_noticias.py  # Descarga titulares de noticias vía RSS
-│   └── actualizar_todo.py      # Corre los tres anteriores en secuencia (usado por el cron de Railway)
+│   ├── generar_brief.py        # Genera el resumen diario del Brief Premercado con Gemini
+│   └── actualizar_todo.py      # Corre los cuatro anteriores en secuencia (usado por el cron de Railway)
 ├── constants.py                 # Listas de tickers compartidas entre scripts y dashboard
+├── market_data.py                # Cálculo de los indicadores de "Importante", compartido entre el dashboard y generar_brief.py
 ├── models.py                    # Define las tablas de la base de datos
 ├── requirements.txt              # Librerías necesarias
 └── .env.example                  # Plantilla de variables de entorno
@@ -184,6 +201,9 @@ dashboard-mercado-chile/
 2. Copia `.env.example` a `.env` y completa tus credenciales:
    - Token de la API del BCCh (gratis): https://si3.bcentral.cl/Siete/en/Siete/API
    - Una base de datos PostgreSQL (puedes usar una gratuita de Neon o Supabase mientras no tengas Railway conectado)
+   - API key de Gemini (gratis): https://aistudio.google.com/apikey — solo
+     necesaria para correr `scripts/generar_brief.py`; el resto del dashboard
+     funciona sin ella.
 
 3. Crea las tablas (solo la primera vez):
    ```
