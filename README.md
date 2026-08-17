@@ -8,7 +8,7 @@ actualizado diariamente.
 
 ## Qué muestra
 
-El dashboard tiene 6 pestañas:
+El dashboard tiene 7 pestañas:
 
 1. **Brief Premercado** — para revisar antes de que abra la Bolsa de Santiago.
    Sección "Importante": % de cambio de la sesión más reciente de S&P 500,
@@ -22,15 +22,27 @@ El dashboard tiene 6 pestañas:
 3. **Acciones IPSA** — gráfico de precios normalizables a base 100 para las 5
    acciones más importantes (SQM-B, Banco de Chile, Falabella, Copec, CMPC),
    más un **heatmap de desempeño con las 30 acciones del IPSA**: % de cambio
-   1D/1W/1M/YTD (coloreado verde/rojo), **Beta** de cada acción contra el
-   mercado chileno (regresión de retornos diarios del último año vs el ETF
-   ECH, ver limitación de datos más abajo) y la fecha del último precio
-   real de cada ticker.
-4. **7 Magníficas** — AAPL, MSFT, GOOGL, AMZN, NVDA, META y TSLA, normalizadas
+   1D/1W/1M/YTD (coloreado verde/rojo), **volatilidad anualizada** (rolling
+   21 días hábiles × √252), **Beta** de cada acción contra el mercado chileno
+   (regresión de retornos diarios del último año vs el ETF ECH, ver
+   limitación de datos más abajo) y la fecha del último precio real de cada
+   ticker. Tanto la volatilidad como el Beta excluyen los días de precio
+   congelado del cálculo (ver limitación de datos más abajo) — un retorno de
+   0% por dato repetido no es volatilidad real cero.
+4. **Riesgo** — Value at Risk (VaR) histórico y paramétrico, a 95% y 99%, para
+   las 5 acciones principales y un portafolio hipotético equiponderado, sobre
+   los últimos ~2 años (mismo filtro de días congelados); y una matriz de
+   correlación de retornos diarios entre las 30 acciones del IPSA. Nota
+   metodológica visible: el VaR histórico asume que el pasado representa el
+   riesgo futuro (no garantizado, sobre todo en crisis); el paramétrico asume
+   normalidad, que en la práctica suele subestimar eventos extremos (colas
+   gordas) — se muestran ambos lado a lado para que la diferencia sea
+   visible.
+5. **7 Magníficas** — AAPL, MSFT, GOOGL, AMZN, NVDA, META y TSLA, normalizadas
    a base 100 para comparar su desempeño relativo.
-5. **Benchmark** — el IPSA (vía el ETF ECH, ver nota abajo) comparado con el
+6. **Benchmark** — el IPSA (vía el ETF ECH, ver nota abajo) comparado con el
    S&P 500, MSCI Emerging Markets (EEM) y el Bovespa, normalizado a base 100.
-6. **Event Study TPM** — detecta automáticamente cada cambio de la Tasa de
+7. **Event Study TPM** — detecta automáticamente cada cambio de la Tasa de
    Política Monetaria (comparando la serie diaria de la TPM día a día) y mide
    su impacto sobre el tipo de cambio USD/CLP: retorno anormal (AR) y
    acumulado (CAR) en una ventana de -2 a +2 días hábiles alrededor de cada

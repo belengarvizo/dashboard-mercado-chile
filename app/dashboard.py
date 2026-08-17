@@ -33,10 +33,18 @@ st.set_page_config(page_title="Mercado Chile", layout="wide")
 # selección), y diverging rojo-gris-verde para el heatmap de desempeño.
 PALETA_CATEGORICA = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#4a3aa7", "#e34948"]
 CMAP_DIVERGENTE = LinearSegmentedColormap.from_list("rojo_verde", ["#d03b3b", "#f0efec", "#0ca30c"])
+# Secuencial (una sola tonalidad, claro→oscuro) para magnitudes que no son "ganancia/pérdida", como volatilidad.
+CMAP_SECUENCIAL = LinearSegmentedColormap.from_list("azul_secuencial", ["#fcfcfb", "#2a78d6"])
+# Diverging azul-gris-rojo para la matriz de correlación (no es un juicio de valor bueno/malo, por eso no usa verde/rojo).
+COLORSCALE_CORRELACION = [[0.0, "#e34948"], [0.5, "#f0efec"], [1.0, "#2a78d6"]]
 
 # Event study TPM → tipo de cambio: ventana de estimación y ventana de evento (en días hábiles).
 DIAS_ESTIMACION_EVENT_STUDY = 30
 DIAS_EVENTO_EVENT_STUDY = range(-2, 3)  # -2, -1, 0, +1, +2
+
+# Métricas de riesgo: ventana de volatilidad (días hábiles) y de VaR (~2 años calendario).
+VENTANA_VOLATILIDAD = 21
+VENTANA_VAR = pd.DateOffset(years=2)
 
 st.title("Dashboard de mercado chileno")
 st.caption("Datos del Banco Central de Chile y Yahoo Finance, actualizados diariamente")
@@ -66,6 +74,15 @@ def cargar_ultima_actualizacion():
 def cargar_noticias():
     query = "SELECT fuente, titulo, link, fecha_publicacion FROM noticias ORDER BY fecha_publicacion DESC"
     return pd.read_sql(query, engine)
+
+
+def calcular_retornos_reales(serie: pd.Series) -> pd.Series:
+    """Retornos diarios de una serie de precios, excluyendo los días donde el
+    precio no cambió respecto al anterior (dato congelado — no es volatilidad
+    real cero, es ausencia de dato). Mismo criterio que la detección de
+    "Atraso" del heatmap: comparar cada valor con el del día anterior."""
+    cambia = serie.ne(serie.shift(1))
+    return serie.pct_change()[cambia]
 
 
 def calcular_cambio_reciente(serie: pd.Series) -> tuple[float, float, object] | None:
@@ -143,6 +160,16 @@ def calcular_resumen_ipsa(df_todas: pd.DataFrame) -> pd.DataFrame:
         dias_habiles_atraso = int(np.busday_count(ultima_fecha_real.date(), hoy.date()))
         atrasado = dias_habiles_atraso > 5
 
+        # Volatilidad anualizada: rolling 21 días hábiles sobre retornos "reales"
+        # únicamente (se excluyen los días de precio congelado — un retorno de 0%
+        # por dato congelado no es volatilidad real cero, es ausencia de dato).
+        retornos_reales_ticker = retornos_ticker[cambia].dropna()
+        volatilidad_anualizada = (
+            retornos_reales_ticker.tail(VENTANA_VOLATILIDAD).std() * (252 ** 0.5) * 100
+            if len(retornos_reales_ticker) >= VENTANA_VOLATILIDAD
+            else None
+        )
+
         filas.append({
             "Ticker": ticker.replace(".SN", ""),
             "1D %": cambio_desde(1),
@@ -150,6 +177,7 @@ def calcular_resumen_ipsa(df_todas: pd.DataFrame) -> pd.DataFrame:
             "1M %": cambio_desde(30),
             "YTD %": cambio_ytd,
             "Beta": beta,
+            "Volatilidad anualizada (%)": volatilidad_anualizada,
             "Última actualización": (
                 ("⚠️ " if atrasado else "") + ultima_fecha_real.strftime("%Y-%m-%d")
             ),
@@ -300,6 +328,69 @@ def calcular_tests_direccion(df_eventos: pd.DataFrame) -> tuple[pd.DataFrame, di
     return df_direccion, diferencia
 
 
+@st.cache_data(ttl=3600)
+def calcular_var(df_todas: pd.DataFrame) -> pd.DataFrame:
+    """VaR histórico y paramétrico (95% y 99%) para las 5 acciones principales
+    y un portafolio hipotético equiponderado, sobre los últimos ~2 años de
+    retornos "reales" (excluyendo días de precio congelado)."""
+    df_todas = df_todas.assign(fecha=pd.to_datetime(df_todas["fecha"]))
+    fecha_corte = pd.Timestamp.now().normalize() - VENTANA_VAR
+
+    retornos_por_ticker = {}
+    for ticker in TICKERS_IPSA_PRINCIPALES:
+        serie = (
+            df_todas[df_todas["ticker"] == ticker]
+            .sort_values("fecha")
+            .set_index("fecha")["precio_cierre"]
+        )
+        serie = serie[serie.index >= fecha_corte]
+        retornos_por_ticker[ticker.replace(".SN", "")] = calcular_retornos_reales(serie)
+
+    df_retornos = pd.DataFrame(retornos_por_ticker)
+    # Portafolio equiponderado: promedio simple de los 5 retornos, solo en fechas
+    # donde los 5 tienen un retorno "real" ese día (skipna=False descarta la
+    # fecha completa si a algún componente le falta el dato).
+    df_retornos["Portafolio (equiponderado)"] = df_retornos.mean(axis=1, skipna=False)
+
+    filas = []
+    for nombre in df_retornos.columns:
+        r = df_retornos[nombre].dropna()
+        if len(r) < 30:
+            continue
+        mu, sigma = r.mean(), r.std()
+        filas.append({
+            "Activo": nombre,
+            "n": len(r),
+            "VaR histórico 95% (%)": -np.percentile(r, 5) * 100,
+            "VaR paramétrico 95% (%)": -(mu + stats.norm.ppf(0.05) * sigma) * 100,
+            "VaR histórico 99% (%)": -np.percentile(r, 1) * 100,
+            "VaR paramétrico 99% (%)": -(mu + stats.norm.ppf(0.01) * sigma) * 100,
+        })
+
+    return pd.DataFrame(filas).set_index("Activo")
+
+
+@st.cache_data(ttl=3600)
+def calcular_matriz_correlacion_ipsa(df_todas: pd.DataFrame) -> pd.DataFrame:
+    """Matriz de correlación de retornos diarios "reales" (sin días de precio
+    congelado) entre las 30 acciones del IPSA."""
+    df_todas = df_todas.assign(fecha=pd.to_datetime(df_todas["fecha"]))
+
+    retornos_por_ticker = {}
+    for ticker in TICKERS_IPSA:
+        serie = (
+            df_todas[df_todas["ticker"] == ticker]
+            .sort_values("fecha")
+            .set_index("fecha")["precio_cierre"]
+        )
+        retornos_por_ticker[ticker.replace(".SN", "")] = calcular_retornos_reales(serie)
+
+    # .corr() usa observaciones pairwise-completas: cada par de acciones se
+    # correlaciona solo con las fechas donde ambas tienen un retorno real,
+    # sin exigir que las 30 coincidan el mismo día.
+    return pd.DataFrame(retornos_por_ticker).corr()
+
+
 # --- Sidebar: info de última actualización ---
 with st.sidebar:
     st.subheader("Última actualización")
@@ -324,8 +415,8 @@ try:
 except Exception:
     st.caption("Aún no hay datos cargados. Corre los scripts de actualización primero.")
 
-tab_premercado, tab_macro, tab_acciones, tab_magnificas, tab_benchmark, tab_event_study = st.tabs(
-    ["Brief Premercado", "Indicadores macro", "Acciones IPSA", "7 Magníficas", "Benchmark", "Event Study TPM"]
+tab_premercado, tab_macro, tab_acciones, tab_riesgo, tab_magnificas, tab_benchmark, tab_event_study = st.tabs(
+    ["Brief Premercado", "Indicadores macro", "Acciones IPSA", "Riesgo", "7 Magníficas", "Benchmark", "Event Study TPM"]
 )
 
 # --- Tab 0: Brief Premercado ---
@@ -483,6 +574,7 @@ with tab_acciones:
 
         formato = {col: "{:+.2f}%" for col in columnas_pct}
         formato["Beta"] = "{:.2f}"
+        formato["Volatilidad anualizada (%)"] = "{:.2f}%"
 
         def marcar_datos_atrasados(fila):
             # Si el último dato "real" del ticker tiene más de 5 días hábiles de
@@ -495,12 +587,15 @@ with tab_acciones:
         estilo = (
             df_resumen.style
             .background_gradient(cmap=CMAP_DIVERGENTE, subset=columnas_pct, vmin=-max_abs, vmax=max_abs)
+            .background_gradient(cmap=CMAP_SECUENCIAL, subset=["Volatilidad anualizada (%)"])
             .apply(marcar_datos_atrasados, axis=1)
             .format(formato, na_rep="—")
             .hide(["Atraso"], axis="columns")
         )
         st.dataframe(estilo, use_container_width=True)
         st.caption(
+            "Volatilidad anualizada: rolling 21 días hábiles de retornos diarios × √252, "
+            "excluyendo días de precio congelado (mismo criterio que \"Atraso\"). "
             "Beta calculado sobre retornos diarios del último año, respecto al ETF ECH "
             "(proxy del IPSA — el índice no tiene ticker propio en Yahoo Finance). "
             "⚠️ en \"Última actualización\" indica que Yahoo Finance no refrescó el precio "
@@ -509,6 +604,54 @@ with tab_acciones:
 
     except Exception as e:
         st.error(f"No se pudieron cargar los precios de acciones: {e}")
+
+# --- Tab 2b: Riesgo ---
+with tab_riesgo:
+    try:
+        df_acciones = cargar_precios_acciones()
+
+        st.subheader("Value at Risk (VaR)")
+        st.caption(
+            "Acciones principales y un portafolio hipotético equiponderado (20% cada una), "
+            "sobre los últimos ~2 años de retornos diarios, excluyendo días de precio "
+            "congelado (mismo criterio que \"Atraso\" en el heatmap)."
+        )
+
+        df_var = calcular_var(df_acciones)
+        columnas_var = [c for c in df_var.columns if c != "n"]
+        st.dataframe(
+            df_var.style.format({col: "{:.2f}%" for col in columnas_var}),
+            use_container_width=True,
+        )
+
+        st.divider()
+        st.subheader("Matriz de correlación — retornos diarios, 30 acciones del IPSA")
+
+        matriz_corr = calcular_matriz_correlacion_ipsa(df_acciones)
+        fig_corr = px.imshow(
+            matriz_corr,
+            color_continuous_scale=COLORSCALE_CORRELACION,
+            zmin=-1, zmax=1,
+            aspect="auto",
+        )
+        fig_corr.update_layout(height=750)
+        st.plotly_chart(fig_corr, use_container_width=True)
+
+        st.divider()
+        st.info(
+            "**Nota metodológica.** El **VaR histórico** asume que la distribución de "
+            "retornos pasados representa razonablemente el riesgo futuro — supuesto no "
+            "garantizado, sobre todo en episodios de crisis o cambios estructurales del "
+            "mercado. El **VaR paramétrico** asume que los retornos siguen una "
+            "distribución normal, lo que en la práctica suele **subestimar la "
+            "probabilidad de eventos extremos** (los retornos reales suelen tener colas "
+            "más gordas que la normal). Se muestran ambos lado a lado justamente para "
+            "que la diferencia entre ellos sea visible: cuando el histórico supera "
+            "claramente al paramétrico, es señal de colas gordas en los datos reales."
+        )
+
+    except Exception as e:
+        st.error(f"No se pudieron calcular las métricas de riesgo: {e}")
 
 # --- Tab 3: 7 Magníficas ---
 with tab_magnificas:
