@@ -145,6 +145,20 @@ with st.sidebar:
     except Exception:
         st.warning("Aún no hay datos cargados. Corre los scripts de actualización primero.")
 
+# --- Barra de última actualización (visible arriba, antes de las pestañas) ---
+NOMBRES_FUENTE = {"bcch": "Banco Central de Chile", "yfinance": "Yahoo Finance"}
+try:
+    meta = cargar_ultima_actualizacion()
+    columnas_meta = st.columns(len(meta)) if len(meta) else []
+    for col, (_, fila) in zip(columnas_meta, meta.iterrows()):
+        with col:
+            st.caption(
+                f"🔄 **{NOMBRES_FUENTE.get(fila['fuente'], fila['fuente'])}**: "
+                f"{fila['ultima_actualizacion'].strftime('%d-%m-%Y %H:%M')}"
+            )
+except Exception:
+    st.caption("Aún no hay datos cargados. Corre los scripts de actualización primero.")
+
 tab_macro, tab_acciones, tab_magnificas, tab_benchmark = st.tabs(
     ["Indicadores macro", "Acciones IPSA", "7 Magníficas", "Benchmark"]
 )
