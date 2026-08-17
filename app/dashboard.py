@@ -12,6 +12,7 @@ sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
 
 import streamlit as st
 import pandas as pd
+import numpy as np
 import plotly.express as px
 from matplotlib.colors import LinearSegmentedColormap
 from sqlalchemy import text
@@ -107,6 +108,17 @@ def calcular_resumen_ipsa(df_todas: pd.DataFrame) -> pd.DataFrame:
             else None
         )
 
+        # Fecha del último dato "real": Yahoo Finance suele repetir el mismo
+        # precio de cierre por varias semanas para tickers .SN antes de
+        # refrescarlo, así que no basta con mirar la última fila descargada.
+        cambia = serie.ne(serie.shift(1))
+        cambia.iloc[0] = True  # el primer dato de la serie siempre cuenta como real
+        ultima_fecha_real = serie.index[cambia][-1]
+
+        hoy = pd.Timestamp.now().normalize()
+        dias_habiles_atraso = int(np.busday_count(ultima_fecha_real.date(), hoy.date()))
+        atrasado = dias_habiles_atraso > 5
+
         filas.append({
             "Ticker": ticker.replace(".SN", ""),
             "1D %": cambio_desde(1),
@@ -114,6 +126,10 @@ def calcular_resumen_ipsa(df_todas: pd.DataFrame) -> pd.DataFrame:
             "1M %": cambio_desde(30),
             "YTD %": cambio_ytd,
             "Beta": beta,
+            "Última actualización": (
+                ("⚠️ " if atrasado else "") + ultima_fecha_real.strftime("%Y-%m-%d")
+            ),
+            "Atraso": atrasado,
         })
 
     return pd.DataFrame(filas).set_index("Ticker")
@@ -204,15 +220,27 @@ with tab_acciones:
         formato = {col: "{:+.2f}%" for col in columnas_pct}
         formato["Beta"] = "{:.2f}"
 
+        def marcar_datos_atrasados(fila):
+            # Si el último dato "real" del ticker tiene más de 5 días hábiles de
+            # atraso, se grisa toda la fila (y se anula el color del heatmap) para
+            # no dar una falsa sensación de precisión en un % que no se actualizó.
+            if fila["Atraso"]:
+                return ["color: #898781; background-color: transparent"] * len(fila)
+            return [""] * len(fila)
+
         estilo = (
             df_resumen.style
             .background_gradient(cmap=CMAP_DIVERGENTE, subset=columnas_pct, vmin=-max_abs, vmax=max_abs)
+            .apply(marcar_datos_atrasados, axis=1)
             .format(formato, na_rep="—")
+            .hide(["Atraso"], axis="columns")
         )
         st.dataframe(estilo, use_container_width=True)
         st.caption(
             "Beta calculado sobre retornos diarios del último año, respecto al ETF ECH "
-            "(proxy del IPSA — el índice no tiene ticker propio en Yahoo Finance)."
+            "(proxy del IPSA — el índice no tiene ticker propio en Yahoo Finance). "
+            "⚠️ en \"Última actualización\" indica que Yahoo Finance no refrescó el precio "
+            "de ese ticker hace más de 5 días hábiles — el % de cambio mostrado no es confiable."
         )
 
     except Exception as e:
