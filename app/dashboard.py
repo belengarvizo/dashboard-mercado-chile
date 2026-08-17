@@ -88,9 +88,22 @@ with tab_acciones:
 
         df_filtrado = df_acciones[df_acciones["ticker"].isin(tickers_elegidos)]
 
+        normalizar = st.checkbox("Normalizar a base 100", value=True)
+
+        if normalizar:
+            df_filtrado = df_filtrado.copy()
+            df_filtrado["precio_normalizado"] = df_filtrado.groupby("ticker")["precio_cierre"].transform(
+                lambda serie: serie / serie.iloc[0] * 100
+            )
+            columna_precio = "precio_normalizado"
+            titulo_precio = "Desempeño relativo (base 100)"
+        else:
+            columna_precio = "precio_cierre"
+            titulo_precio = "Precio de cierre histórico"
+
         fig = px.line(
-            df_filtrado, x="fecha", y="precio_cierre", color="ticker",
-            title="Precio de cierre histórico"
+            df_filtrado, x="fecha", y=columna_precio, color="ticker",
+            title=titulo_precio
         )
         st.plotly_chart(fig, use_container_width=True)
 
