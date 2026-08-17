@@ -1,6 +1,8 @@
 """
-Descarga precios históricos de acciones del IPSA vía Yahoo Finance
-y los guarda en la base de datos. Corre junto al script del BCCh
+Descarga precios históricos de acciones vía Yahoo Finance y los guarda
+en la base de datos: las 30 acciones del IPSA, el ETF ECH (proxy del
+IPSA, que no tiene ticker propio en Yahoo Finance), benchmarks
+internacionales y las "7 Magníficas". Corre junto al script del BCCh
 en el cron job diario de Railway.
 """
 
@@ -10,18 +12,17 @@ from datetime import datetime
 
 sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
 
+import pandas as pd
 import yfinance as yf
 from models import get_session, PrecioAccion, MetadataActualizacion
+from constants import TICKERS_IPSA, TICKER_PROXY_IPSA, TICKERS_BENCHMARK, TICKERS_MAGNIFICAS
 
-# Las 5 acciones que acordamos para el v1.
-# El sufijo .SN indica Bolsa de Santiago en Yahoo Finance.
-TICKERS_A_DESCARGAR = [
-    "SQM-B.SN",
-    "CHILE.SN",       # Banco de Chile
-    "FALABELLA.SN",
-    "COPEC.SN",
-    "CMPC.SN",
-]
+TICKERS_A_DESCARGAR = (
+    TICKERS_IPSA
+    + [TICKER_PROXY_IPSA]
+    + [t for t in TICKERS_BENCHMARK if t != TICKER_PROXY_IPSA]
+    + TICKERS_MAGNIFICAS
+)
 
 
 def descargar_ticker(ticker: str, periodo: str = "5y"):
@@ -31,6 +32,45 @@ def descargar_ticker(ticker: str, periodo: str = "5y"):
     return historico
 
 
+def guardar_historico(session, ticker: str, historico):
+    """Inserta o actualiza (por ticker+fecha) el histórico de un ticker en la BD.
+
+    Trae fecha+precio+volumen ya guardados para ese ticker en una sola consulta
+    (en vez de una consulta por día), inserta en bloque las fechas nuevas, y
+    solo emite un UPDATE cuando el precio o el volumen realmente cambiaron (los
+    precios de cierre históricos casi nunca se revisan, así que en una
+    re-corrida normal esto evita miles de idas y vueltas innecesarias a la BD).
+    """
+    existentes = {
+        fecha: (float(precio), volumen)
+        for fecha, precio, volumen in session.query(
+            PrecioAccion.fecha, PrecioAccion.precio_cierre, PrecioAccion.volumen
+        ).filter_by(ticker=ticker)
+    }
+
+    nuevas = []
+    contador = 0
+    for fecha_idx, fila in historico.iterrows():
+        fecha = fecha_idx.date()
+        precio = float(fila["Close"])
+        # Algunos índices/ETFs (ej. benchmarks internacionales) no traen volumen.
+        volumen = int(fila["Volume"]) if pd.notna(fila["Volume"]) else None
+
+        if fecha not in existentes:
+            nuevas.append(PrecioAccion(ticker=ticker, fecha=fecha, precio_cierre=precio, volumen=volumen))
+        elif existentes[fecha] != (precio, volumen):
+            session.query(PrecioAccion).filter_by(ticker=ticker, fecha=fecha).update({
+                "precio_cierre": precio,
+                "volumen": volumen,
+            })
+        contador += 1
+
+    if nuevas:
+        session.bulk_save_objects(nuevas)
+
+    return contador
+
+
 def actualizar_todas_las_acciones():
     session = get_session()
 
@@ -38,30 +78,8 @@ def actualizar_todas_las_acciones():
         for ticker in TICKERS_A_DESCARGAR:
             print(f"Descargando {ticker}...")
             historico = descargar_ticker(ticker)
-
-            contador = 0
-            for fecha_idx, fila in historico.iterrows():
-                fecha = fecha_idx.date()
-
-                existente = (
-                    session.query(PrecioAccion)
-                    .filter_by(ticker=ticker, fecha=fecha)
-                    .first()
-                )
-                if existente:
-                    existente.precio_cierre = float(fila["Close"])
-                    existente.volumen = int(fila["Volume"])
-                else:
-                    session.add(
-                        PrecioAccion(
-                            ticker=ticker,
-                            fecha=fecha,
-                            precio_cierre=float(fila["Close"]),
-                            volumen=int(fila["Volume"]),
-                        )
-                    )
-                contador += 1
-
+            contador = guardar_historico(session, ticker, historico)
+            session.commit()
             print(f"  -> {contador} días procesados")
 
         meta = session.query(MetadataActualizacion).filter_by(fuente="yfinance").first()

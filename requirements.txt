@@ -6,3 +6,4 @@ psycopg2-binary
 requests
 yfinance
 python-dotenv
+matplotlib
