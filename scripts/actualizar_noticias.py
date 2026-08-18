@@ -20,6 +20,7 @@ sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
 
 import feedparser
 from models import get_session, Noticia, MetadataActualizacion
+from retry_utils import con_reintentos, con_reintentos_db
 
 HORAS_VENTANA = 48
 
@@ -58,36 +59,47 @@ def actualizar_todas_las_noticias():
     try:
         for fuente, url in FUENTES_RSS.items():
             print(f"Descargando titulares de {fuente}...")
-            titulares = descargar_titulares(url)
+            # El fetch del feed RSS es propenso a cortes transitorios de red
+            # (ej. Google Noticias resetea la conexión de a ratos).
+            titulares = con_reintentos(descargar_titulares, url)
 
-            links_existentes = {
-                link for (link,) in session.query(Noticia.link).filter_by(fuente=fuente)
-            }
+            def _guardar_titulares(fuente=fuente, titulares=titulares):
+                links_existentes = {
+                    link for (link,) in session.query(Noticia.link).filter_by(fuente=fuente)
+                }
 
-            nuevas = [
-                Noticia(
-                    fuente=fuente,
-                    titulo=t["titulo"],
-                    link=t["link"],
-                    fecha_publicacion=t["fecha_publicacion"],
-                    fecha_descarga=datetime.now(),
-                )
-                for t in titulares
-                if t["link"] not in links_existentes
-            ]
+                nuevas = [
+                    Noticia(
+                        fuente=fuente,
+                        titulo=t["titulo"],
+                        link=t["link"],
+                        fecha_publicacion=t["fecha_publicacion"],
+                        fecha_descarga=datetime.now(),
+                    )
+                    for t in titulares
+                    if t["link"] not in links_existentes
+                ]
 
-            if nuevas:
-                session.bulk_save_objects(nuevas)
+                if nuevas:
+                    session.bulk_save_objects(nuevas)
+                session.commit()
+                return len(nuevas)
+
+            # Se reintenta la lectura de links existentes + la escritura como
+            # una sola unidad: es idempotente (compara contra lo ya guardado),
+            # así que reintentarla completa ante un corte de conexión es seguro.
+            n_nuevas = con_reintentos_db(session, _guardar_titulares)
+            print(f"  -> {len(titulares)} titulares en ventana de {HORAS_VENTANA}h, {n_nuevas} nuevos")
+
+        def _guardar_metadata():
+            meta = session.query(MetadataActualizacion).filter_by(fuente="noticias").first()
+            if meta:
+                meta.ultima_actualizacion = datetime.now()
+            else:
+                session.add(MetadataActualizacion(fuente="noticias", ultima_actualizacion=datetime.now()))
             session.commit()
-            print(f"  -> {len(titulares)} titulares en ventana de {HORAS_VENTANA}h, {len(nuevas)} nuevos")
 
-        meta = session.query(MetadataActualizacion).filter_by(fuente="noticias").first()
-        if meta:
-            meta.ultima_actualizacion = datetime.now()
-        else:
-            session.add(MetadataActualizacion(fuente="noticias", ultima_actualizacion=datetime.now()))
-
-        session.commit()
+        con_reintentos_db(session, _guardar_metadata)
         print("Actualización de noticias completada.")
 
     except Exception as e:

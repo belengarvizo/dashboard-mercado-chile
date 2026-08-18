@@ -68,7 +68,11 @@ class BriefDiario(Base):
 
 def get_engine():
     database_url = os.environ["DATABASE_URL"]
-    return create_engine(database_url)
+    # pool_pre_ping: antes de reusar una conexión del pool, hace un chequeo
+    # liviano y la reemplaza si ya murió — evita la mayoría de los
+    # "server closed the connection unexpectedly" típicos de Postgres
+    # serverless (Neon), que puede cerrar conexiones inactivas sin avisar.
+    return create_engine(database_url, pool_pre_ping=True)
 
 
 def get_session():

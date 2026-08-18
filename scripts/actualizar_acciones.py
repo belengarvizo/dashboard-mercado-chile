@@ -22,6 +22,7 @@ from constants import (
     TICKERS_MAGNIFICAS,
     TICKER_PETROLEO_WTI,
 )
+from retry_utils import con_reintentos_db
 
 TICKERS_A_DESCARGAR = (
     TICKERS_IPSA
@@ -85,17 +86,29 @@ def actualizar_todas_las_acciones():
         for ticker in TICKERS_A_DESCARGAR:
             print(f"Descargando {ticker}...")
             historico = descargar_ticker(ticker)
-            contador = guardar_historico(session, ticker, historico)
-            session.commit()
+
+            def _guardar_y_commitear(ticker=ticker, historico=historico):
+                contador_local = guardar_historico(session, ticker, historico)
+                session.commit()
+                return contador_local
+
+            # La descarga vía yfinance no se reintenta acá (no es el problema
+            # observado); solo la escritura a la BD, propensa a cortes
+            # transitorios de la conexión serverless de Neon. guardar_historico
+            # es idempotente (compara contra lo ya guardado), así que reintentar
+            # la función completa -no solo el commit- es seguro.
+            contador = con_reintentos_db(session, _guardar_y_commitear)
             print(f"  -> {contador} días procesados")
 
-        meta = session.query(MetadataActualizacion).filter_by(fuente="yfinance").first()
-        if meta:
-            meta.ultima_actualizacion = datetime.now()
-        else:
-            session.add(MetadataActualizacion(fuente="yfinance", ultima_actualizacion=datetime.now()))
+        def _guardar_metadata():
+            meta = session.query(MetadataActualizacion).filter_by(fuente="yfinance").first()
+            if meta:
+                meta.ultima_actualizacion = datetime.now()
+            else:
+                session.add(MetadataActualizacion(fuente="yfinance", ultima_actualizacion=datetime.now()))
+            session.commit()
 
-        session.commit()
+        con_reintentos_db(session, _guardar_metadata)
         print("Actualización de acciones completada.")
 
     except Exception as e:
