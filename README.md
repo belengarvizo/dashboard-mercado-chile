@@ -49,8 +49,11 @@ El dashboard tiene 10 pestañas:
 2. **Indicadores macro** — selector para explorar cualquiera de las series del
    BCCh (ver lista completa más abajo) con su gráfico histórico y último valor.
    Incluye la **inflación breakeven** (tasa BCP nominal a 10 años − tasa BCU
-   real a 10 años) como una serie calculada más del selector — ver detalle en
-   el punto 1 y en "Fuentes de datos".
+   real a 10 años) como una serie calculada más del selector, y también los
+   **indicadores de "Importante" del Brief Premercado que vienen de precios
+   de acciones** (S&P 500, Dow Jones, Petróleo WTI, IPSA vía ECH) — así todos
+   los indicadores de esa sección quedan explorables acá, no solo los que ya
+   vivían en `series_macro` — ver detalle en el punto 1 y en "Fuentes de datos".
 3. **Acciones IPSA** — gráfico de precios normalizables a base 100; el
    selector permite elegir entre **las 30 acciones del IPSA** (incluida
    LATAM, `LTM.SN`), con las mismas 5 destacadas de siempre (SQM-B, Banco de
@@ -78,7 +81,18 @@ El dashboard tiene 10 pestañas:
    puede implicar doble conteo del riesgo país (el Beta y la Rf locales ya
    lo capturan en parte implícitamente). Es una aproximación al estilo
    Damodaran, no el EMBI+ oficial (que requiere una fuente de pago).
-4. **Riesgo** — Value at Risk (VaR) histórico y paramétrico, a 95% y 99%, para
+4. **Acciones Dow Jones** — la misma estructura que "Acciones IPSA", aplicada
+   a **las 30 acciones que componen el Dow Jones Industrial Average**
+   (verificadas contra Wikipedia, stockanalysis.com y Yahoo Finance antes de
+   agregarlas), con AAPL, MSFT, JPM, CAT y KO preseleccionadas por defecto.
+   El heatmap de desempeño usa el mismo criterio de % de cambio, volatilidad
+   anualizada, Beta y Beta ajustada — pero el Beta se calcula contra el
+   **índice Dow Jones (`^DJI`) directamente**, no contra un proxy, porque a
+   diferencia del IPSA sí tiene ticker propio en Yahoo Finance. El CAPM usa
+   como Rf la Effective Federal Funds Rate (TPM EEUU) y una sola versión (sin
+   la distinción "local" vs. "+ CRP" del IPSA): no aplica una prima de riesgo
+   país de EEUU respecto a sí mismo.
+5. **Riesgo** — Value at Risk (VaR) histórico y paramétrico, a 95% y 99%, para
    las 5 acciones principales y un portafolio hipotético equiponderado, sobre
    los últimos ~2 años (mismo filtro de días congelados); y una matriz de
    correlación de retornos diarios entre las 30 acciones del IPSA. Nota
@@ -113,82 +127,12 @@ El dashboard tiene 10 pestañas:
    proxy ECH (no una cifra externa de una crisis pasada), lo aplica vía Beta
    a cada acción y al portafolio, y lo etiqueta explícitamente como el peor
    caso observado en la muestra — no el peor caso históricamente posible.
-5. **Benchmark** — el IPSA (vía el ETF ECH, ver nota abajo) comparado con el
+6. **Benchmark** — el IPSA (vía el ETF ECH, ver nota abajo) comparado con el
    S&P 500, MSCI Emerging Markets (EEM) y el Bovespa, normalizado a base 100.
    Debajo, la sección **7 Magníficas**: AAPL, MSFT, GOOGL, AMZN, NVDA, META y
    TSLA normalizadas a base 100 (gráfico sin cambios), más una tabla simple
    de % de cambio 1D/1W/1M/YTD (coloreada verde/rojo, mismo estilo que el
    heatmap del IPSA pero sin Beta/VaR/CAPM).
-6. **TPM y Tipo de Cambio** — dos partes en una misma pestaña:
-
-   **Parte 1: ¿Hay un efecto estadístico?** (Event Study) — detecta automáticamente cada cambio de la Tasa de
-   Política Monetaria (comparando la serie diaria de la TPM día a día) y mide
-   su impacto sobre el tipo de cambio USD/CLP: retorno anormal (AR) y
-   acumulado (CAR) en una ventana de -2 a +2 días hábiles alrededor de cada
-   evento, estimados contra el retorno normal de los 30 días hábiles previos.
-   Muestra el CAAR promedio de todos los eventos con un t-test simple de
-   significancia, la tabla de cada evento individual, y un t-test separado del
-   CAR contra cero para alzas vs. bajas de tasa (más un test de diferencia de
-   medias entre ambos grupos). Las tablas de AAR/CAAR y de alzas/bajas marcan
-   cada resultado en **texto verde si p < 0,05 (significativo) o rojo si
-   p ≥ 0,05 (no significativo)** — texto en negrita, no fondo de celda, para
-   no confundirse con el verde/rojo de fondo que usa el heatmap de
-   ganancia/pérdida en "Acciones IPSA" (mismo par de colores, rol visual
-   distinto). **Limitación metodológica:** solo detecta cambios efectivos de
-   tasa, no las decisiones de "mantener" en cada Reunión de Política
-   Monetaria (RPM), porque el dashboard no tiene el calendario de reuniones
-   — queda documentado en la propia pestaña.
-
-   **Hallazgo (con los datos hasta la fecha):** de 37 eventos (15 alzas,
-   22 bajas), el CAR promedio es negativo tras alzas de TPM (el dólar tiende a
-   bajar, el peso se aprecia levemente) y positivo tras bajas (el dólar tiende
-   a subir, el peso se deprecia) — dirección **económicamente consistente con
-   la teoría de paridad de tasas de interés**. Pero **ningún resultado es
-   estadísticamente significativo al 5%**: ni el AAR/CAAR agregado en ningún
-   día de la ventana de evento, ni el CAR de alzas o bajas contra cero por
-   separado (t=-0,18 y t=1,04 respectivamente), ni la diferencia de medias
-   entre ambos grupos (t=-0,91, p=0,37).
-
-   Esa falta de significancia tiene (al menos) dos causas distintas, ambas
-   documentadas en la propia pestaña: **(1) poca potencia estadística** — solo
-   37 eventos totales, 15/22 por grupo, una muestra chica para detectar un
-   efecto salvo que sea muy grande; y **(2) confusión con ciclos monetarios
-   globales** — las decisiones de TPM del BCCh suelen coincidir con ciclos
-   simultáneos en otros bancos centrales (ej. el BCCh subió tasas en 2021-2022
-   al mismo tiempo que la Fed subía las suyas), así que este diseño no puede
-   aislar limpiamente el efecto de la decisión local del efecto del ciclo
-   global. **"No significativo" no equivale a "no hay efecto"** — solo
-   significa que no se puede afirmar con esta muestra y este diseño. Una
-   mejora futura sería controlar por el movimiento simultáneo del dólar a
-   nivel global (ej. el índice DXY) en la ventana de evento, para aislar
-   mejor el componente local del CAR.
-
-   **Parte 2: ¿Se podría haber ganado plata con eso?** (Backtester) — backtest hipotético e ilustrativo sobre
-   los mismos 37 eventos del Event Study: TPM sube → posición corta en
-   USD/CLP, TPM baja → posición larga; entrada al cierre del día del evento,
-   salida al cierre 2 días hábiles después, con 8 puntos base de costo de
-   transacción por operación. Muestra la curva de equity, retorno total
-   acumulado, retorno promedio por trade, % de operaciones ganadoras, Sharpe
-   ratio (anualizado por el número de eventos/año) y máximo drawdown. La
-   pieza central de rigor es un **test de permutación**: mezcla al azar la
-   dirección de los 37 eventos 1.000 veces, corre el mismo backtest con cada
-   mezcla, y muestra en qué percentil de esa distribución cae el resultado
-   real — para saber si el criterio direccional aporta algo por sobre el
-   azar, o si el resultado es indistinguible de simplemente apostar una
-   dirección cualquiera en esas mismas fechas. El resultado del percentil se
-   marca en **texto verde si cae en el 5% extremo de la distribución
-   (distinguible del azar) o rojo si cae en el rango central (indistinguible
-   del azar)**, con el mismo criterio visual (texto, no fondo) que las tablas
-   de significancia del Event Study. Justo debajo, una etiqueta explícita
-   conecta el resultado con la jerga de mesa de dinero: **"timba"** (apostar
-   sin ventaja estadística real) si el resultado cae en la zona central, o
-   **"evidencia de una ventaja real, no timba"** si cae en el 5% extremo.
-
-   **Hallazgo:** el resultado real (-3,75% acumulado en 37 trades, Sharpe
-   -0,13) cae en el **percentil ~44 de 1.000 mezclas aleatorias de
-   dirección** — indistinguible del azar, es decir, timba: no hay evidencia
-   de que esta estrategia direccional le gane al mercado con los datos
-   disponibles, consistente con el hallazgo del Event Study.
 7. **Momentum IPSA** — estrategia momentum "12-1" de Jegadeesh & Titman
    (1993) sobre las 30 acciones del IPSA: cada fin de mes rankea por retorno
    compuesto de los meses [t-12, t-2] (saltando el mes t-1 más reciente),
@@ -196,15 +140,17 @@ El dashboard tiene 10 pestañas:
    cada uno), los mantiene 1 mes con rebalanceo mensual y 15 puntos base de
    costo de transacción por posición. Muestra la curva de equity del spread
    WML (Ganadoras − Perdedoras), un t-test simple contra cero, la tabla de
-   retornos mensuales, y el mismo **test de permutación** que el Backtester
-   de TPM — mezcla al azar qué 10+10 acciones son "ganadoras/perdedoras"
-   cada mes (preservando fechas y retornos reales), 1.000 veces. Nota
-   metodológica visible: distingue este diseño (momentum de corto/mediano
-   plazo) de De Bondt & Thaler (1985), que documentan el efecto contrario —
-   reversión a **largo plazo** (3-5 años) — dejando claro que ambos
-   coexisten en la literatura porque operan en horizontes distintos. Misma
-   etiqueta de **"timba"** que el Backtester de TPM, debajo del resultado
-   del test de permutación.
+   retornos mensuales, y un **test de permutación**: mezcla al azar qué
+   10+10 acciones son "ganadoras/perdedoras" cada mes (preservando fechas y
+   retornos reales), 1.000 veces. Nota metodológica visible: distingue este
+   diseño (momentum de corto/mediano plazo) de De Bondt & Thaler (1985), que
+   documentan el efecto contrario — reversión a **largo plazo** (3-5 años) —
+   dejando claro que ambos coexisten en la literatura porque operan en
+   horizontes distintos. Debajo del resultado del test de permutación, una
+   etiqueta explícita conecta el resultado con la jerga de mesa de dinero:
+   **"timba"** (apostar sin ventaja estadística real) si cae en la zona
+   central, o **"evidencia de una ventaja real, no timba"** si cae en el 5%
+   extremo.
 
    **Hallazgo:** sobre 49 meses de datos, el WML acumulado es +42,9% (t =
    1,03, p = 0,31 — no significativo al 5%), y el resultado real cae en el
@@ -333,7 +279,14 @@ hora de la última actualización de cada fuente de datos.
 - Petróleo WTI (`CL=F`, futuro Crude Oil) — usado en "Importante" del Brief
   Premercado y en el prompt de Gemini, para que el resumen diario pueda
   conectar titulares geopolíticos con su efecto en el precio del petróleo
-- Dow Jones Industrial Average (`^DJI`) — usado en "Importante" del Brief Premercado
+- Dow Jones Industrial Average (`^DJI`) — usado en "Importante" del Brief
+  Premercado y como proxy de mercado (Beta, CAPM) en la pestaña "Acciones
+  Dow Jones"
+- Las 30 acciones que componen el Dow Jones Industrial Average — verificadas
+  contra Wikipedia y stockanalysis.com (dos fuentes independientes y
+  vigentes, la composición del índice cambia periódicamente) antes de
+  agregarlas; 5 de ellas (AAPL, MSFT, GOOGL, AMZN, NVDA) ya se descargaban
+  como parte de las 7 Magníficas, así que no se piden dos veces
 - El bono del Tesoro de EEUU a 10 años (`^TNX`) y a 2 años (`2YY=F` — Yahoo
   no tiene un ticker "^" clásico para 2 años, verificado con datos reales
   antes de usarlo) — se descargan junto con las series del BCCh porque el

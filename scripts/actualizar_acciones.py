@@ -1,9 +1,9 @@
 """
 Descarga precios históricos de acciones vía Yahoo Finance y los guarda
-en la base de datos: las 30 acciones del IPSA, el ETF ECH (proxy del
-IPSA, que no tiene ticker propio en Yahoo Finance), benchmarks
-internacionales y las "7 Magníficas". Corre junto al script del BCCh
-en el cron job diario de Railway.
+en la base de datos: las 30 acciones del IPSA, las 30 del Dow Jones, el
+ETF ECH (proxy del IPSA, que no tiene ticker propio en Yahoo Finance),
+benchmarks internacionales y las "7 Magníficas". Corre junto al script
+del BCCh en el cron job diario de Railway.
 """
 
 import os
@@ -22,16 +22,21 @@ from constants import (
     TICKERS_MAGNIFICAS,
     TICKER_PETROLEO_WTI,
     TICKER_DOW_JONES,
+    TICKERS_DOW_JONES,
 )
 from retry_utils import con_reintentos_db
 
-TICKERS_A_DESCARGAR = (
+# dict.fromkeys en vez de una lista simple: varias de las "7 Magníficas"
+# (AAPL, MSFT, GOOGL, AMZN, NVDA) también son parte del Dow Jones — se
+# descargan una sola vez, preservando el orden de la primera aparición.
+TICKERS_A_DESCARGAR = list(dict.fromkeys(
     TICKERS_IPSA
     + [TICKER_PROXY_IPSA]
     + [t for t in TICKERS_BENCHMARK if t != TICKER_PROXY_IPSA]
     + TICKERS_MAGNIFICAS
+    + TICKERS_DOW_JONES
     + [TICKER_PETROLEO_WTI, TICKER_DOW_JONES]
-)
+))
 
 
 def descargar_ticker(ticker: str, periodo: str = "5y"):

@@ -27,8 +27,11 @@ from constants import (
     TICKER_PROXY_IPSA,
     TICKERS_BENCHMARK,
     TICKERS_MAGNIFICAS,
+    TICKERS_DOW_JONES,
+    TICKERS_DOW_JONES_PRINCIPALES,
+    TICKER_DOW_JONES,
 )
-from market_data import calcular_resumen_mercado
+from market_data import calcular_resumen_mercado, INDICADORES_PREMERCADO
 from calendario_economico import proximos_eventos, NOTA_VIGENCIA, INDICADOR_POR_TIPO
 
 st.set_page_config(page_title="Mercado Chile", layout="wide")
@@ -42,10 +45,6 @@ CMAP_SECUENCIAL = LinearSegmentedColormap.from_list("azul_secuencial", ["#fcfcfb
 # Diverging azul-gris-rojo para la matriz de correlación (no es un juicio de valor bueno/malo, por eso no usa verde/rojo).
 COLORSCALE_CORRELACION = [[0.0, "#e34948"], [0.5, "#f0efec"], [1.0, "#2a78d6"]]
 
-# Event study TPM → tipo de cambio: ventana de estimación y ventana de evento (en días hábiles).
-DIAS_ESTIMACION_EVENT_STUDY = 30
-DIAS_EVENTO_EVENT_STUDY = range(-2, 3)  # -2, -1, 0, +1, +2
-
 # Métricas de riesgo: ventana de volatilidad (días hábiles) y de VaR (~2 años calendario).
 VENTANA_VOLATILIDAD = 21
 VENTANA_VAR = pd.DateOffset(years=2)
@@ -54,13 +53,6 @@ VENTANA_VAR = pd.DateOffset(years=2)
 # y multiplicador heurístico aplicado al VaR del cuartil menos líquido.
 VENTANA_LIQUIDEZ = pd.DateOffset(months=3)
 MULTIPLICADOR_LIQUIDEZ = 1.3
-
-# Backtester estrategia TPM: entrada en el cierre del día del evento, salida
-# 2 días hábiles después, costo de transacción por operación (entrada+salida).
-DIA_ENTRADA_BACKTEST = 0
-DIA_SALIDA_BACKTEST = 2
-COSTO_TRANSACCION_BACKTEST = 0.0008  # 8 puntos base por operación
-N_PERMUTACIONES_BACKTEST = 1000
 
 # Momentum IPSA (Jegadeesh & Titman 12-1): señal = retorno compuesto de los
 # meses [t-12, t-2] (11 meses), saltando el mes t-1 más reciente; se
@@ -461,6 +453,114 @@ def calcular_resumen_ipsa(df_todas: pd.DataFrame, df_macro: pd.DataFrame) -> pd.
     return pd.DataFrame(filas).set_index("Ticker")
 
 
+@st.cache_data(ttl=3600)
+def calcular_resumen_dow_jones(df_todas: pd.DataFrame, df_macro: pd.DataFrame) -> pd.DataFrame:
+    """% de cambio 1D/1W/1M/YTD, Beta (vs el propio índice Dow Jones, que sí
+    tiene ticker en Yahoo Finance a diferencia del IPSA), volatilidad y CAPM
+    para cada acción del Dow Jones. Mismo criterio que calcular_resumen_ipsa,
+    pero sin CRP: no aplica una prima de riesgo país de EEUU respecto a sí
+    mismo, así que el CAPM acá es una sola versión (sin la distinción
+    "local" vs. "+ CRP" del IPSA)."""
+    df_todas = df_todas.assign(fecha=pd.to_datetime(df_todas["fecha"]))
+
+    proxy = (
+        df_todas[df_todas["ticker"] == TICKER_DOW_JONES]
+        .sort_values("fecha")
+        .set_index("fecha")["precio_cierre"]
+    )
+    retornos_proxy = proxy.pct_change()
+
+    # Rf de corto plazo para EEUU: Effective Federal Funds Rate — el
+    # análogo de EEUU al PDBC que se usa como Rf de corto plazo en el CAPM
+    # del IPSA.
+    tpm_eeuu = (
+        df_macro[df_macro["nombre"] == "Tasa de política monetaria de EEUU (Effective Federal Funds Rate)"]
+        .sort_values("fecha")["valor"]
+    )
+    rf_eeuu = float(tpm_eeuu.iloc[-1]) if len(tpm_eeuu) else None
+
+    retornos_proxy_reales = calcular_retornos_reales(proxy).dropna()
+    retorno_anual_mercado = (
+        retornos_proxy_reales.mean() * 252 * 100 if len(retornos_proxy_reales) >= 30 else None
+    )
+    prima_mercado = (
+        retorno_anual_mercado - rf_eeuu
+        if retorno_anual_mercado is not None and rf_eeuu is not None
+        else None
+    )
+
+    filas = []
+    for ticker in TICKERS_DOW_JONES:
+        serie = (
+            df_todas[df_todas["ticker"] == ticker]
+            .sort_values("fecha")
+            .set_index("fecha")["precio_cierre"]
+        )
+        if len(serie) < 2:
+            continue
+
+        fecha_ultima = serie.index[-1]
+        cambios = calcular_cambios_periodo(serie)
+
+        un_anio_atras = fecha_ultima - pd.Timedelta(days=365)
+        retornos_ticker = serie.pct_change()
+        conjunto = pd.concat(
+            [
+                retornos_ticker[retornos_ticker.index >= un_anio_atras],
+                retornos_proxy[retornos_proxy.index >= un_anio_atras],
+            ],
+            axis=1, join="inner", keys=["ticker", "mercado"],
+        ).dropna()
+        beta = (
+            conjunto["mercado"].cov(conjunto["ticker"]) / conjunto["mercado"].var()
+            if len(conjunto) >= 30 and conjunto["mercado"].var() > 0
+            else None
+        )
+
+        # Mismo criterio de "dato atrasado" que el IPSA (precio congelado,
+        # no solo la última fila descargada).
+        cambia = serie.ne(serie.shift(1))
+        cambia.iloc[0] = True
+        ultima_fecha_real = serie.index[cambia][-1]
+
+        hoy = pd.Timestamp.now().normalize()
+        dias_habiles_atraso = int(np.busday_count(ultima_fecha_real.date(), hoy.date()))
+        atrasado = dias_habiles_atraso > 5
+
+        retornos_reales_ticker = retornos_ticker[cambia].dropna()
+        volatilidad_anualizada = (
+            retornos_reales_ticker.tail(VENTANA_VOLATILIDAD).std() * (252 ** 0.5) * 100
+            if len(retornos_reales_ticker) >= VENTANA_VOLATILIDAD
+            else None
+        )
+
+        capm = (
+            rf_eeuu + beta * prima_mercado
+            if beta is not None and rf_eeuu is not None and prima_mercado is not None
+            else None
+        )
+
+        beta_ajustada = (2 / 3) * beta + (1 / 3) * 1 if beta is not None else None
+
+        filas.append({
+            "Ticker": ticker,
+            "1D %": cambios["1D %"],
+            "1W %": cambios["1W %"],
+            "1M %": cambios["1M %"],
+            "YTD %": cambios["YTD %"],
+            "Beta": beta,
+            "Beta ajustada": beta_ajustada,
+            "Volatilidad anualizada (%)": volatilidad_anualizada,
+            "CAPM (%)": capm,
+            "Última actualización": (
+                ("⚠️ " if atrasado else "") + ultima_fecha_real.strftime("%Y-%m-%d")
+            ),
+            "Atraso": atrasado,
+        })
+
+    return pd.DataFrame(filas).set_index("Ticker")
+
+
 def _p_valor_normal(t_stat: float) -> float:
     """p-valor a dos colas para un estadístico t, aproximando con la normal estándar."""
     return 2 * (1 - 0.5 * (1 + math.erf(abs(t_stat) / math.sqrt(2))))
@@ -507,143 +607,6 @@ def _etiqueta_timba(distinguible_del_azar: bool) -> str:
         )
         color = "#d03b3b"
     return f"<span style='color:{color}; font-weight:700'>{texto}</span>"
-
-
-@st.cache_data(ttl=3600)
-def calcular_event_study_tpm(df_macro: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame, int]:
-    """Event study: impacto de los cambios de la TPM sobre el tipo de cambio USD/CLP.
-
-    Eventos = fechas donde la TPM cambió respecto al día hábil anterior. Para
-    cada evento se estima el retorno "normal" del tipo de cambio (promedio de
-    los 30 días hábiles previos) y se calcula el retorno anormal (AR) en la
-    ventana de evento (-2 a +2 días hábiles). El t-test usa la desviación
-    estándar de cada ventana de estimación (enfoque simple tipo Brown &
-    Warner / MacKinlay), no la dispersión entre eventos.
-    """
-    df_macro = df_macro.assign(fecha=pd.to_datetime(df_macro["fecha"]))
-
-    tpm = (
-        df_macro[df_macro["nombre"] == "Tasa de política monetaria (TPM)"]
-        .sort_values("fecha")
-        .set_index("fecha")["valor"]
-    )
-    tco = (
-        df_macro[df_macro["nombre"] == "Tipo de cambio observado"]
-        .sort_values("fecha")
-        .set_index("fecha")["valor"]
-    )
-    retornos_tco = tco.pct_change() * 100  # en % para que AAR/CAAR queden directamente en %
-    fechas_tco = tco.index
-
-    cambia = tpm.ne(tpm.shift(1))
-    if len(cambia):
-        cambia.iloc[0] = False  # el primer dato de la serie no es un "cambio"
-    fechas_evento = tpm.index[cambia]
-    tpm_dia_anterior = tpm.shift(1)
-
-    dias_evento = list(DIAS_EVENTO_EVENT_STUDY)
-    filas_eventos = []
-    eventos_validos = []  # {"ars": {dia: AR}, "sigma": desviación de la ventana de estimación}
-
-    for fecha_evt in fechas_evento:
-        pos = fechas_tco.searchsorted(fecha_evt)
-        if pos >= len(fechas_tco) or fechas_tco[pos] != fecha_evt:
-            continue  # el evento no cae en un día con dato de tipo de cambio
-
-        inicio_estimacion = pos - DIAS_ESTIMACION_EVENT_STUDY
-        if inicio_estimacion < 1 or pos + max(dias_evento) >= len(fechas_tco):
-            continue  # sin suficiente historia antes o después del evento
-
-        ventana_estimacion = retornos_tco.iloc[inicio_estimacion:pos]
-        if len(ventana_estimacion) < DIAS_ESTIMACION_EVENT_STUDY or ventana_estimacion.isna().any():
-            continue
-
-        retorno_normal = ventana_estimacion.mean()
-        sigma_estimacion = ventana_estimacion.std()
-        if not sigma_estimacion or pd.isna(sigma_estimacion):
-            continue
-
-        retornos_evento = retornos_tco.iloc[pos + min(dias_evento): pos + max(dias_evento) + 1]
-        if len(retornos_evento) != len(dias_evento) or retornos_evento.isna().any():
-            continue
-
-        ars = {dia: retornos_evento.iloc[i] - retorno_normal for i, dia in enumerate(dias_evento)}
-        car_evento = sum(ars.values())
-        cambio_pb = round((tpm.loc[fecha_evt] - tpm_dia_anterior.loc[fecha_evt]) * 100)
-
-        filas_eventos.append({
-            "Fecha": fecha_evt.strftime("%Y-%m-%d"),
-            "Dirección": "Alza" if cambio_pb > 0 else "Baja",
-            "Magnitud (pb)": cambio_pb,
-            "CAR (%)": car_evento,
-        })
-        eventos_validos.append({"ars": ars, "sigma": sigma_estimacion})
-
-    df_eventos = pd.DataFrame(filas_eventos)
-
-    n = len(eventos_validos)
-    var_promedio = sum(e["sigma"] ** 2 for e in eventos_validos) / n if n else None
-
-    filas_agg = []
-    caar = 0.0
-    for k, dia in enumerate(dias_evento, start=1):
-        if n:
-            aar = sum(e["ars"][dia] for e in eventos_validos) / n
-            caar += aar
-            se_aar = (var_promedio / n) ** 0.5
-            se_caar = se_aar * (k ** 0.5)
-            t_aar = aar / se_aar if se_aar else None
-            t_caar = caar / se_caar if se_caar else None
-        else:
-            aar = t_aar = t_caar = None
-
-        filas_agg.append({
-            "Día relativo": dia,
-            "AAR (%)": aar,
-            "t-stat AAR": t_aar,
-            "p-valor AAR": _p_valor_normal(t_aar) if t_aar is not None else None,
-            "CAAR (%)": caar if n else None,
-            "t-stat CAAR": t_caar,
-            "p-valor CAAR": _p_valor_normal(t_caar) if t_caar is not None else None,
-        })
-
-    df_agregado = pd.DataFrame(filas_agg)
-    return df_eventos, df_agregado, n
-
-
-@st.cache_data(ttl=3600)
-def calcular_tests_direccion(df_eventos: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
-    """t-test del CAR contra cero para cada dirección (alza/baja), y test de
-    diferencia de medias (Welch, sin asumir varianzas iguales) entre ambas."""
-    car_alza = df_eventos.loc[df_eventos["Dirección"] == "Alza", "CAR (%)"]
-    car_baja = df_eventos.loc[df_eventos["Dirección"] == "Baja", "CAR (%)"]
-
-    filas = []
-    for etiqueta, serie in [("Alza (sube TPM)", car_alza), ("Baja (baja TPM)", car_baja)]:
-        if len(serie) >= 2:
-            t_stat, p_valor = stats.ttest_1samp(serie, popmean=0)
-        else:
-            t_stat, p_valor = None, None
-        filas.append({
-            "Grupo": etiqueta,
-            "n": len(serie),
-            "CAR medio (%)": serie.mean() if len(serie) else None,
-            "t-stat (vs 0)": t_stat,
-            "p-valor (vs 0)": p_valor,
-        })
-    df_direccion = pd.DataFrame(filas)
-
-    if len(car_alza) >= 2 and len(car_baja) >= 2:
-        t_diff, p_diff = stats.ttest_ind(car_alza, car_baja, equal_var=False)
-        diferencia = {
-            "diferencia_medias": car_alza.mean() - car_baja.mean(),
-            "t_stat": t_diff,
-            "p_valor": p_diff,
-        }
-    else:
-        diferencia = {"diferencia_medias": None, "t_stat": None, "p_valor": None}
-
-    return df_direccion, diferencia
 
 
 @st.cache_data(ttl=3600)
@@ -818,123 +781,6 @@ def calcular_resumen_magnificas(df_todas: pd.DataFrame) -> pd.DataFrame:
         filas.append({"Ticker": ticker, **cambios})
 
     return pd.DataFrame(filas).set_index("Ticker")
-
-
-@st.cache_data(ttl=3600)
-def calcular_trades_backtest_tpm(df_macro: pd.DataFrame) -> pd.DataFrame:
-    """Retorno crudo del USD/CLP para cada evento de TPM (misma detección de
-    eventos que el Event Study), entre el cierre del día del evento y el
-    cierre DIA_SALIDA_BACKTEST días hábiles después."""
-    df_macro = df_macro.assign(fecha=pd.to_datetime(df_macro["fecha"]))
-
-    tpm = (
-        df_macro[df_macro["nombre"] == "Tasa de política monetaria (TPM)"]
-        .sort_values("fecha")
-        .set_index("fecha")["valor"]
-    )
-    tco = (
-        df_macro[df_macro["nombre"] == "Tipo de cambio observado"]
-        .sort_values("fecha")
-        .set_index("fecha")["valor"]
-    )
-    fechas_tco = tco.index
-
-    cambia = tpm.ne(tpm.shift(1))
-    if len(cambia):
-        cambia.iloc[0] = False
-    fechas_evento = tpm.index[cambia]
-    tpm_dia_anterior = tpm.shift(1)
-
-    filas = []
-    for fecha_evt in fechas_evento:
-        pos = fechas_tco.searchsorted(fecha_evt)
-        if pos >= len(fechas_tco) or fechas_tco[pos] != fecha_evt:
-            continue  # el evento no cae en un día con dato de tipo de cambio
-        if pos + DIA_SALIDA_BACKTEST >= len(fechas_tco):
-            continue  # sin suficientes días después del evento para salir
-
-        precio_entrada = tco.iloc[pos + DIA_ENTRADA_BACKTEST]
-        precio_salida = tco.iloc[pos + DIA_SALIDA_BACKTEST]
-        retorno_crudo = precio_salida / precio_entrada - 1
-
-        cambio_pb = round((tpm.loc[fecha_evt] - tpm_dia_anterior.loc[fecha_evt]) * 100)
-
-        filas.append({
-            "Fecha": fecha_evt,
-            "Dirección": "Alza" if cambio_pb > 0 else "Baja",
-            "Retorno crudo USD/CLP": retorno_crudo,
-        })
-
-    return pd.DataFrame(filas).sort_values("Fecha").reset_index(drop=True)
-
-
-def _retornos_netos_estrategia(retornos_crudos: pd.Series, direcciones) -> pd.Series:
-    """Retorno neto por trade: TPM sube → corto USD/CLP (gana si el dólar baja);
-    TPM baja → largo USD/CLP (gana si el dólar sube); menos el costo de
-    transacción por operación."""
-    signo = np.where(np.asarray(direcciones) == "Alza", -1, 1)
-    return signo * retornos_crudos.to_numpy() - COSTO_TRANSACCION_BACKTEST
-
-
-@st.cache_data(ttl=3600)
-def calcular_backtest_tpm(df_macro: pd.DataFrame) -> dict:
-    """Backtest de la estrategia direccional TPM → USD/CLP, con curva de
-    equity, métricas de desempeño, y un test de permutación (mezclando la
-    dirección de los eventos 1000 veces) como control de significancia."""
-    df_trades = calcular_trades_backtest_tpm(df_macro)
-    n_eventos = len(df_trades)
-
-    if n_eventos < 2:
-        return {"df_trades": df_trades, "n_eventos": n_eventos}
-
-    retornos_netos = _retornos_netos_estrategia(df_trades["Retorno crudo USD/CLP"], df_trades["Dirección"])
-    df_trades = df_trades.copy()
-    df_trades["Retorno neto"] = retornos_netos
-    df_trades["Equity"] = (1 + df_trades["Retorno neto"]).cumprod()
-
-    retorno_total = (df_trades["Equity"].iloc[-1] - 1) * 100
-    retorno_promedio = df_trades["Retorno neto"].mean() * 100
-    pct_ganadoras = (df_trades["Retorno neto"] > 0).mean() * 100
-
-    años_span = (df_trades["Fecha"].max() - df_trades["Fecha"].min()).days / 365.25
-    eventos_por_año = n_eventos / años_span if años_span > 0 else None
-
-    media, desvio = df_trades["Retorno neto"].mean(), df_trades["Retorno neto"].std()
-    sharpe = (
-        media / desvio * (eventos_por_año ** 0.5)
-        if desvio and eventos_por_año
-        else None
-    )
-
-    drawdown = df_trades["Equity"] / df_trades["Equity"].cummax() - 1
-    max_drawdown = drawdown.min() * 100
-
-    # --- Test de permutación: ¿el resultado real supera a mezclas al azar de la dirección? ---
-    rng = np.random.default_rng(42)  # semilla fija para que el resultado sea reproducible
-    direcciones_originales = df_trades["Dirección"].to_numpy()
-    retornos_crudos = df_trades["Retorno crudo USD/CLP"]
-
-    retornos_totales_perm = np.empty(N_PERMUTACIONES_BACKTEST)
-    for i in range(N_PERMUTACIONES_BACKTEST):
-        direcciones_mezcladas = rng.permutation(direcciones_originales)
-        retornos_netos_mezcla = _retornos_netos_estrategia(retornos_crudos, direcciones_mezcladas)
-        equity_mezcla = np.cumprod(1 + retornos_netos_mezcla)
-        retornos_totales_perm[i] = (equity_mezcla[-1] - 1) * 100
-
-    percentil_real = float((retornos_totales_perm < retorno_total).mean() * 100)
-
-    return {
-        "df_trades": df_trades,
-        "n_eventos": n_eventos,
-        "retorno_total": retorno_total,
-        "retorno_promedio": retorno_promedio,
-        "pct_ganadoras": pct_ganadoras,
-        "eventos_por_año": eventos_por_año,
-        "sharpe": sharpe,
-        "max_drawdown": max_drawdown,
-        "retornos_totales_perm": retornos_totales_perm,
-        "percentil_real": percentil_real,
-    }
 
 
 @st.cache_data(ttl=3600)
@@ -1215,12 +1061,12 @@ except Exception:
     st.caption("Aún no hay datos cargados. Corre los scripts de actualización primero.")
 
 (
-    tab_premercado, tab_macro, tab_acciones, tab_riesgo,
-    tab_benchmark, tab_tpm, tab_momentum, tab_calculadora, tab_portafolios,
+    tab_premercado, tab_macro, tab_acciones, tab_acciones_dow, tab_riesgo,
+    tab_benchmark, tab_momentum, tab_calculadora, tab_portafolios,
     tab_riesgo_bancario,
 ) = st.tabs([
-    "Brief Premercado", "Indicadores macro", "Acciones IPSA", "Riesgo",
-    "Benchmark", "TPM y Tipo de Cambio", "Momentum IPSA",
+    "Brief Premercado", "Indicadores macro", "Acciones IPSA", "Acciones Dow Jones",
+    "Riesgo", "Benchmark", "Momentum IPSA",
     "Calculadora Financiera", "Optimización de Portafolios",
     "Práctica: Riesgo Bancario",
 ])
@@ -1422,6 +1268,24 @@ with tab_macro:
             })
             df_macro = pd.concat([df_macro, df_breakeven], ignore_index=True)
 
+        # Los indicadores de "Importante" del Brief Premercado que vienen de
+        # precios de acciones (S&P 500, Dow Jones, Petróleo WTI, IPSA) viven
+        # en precios_acciones, no en series_macro — se agregan acá con el
+        # mismo formato nombre/fecha/valor para que todos los indicadores de
+        # esa sección también se puedan explorar en este selector.
+        df_acciones_indicadores = cargar_precios_acciones()
+        for etiqueta, tipo, clave, _unidad in INDICADORES_PREMERCADO:
+            if tipo != "accion":
+                continue
+            serie_accion = (
+                df_acciones_indicadores[df_acciones_indicadores["ticker"] == clave]
+                .sort_values("fecha")[["fecha", "precio_cierre"]]
+                .rename(columns={"precio_cierre": "valor"})
+                .assign(nombre=etiqueta)
+            )
+            if not serie_accion.empty:
+                df_macro = pd.concat([df_macro, serie_accion[["nombre", "fecha", "valor"]]], ignore_index=True)
+
         series_disponibles = df_macro["nombre"].unique()
         serie_elegida = st.selectbox("Elige un indicador", series_disponibles)
 
@@ -1553,6 +1417,89 @@ with tab_acciones:
 
     except Exception as e:
         st.error(f"No se pudieron cargar los precios de acciones: {e}")
+
+# --- Tab 2b: Precios de acciones del Dow Jones ---
+with tab_acciones_dow:
+    try:
+        df_acciones = cargar_precios_acciones()
+
+        tickers_disponibles_dow = TICKERS_DOW_JONES
+        tickers_elegidos_dow = st.multiselect(
+            "Elige acciones a comparar", tickers_disponibles_dow,
+            default=TICKERS_DOW_JONES_PRINCIPALES, key="dow_multiselect",
+        )
+
+        df_filtrado_dow = df_acciones[df_acciones["ticker"].isin(tickers_elegidos_dow)]
+
+        normalizar_dow = st.checkbox("Normalizar a base 100", value=True, key="dow_normalizar")
+
+        if normalizar_dow:
+            df_filtrado_dow = df_filtrado_dow.copy()
+            df_filtrado_dow["precio_normalizado"] = df_filtrado_dow.groupby("ticker")["precio_cierre"].transform(
+                lambda serie: serie / serie.iloc[0] * 100
+            )
+            columna_precio_dow = "precio_normalizado"
+            titulo_precio_dow = "Desempeño relativo (base 100)"
+        else:
+            columna_precio_dow = "precio_cierre"
+            titulo_precio_dow = "Precio de cierre histórico"
+
+        fig_dow = px.line(
+            df_filtrado_dow, x="fecha", y=columna_precio_dow, color="ticker",
+            title=titulo_precio_dow
+        )
+        st.plotly_chart(fig_dow, use_container_width=True)
+
+        st.subheader("Volumen transado")
+        fig_vol_dow = px.bar(df_filtrado_dow, x="fecha", y="volumen", color="ticker")
+        st.plotly_chart(fig_vol_dow, use_container_width=True)
+
+        # --- Heatmap de desempeño: las 30 acciones del Dow Jones ---
+        st.subheader("Resumen de desempeño — todas las acciones del Dow Jones")
+
+        df_macro = cargar_series_macro()
+        df_resumen_dow = calcular_resumen_dow_jones(df_acciones, df_macro)
+
+        columnas_pct_dow = ["1D %", "1W %", "1M %", "YTD %"]
+        max_abs_dow = df_resumen_dow[columnas_pct_dow].abs().max().max()
+        max_abs_dow = max_abs_dow if pd.notna(max_abs_dow) and max_abs_dow > 0 else 1
+
+        formato_dow = {col: "{:+.2f}%" for col in columnas_pct_dow}
+        formato_dow["Beta"] = "{:.2f}"
+        formato_dow["Beta ajustada"] = "{:.2f}"
+        formato_dow["Volatilidad anualizada (%)"] = "{:.2f}%"
+        formato_dow["CAPM (%)"] = "{:.2f}%"
+
+        def marcar_datos_atrasados_dow(fila):
+            if fila["Atraso"]:
+                return ["color: #898781; background-color: transparent"] * len(fila)
+            return [""] * len(fila)
+
+        estilo_dow = (
+            df_resumen_dow.style
+            .background_gradient(cmap=CMAP_DIVERGENTE, subset=columnas_pct_dow, vmin=-max_abs_dow, vmax=max_abs_dow)
+            .background_gradient(cmap=CMAP_SECUENCIAL, subset=["Volatilidad anualizada (%)", "CAPM (%)"])
+            .apply(marcar_datos_atrasados_dow, axis=1)
+            .format(formato_dow, na_rep="—")
+            .hide(["Atraso"], axis="columns")
+        )
+        st.dataframe(estilo_dow, use_container_width=True)
+        st.caption(
+            "Volatilidad anualizada: rolling 21 días hábiles de retornos diarios × √252, "
+            "excluyendo días de precio congelado (mismo criterio que \"Atraso\"). "
+            "Beta calculado sobre retornos diarios del último año, respecto al índice Dow "
+            "Jones (`^DJI` — a diferencia del IPSA, sí tiene ticker propio en Yahoo Finance, "
+            "así que no hace falta un proxy). \"Beta ajustada\" = (2/3) × Beta + (1/3) × 1 "
+            "(ajuste tipo Blume). CAPM = Rf (Effective Federal Funds Rate) + Beta × prima de "
+            "mercado (retorno histórico anualizado del Dow Jones menos esa misma Rf) — a "
+            "diferencia del IPSA, no se suma una prima de riesgo país: no aplica un CRP de "
+            "EEUU respecto a sí mismo. "
+            "⚠️ en \"Última actualización\" indica que Yahoo Finance no refrescó el precio "
+            "de ese ticker hace más de 5 días hábiles — el % de cambio mostrado no es confiable."
+        )
+
+    except Exception as e:
+        st.error(f"No se pudieron cargar los precios de acciones del Dow Jones: {e}")
 
 # --- Tab 3: Riesgo ---
 with tab_riesgo:
@@ -1828,272 +1775,6 @@ with tab_benchmark:
 
     except Exception as e:
         st.error(f"No se pudieron cargar los datos de las 7 Magníficas: {e}")
-
-# --- Tab 5: TPM y Tipo de Cambio (Event Study + Backtester) ---
-with tab_tpm:
-    st.header("Parte 1: ¿Hay un efecto estadístico?")
-    try:
-        df_macro = cargar_series_macro()
-        df_eventos, df_agregado, n_eventos = calcular_event_study_tpm(df_macro)
-
-        st.subheader("CAAR promedio del tipo de cambio USD/CLP ante cambios de la TPM")
-
-        fig = px.line(
-            df_agregado, x="Día relativo", y="CAAR (%)",
-            title=f"CAAR promedio — {n_eventos} eventos de cambio de TPM",
-            markers=True,
-        )
-        fig.add_hline(y=0, line_dash="dot", line_color="#898781")
-        fig.update_xaxes(dtick=1)
-        st.plotly_chart(fig, use_container_width=True)
-
-        st.caption(
-            "AAR/CAAR por día relativo, con t-test simple contra cero "
-            "(usando la desviación estándar de la ventana de estimación de cada evento)."
-        )
-
-        def _marcar_significancia_agregado(fila):
-            color_aar = _color_significancia(fila["p-valor AAR"])
-            color_caar = _color_significancia(fila["p-valor CAAR"])
-            return [
-                color_aar if col in ("AAR (%)", "t-stat AAR", "p-valor AAR") else
-                color_caar if col in ("CAAR (%)", "t-stat CAAR", "p-valor CAAR") else ""
-                for col in fila.index
-            ]
-
-        st.dataframe(
-            df_agregado.style
-            .apply(_marcar_significancia_agregado, axis=1)
-            .format({
-                "AAR (%)": "{:+.3f}%",
-                "t-stat AAR": "{:.2f}",
-                "p-valor AAR": "{:.3f}",
-                "CAAR (%)": "{:+.3f}%",
-                "t-stat CAAR": "{:.2f}",
-                "p-valor CAAR": "{:.3f}",
-            }, na_rep="—"),
-            use_container_width=True,
-        )
-        st.caption(LEYENDA_SIGNIFICANCIA)
-
-        st.subheader(f"Eventos individuales ({n_eventos})")
-        st.dataframe(
-            df_eventos.style.format({"CAR (%)": "{:+.3f}%"}),
-            use_container_width=True,
-        )
-
-        # --- Tests por dirección: ¿el CAR es distinto de cero en alzas / bajas, y entre sí? ---
-        st.subheader("¿Alzas y bajas de TPM mueven el dólar de forma distinta?")
-
-        df_direccion, diferencia = calcular_tests_direccion(df_eventos)
-
-        n_alza = int(df_direccion.loc[df_direccion["Grupo"].str.startswith("Alza"), "n"].iloc[0])
-        n_baja = int(df_direccion.loc[df_direccion["Grupo"].str.startswith("Baja"), "n"].iloc[0])
-        st.warning(
-            f"⚠️ Muestra chica: n={n_alza} alzas y n={n_baja} bajas. Con tan pocos eventos "
-            "por grupo, es esperable que ninguno de estos tests alcance significancia "
-            "estadística aunque exista un efecto real — no interpretar un t-stat bajo "
-            "como evidencia de que la TPM \"no importa\"."
-        )
-
-        def _marcar_significancia_direccion(fila):
-            return [_color_significancia(fila["p-valor (vs 0)"])] * len(fila)
-
-        st.dataframe(
-            df_direccion.style
-            .apply(_marcar_significancia_direccion, axis=1)
-            .format({
-                "CAR medio (%)": "{:+.3f}%",
-                "t-stat (vs 0)": "{:.2f}",
-                "p-valor (vs 0)": "{:.3f}",
-            }, na_rep="—"),
-            use_container_width=True,
-        )
-        st.caption(LEYENDA_SIGNIFICANCIA)
-
-        if diferencia["t_stat"] is not None:
-            sig_dif = diferencia["p_valor"] < UMBRAL_SIGNIFICANCIA
-            color_dif = "#0ca30c" if sig_dif else "#d03b3b"
-            etiqueta_dif = "significativa" if sig_dif else "no significativa"
-            st.markdown(
-                f"**Diferencia de medias (Alza − Baja), test de Welch:** "
-                f"{diferencia['diferencia_medias']:+.3f} puntos porcentuales de CAR "
-                f"(t = {diferencia['t_stat']:.2f}, p = {diferencia['p_valor']:.3f}) — "
-                f"<span style='color:{color_dif}; font-weight:700'>{etiqueta_dif}</span> al 5%.",
-                unsafe_allow_html=True,
-            )
-        else:
-            st.markdown("No hay suficientes eventos en algún grupo para el test de diferencia de medias.")
-
-        st.caption(
-            "El CAR promedio es negativo tras alzas de TPM (el dólar tiende a bajar, el "
-            "peso se aprecia) y positivo tras bajas (el dólar tiende a subir, el peso se "
-            "deprecia) — dirección consistente con la teoría de paridad de tasas de "
-            "interés. Pero ninguno de los dos t-test contra cero, ni la diferencia entre "
-            "grupos, es significativo al 5%: no se puede descartar que el efecto "
-            "observado sea puro ruido con esta muestra."
-        )
-
-        st.info(
-            "**Nota metodológica.**\n\n"
-            "**Detección de eventos.** Los eventos se detectan automáticamente como "
-            "cambios en la serie diaria de la TPM respecto al día hábil anterior — "
-            "esto captura únicamente las reuniones de política monetaria (RPM) en "
-            "las que la tasa efectivamente cambió. No tenemos el calendario de "
-            "reuniones RPM, así que las decisiones de \"mantener\" la tasa no "
-            "quedan registradas como eventos y no forman parte de este análisis. "
-            "El retorno normal esperado se estima como el retorno diario promedio "
-            "del tipo de cambio en los 30 días hábiles previos a cada evento; el "
-            "retorno anormal (AR) es la diferencia entre el retorno real y ese "
-            "retorno normal, en la ventana de evento (-2 a +2 días hábiles). El "
-            "t-test agregado (AAR/CAAR) es una aproximación simple (normal estándar) "
-            "que no corrige por autocorrelación ni por eventos superpuestos.\n\n"
-            "**Limitación 1 — poca potencia estadística.** Solo 37 eventos en total "
-            "(15 alzas, 22 bajas) desde 2015. Con muestras tan chicas, un test "
-            "estadístico tiene poca capacidad de detectar un efecto real aunque "
-            "exista (poca \"potencia\"): se necesitaría un efecto muy grande para "
-            "que sea detectable con este N.\n\n"
-            "**Limitación 2 — confusión con ciclos monetarios globales.** Las "
-            "decisiones de TPM del BCCh no ocurren de forma aislada: suelen coincidir "
-            "con ciclos monetarios simultáneos en otros bancos centrales (ej. el BCCh "
-            "subió tasas en 2021-2022 al mismo tiempo que la Fed subía las suyas). "
-            "Este diseño no puede aislar limpiamente el efecto de la decisión local "
-            "sobre el tipo de cambio del efecto de esos movimientos globales "
-            "simultáneos — parte del AR medido en cada evento podría deberse al "
-            "ciclo global, no a la decisión del BCCh en sí.\n\n"
-            "**\"No significativo\" no es \"no hay efecto\".** La falta de "
-            "significancia estadística (acá y en la sección de arriba) solo dice que "
-            "esta muestra no permite afirmar que el efecto es distinto de cero — no "
-            "dice que el efecto no exista. Con las dos limitaciones anteriores, es "
-            "exactamente el resultado esperable aunque la TPM sí tenga un impacto "
-            "real sobre el tipo de cambio.\n\n"
-            "**Mejora futura.** Controlar por el movimiento simultáneo del dólar a "
-            "nivel global (ej. el índice DXY) en la ventana de evento permitiría "
-            "aislar mejor el componente local del CAR, restando el efecto que ya "
-            "viene dado por el ciclo monetario global."
-        )
-
-    except Exception as e:
-        st.error(f"No se pudo calcular el event study: {e}")
-
-    st.divider()
-    st.header("Parte 2: ¿Se podría haber ganado plata con eso?")
-    try:
-        st.subheader("Backtest: dirección de la TPM → USD/CLP")
-        st.caption(
-            "Estrategia hipotética sobre los mismos 37 eventos del Event Study: "
-            "TPM sube → posición corta en USD/CLP; TPM baja → posición larga. "
-            "Entrada al cierre del día del evento, salida al cierre 2 días hábiles "
-            "después, con un costo de transacción de 8 puntos base por operación "
-            "(entrada + salida)."
-        )
-
-        df_macro = cargar_series_macro()
-        resultado = calcular_backtest_tpm(df_macro)
-
-        if resultado["n_eventos"] < 2:
-            st.warning("No hay suficientes eventos de TPM con datos completos para backtestear.")
-        else:
-            col1, col2, col3, col4, col5 = st.columns(5)
-            col1.metric("Retorno total acumulado", f"{resultado['retorno_total']:+.2f}%")
-            col2.metric("Retorno promedio / trade", f"{resultado['retorno_promedio']:+.3f}%")
-            col3.metric("% operaciones ganadoras", f"{resultado['pct_ganadoras']:.1f}%")
-            col4.metric("Sharpe (anualizado)", f"{resultado['sharpe']:.2f}" if resultado["sharpe"] is not None else "—")
-            col5.metric("Máximo drawdown", f"{resultado['max_drawdown']:.2f}%")
-
-            df_trades = resultado["df_trades"].copy()
-            df_trades["Retorno acumulado (%)"] = (df_trades["Equity"] - 1) * 100
-            fig_equity = px.line(
-                df_trades, x="Fecha", y="Retorno acumulado (%)",
-                title="Curva de equity (retorno acumulado de la estrategia)",
-                markers=True,
-            )
-            fig_equity.add_hline(y=0, line_dash="dot", line_color="#898781")
-            st.plotly_chart(fig_equity, use_container_width=True)
-
-            st.divider()
-            st.subheader("Test de permutación: ¿le gana la dirección elegida al azar?")
-            st.caption(
-                f"Se mezcló aleatoriamente la dirección (alza/baja) de los "
-                f"{resultado['n_eventos']} eventos {N_PERMUTACIONES_BACKTEST:,} veces, "
-                "corriendo el mismo backtest (mismas fechas de entrada/salida y mismo "
-                "costo de transacción) con cada mezcla. Esto aísla si el criterio "
-                "direccional (y no solo el momento de entrada/salida) aporta algo por "
-                "sobre el azar."
-            )
-
-            fig_hist = px.histogram(
-                x=resultado["retornos_totales_perm"],
-                nbins=50,
-                title="Distribución de retornos totales bajo 1.000 mezclas aleatorias de dirección",
-                labels={"x": "Retorno total acumulado (%)"},
-            )
-            fig_hist.add_vline(
-                x=resultado["retorno_total"], line_color="#e34948", line_width=2,
-                annotation_text="Resultado real", annotation_position="top",
-            )
-            st.plotly_chart(fig_hist, use_container_width=True)
-
-            percentil = resultado["percentil_real"]
-            distinguible_del_azar = percentil >= 95 or percentil <= 5
-            if distinguible_del_azar:
-                etiqueta_pct = "distinguible del azar"
-                interpretacion = (
-                    "un resultado así de extremo es poco común bajo mezclas al azar — "
-                    "compatible con que el criterio direccional (y no solo el momento "
-                    "de entrada/salida) esté aportando algo, aunque con solo 37 eventos "
-                    "esto debe leerse con cautela."
-                )
-            else:
-                etiqueta_pct = "indistinguible del azar"
-                interpretacion = (
-                    "el resultado real es indistinguible de simplemente elegir una "
-                    "dirección al azar en esas mismas 37 fechas — no hay evidencia de "
-                    "que el criterio direccional (TPM sube → corto, TPM baja → largo) "
-                    "aporte valor por sobre el azar, más allá de si el retorno total "
-                    "fue positivo o negativo."
-                )
-            color_pct = "#0ca30c" if distinguible_del_azar else "#d03b3b"
-            st.markdown(
-                f"**El resultado real ({resultado['retorno_total']:+.2f}%) cae en el "
-                f"percentil {percentil:.0f} de la distribución de mezclas al azar** — "
-                f"<span style='color:{color_pct}; font-weight:700'>{etiqueta_pct}</span> "
-                f"({interpretacion})",
-                unsafe_allow_html=True,
-            )
-            st.caption(
-                "🟢 Verde = cae en el 5% extremo (superior o inferior) de la distribución "
-                "aleatoria, distinguible del azar — 🔴 Rojo = cae en el rango central, "
-                "indistinguible del azar."
-            )
-            st.markdown(_etiqueta_timba(distinguible_del_azar), unsafe_allow_html=True)
-
-            st.divider()
-            st.subheader(f"Trades individuales ({resultado['n_eventos']})")
-            st.dataframe(
-                df_trades.drop(columns=["Retorno acumulado (%)"]).style.format({
-                    "Retorno crudo USD/CLP": "{:+.3%}",
-                    "Retorno neto": "{:+.3%}",
-                    "Equity": "{:.4f}",
-                }),
-                use_container_width=True,
-            )
-
-            st.info(
-                "**Nota metodológica.** Este es un backtest hipotético e ilustrativo, "
-                "no una recomendación de inversión. Comparte todas las limitaciones del "
-                "Event Study TPM (muestra chica de 37 eventos, posible confusión con "
-                "ciclos monetarios globales simultáneos, calendario de RPM no "
-                "disponible). Además asume que se puede entrar exactamente al cierre "
-                "del día del anuncio de TPM — en la práctica el anuncio puede ocurrir "
-                "durante o después de la sesión, lo que podría hacer inalcanzable ese "
-                "precio de entrada. El costo de transacción (8 puntos base) es una "
-                "aproximación fija; costos reales de financiamiento, spread y slippage "
-                "podrían ser mayores, especialmente en episodios de alta volatilidad."
-            )
-
-    except Exception as e:
-        st.error(f"No se pudo calcular el backtest: {e}")
 
 # --- Tab 6: Momentum IPSA ---
 with tab_momentum:

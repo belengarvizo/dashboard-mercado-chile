@@ -65,3 +65,45 @@ TICKER_PETROLEO_WTI = "CL=F"
 
 # Dow Jones Industrial Average, usado en el Brief Premercado.
 TICKER_DOW_JONES = "^DJI"
+
+# Las 30 acciones que componen el Dow Jones Industrial Average. Verificadas
+# contra dos fuentes independientes y vigentes (Wikipedia y stockanalysis.com)
+# y contra la API de Yahoo Finance antes de agregarlas — la composición del
+# índice cambia periódicamente (ej. Nvidia y Sherwin-Williams reemplazaron a
+# Intel y Dow Inc. en 2024; Alphabet reemplazó a Verizon después).
+TICKERS_DOW_JONES = [
+    "AAPL",
+    "AMGN",
+    "AMZN",
+    "AXP",
+    "BA",
+    "CAT",
+    "CRM",
+    "CSCO",
+    "CVX",
+    "DIS",
+    "GOOGL",
+    "GS",
+    "HD",
+    "HON",
+    "IBM",
+    "JNJ",
+    "JPM",
+    "KO",
+    "MCD",
+    "MMM",
+    "MRK",
+    "MSFT",
+    "NKE",
+    "NVDA",
+    "PG",
+    "SHW",
+    "TRV",
+    "UNH",
+    "V",
+    "WMT",
+]
+
+# Las 5 acciones que se muestran destacadas por defecto en el gráfico
+# principal de la pestaña "Acciones Dow Jones".
+TICKERS_DOW_JONES_PRINCIPALES = ["AAPL", "MSFT", "JPM", "CAT", "KO"]
