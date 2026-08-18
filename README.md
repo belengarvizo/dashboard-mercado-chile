@@ -8,7 +8,7 @@ actualizado diariamente.
 
 ## Qué muestra
 
-El dashboard tiene 9 pestañas:
+El dashboard tiene 10 pestañas:
 
 1. **Brief Premercado** — para revisar antes de que abra la Bolsa de Santiago.
    Sección "Importante": % de cambio de la sesión más reciente de S&P 500,
@@ -19,7 +19,12 @@ El dashboard tiene 9 pestañas:
    verificado con datos reales antes de usarlo), marcado en rojo si la curva
    está invertida (spread negativo), con una nota breve y cautelosa sobre su
    asociación histórica con recesiones en EEUU — sin afirmar que sea una
-   predicción garantizada. A continuación, el **calendario económico de los
+   predicción garantizada. Justo debajo, la **inflación breakeven** (tasa
+   nominal del bono BCP a 10 años menos tasa real del bono BCU a 10 años,
+   ambos del BCCh y del mismo plazo): es la inflación que el mercado tiene
+   implícita en los precios de ambos bonos, no un pronóstico oficial de
+   nadie — nota metodológica visible en la propia pestaña. A continuación,
+   el **calendario económico de los
    próximos 7 días** (`calendario_economico.py`): RPM del Banco Central,
    FOMC de la Fed, publicaciones de IPC (INE) e IMACEC (BCCh), y reuniones
    ministeriales de la OPEP+, cada una con una etiqueta de color por
@@ -38,6 +43,9 @@ El dashboard tiene 9 pestañas:
    fuentes de noticias más abajo).
 2. **Indicadores macro** — selector para explorar cualquiera de las series del
    BCCh (ver lista completa más abajo) con su gráfico histórico y último valor.
+   Incluye la **inflación breakeven** (tasa BCP nominal a 10 años − tasa BCU
+   real a 10 años) como una serie calculada más del selector — ver detalle en
+   el punto 1 y en "Fuentes de datos".
 3. **Acciones IPSA** — gráfico de precios normalizables a base 100; el
    selector permite elegir entre **las 30 acciones del IPSA** (incluida
    LATAM, `LTM.SN`), con las mismas 5 destacadas de siempre (SQM-B, Banco de
@@ -166,13 +174,16 @@ El dashboard tiene 9 pestañas:
    marca en **texto verde si cae en el 5% extremo de la distribución
    (distinguible del azar) o rojo si cae en el rango central (indistinguible
    del azar)**, con el mismo criterio visual (texto, no fondo) que las tablas
-   de significancia del Event Study.
+   de significancia del Event Study. Justo debajo, una etiqueta explícita
+   conecta el resultado con la jerga de mesa de dinero: **"timba"** (apostar
+   sin ventaja estadística real) si el resultado cae en la zona central, o
+   **"evidencia de una ventaja real, no timba"** si cae en el 5% extremo.
 
    **Hallazgo:** el resultado real (-3,75% acumulado en 37 trades, Sharpe
    -0,13) cae en el **percentil ~44 de 1.000 mezclas aleatorias de
-   dirección** — indistinguible del azar. Consistente con el hallazgo del
-   Event Study: no hay evidencia de que esta estrategia direccional le gane
-   al mercado con los datos disponibles.
+   dirección** — indistinguible del azar, es decir, timba: no hay evidencia
+   de que esta estrategia direccional le gane al mercado con los datos
+   disponibles, consistente con el hallazgo del Event Study.
 7. **Momentum IPSA** — estrategia momentum "12-1" de Jegadeesh & Titman
    (1993) sobre las 30 acciones del IPSA: cada fin de mes rankea por retorno
    compuesto de los meses [t-12, t-2] (saltando el mes t-1 más reciente),
@@ -186,12 +197,15 @@ El dashboard tiene 9 pestañas:
    metodológica visible: distingue este diseño (momentum de corto/mediano
    plazo) de De Bondt & Thaler (1985), que documentan el efecto contrario —
    reversión a **largo plazo** (3-5 años) — dejando claro que ambos
-   coexisten en la literatura porque operan en horizontes distintos.
+   coexisten en la literatura porque operan en horizontes distintos. Misma
+   etiqueta de **"timba"** que el Backtester de TPM, debajo del resultado
+   del test de permutación.
 
    **Hallazgo:** sobre 49 meses de datos, el WML acumulado es +42,9% (t =
    1,03, p = 0,31 — no significativo al 5%), y el resultado real cae en el
    **percentil 88,5 de 1.000 mezclas aleatorias** — elevado, pero sin cruzar
-   el umbral de 95% para considerarse distinguible del azar.
+   el umbral de 95% para considerarse distinguible del azar (timba, con este
+   criterio).
 8. **Calculadora Financiera** — tres modelos interactivos donde el usuario
     ingresa sus propios valores, sin depender de datos fundamentales de la
     base:
@@ -245,6 +259,31 @@ El dashboard tiene 9 pestañas:
    covarianza por régimen de mercado) quedan fuera del alcance del
    proyecto — los pesos "óptimos" son ilustrativos del framework, no una
    recomendación de inversión.
+10. **Práctica: Riesgo Bancario** — cinco calculadoras educativas
+    interactivas, **sin datos hardcodeados ni ligados a ninguna institución
+    real** (etiquetado explícito en la propia pestaña); todos los valores
+    los ingresa el usuario:
+    - **LCR** (Coeficiente de Cobertura de Liquidez): HQLA / salidas netas
+      de efectivo a 30 días, contra el mínimo regulatorio de Basilea III
+      (100%).
+    - **ΔEVE y ΔNII**: impacto de un shock de tasas (slider en puntos base)
+      sobre el valor económico del patrimonio (largo plazo) y sobre el
+      margen de interés neto a 12 meses (corto plazo), a partir de gaps de
+      repreciación ingresados por el usuario — con una nota explícita de
+      que un banco puede tener ΔNII saludable y ΔEVE muy negativo al mismo
+      tiempo (el patrón general detrás del colapso de Silicon Valley Bank
+      en 2023).
+    - **CVA**: Exposición esperada × PD × LGD (LGD = 1 − tasa de
+      recuperación).
+    - **ROIC vs. ROE**: NOPAT/Capital invertido vs. Utilidad neta/Patrimonio,
+      con la diferencia explicada como efecto del apalancamiento.
+    - **Days to Cover** (short squeeze): Interés corto / volumen diario
+      promedio — con una nota visible de que **no es calculable con datos
+      reales del mercado chileno**, porque no existe información pública de
+      posiciones cortas en la Bolsa de Santiago (a diferencia de EEUU, donde
+      FINRA publica el short interest quincenalmente); ese vacío de
+      transparencia es parte de lo que motivó este proyecto desde el
+      inicio.
 
 Arriba de las pestañas, y también en la barra lateral, se muestra la fecha y
 hora de la última actualización de cada fuente de datos.
@@ -261,6 +300,12 @@ hora de la última actualización de cada fuente de datos.
 - Tasa libre de riesgo CLP (PDBC a 14 días)
 - Bono BCCh en pesos (BCP) a 10 años, tasa de mercado secundario — usado
   junto al UST10Y para calcular el CRP (spread plazo contra plazo)
+- Bono BCCh en UF (BCU) a 10 años, tasa de mercado secundario — tasa
+  **real** (indexada a UF), usada junto al BCP nominal del mismo plazo para
+  calcular la **inflación breakeven** (BCP − BCU). Serie encontrada vía
+  `SearchSeries` del catálogo del BCCh (código `F022.BUF.TIS.AN10.UF.Z.D`),
+  con datos recientes y limpios verificados antes de usarla — mismo patrón
+  ya usado para el cobre, el swap cámara y el BCP.
 
 **Yahoo Finance (vía `yfinance`, sin autenticación):**
 - Las 30 acciones del índice IPSA

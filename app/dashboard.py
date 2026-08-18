@@ -167,6 +167,25 @@ def calcular_spread_2s10s(df_macro: pd.DataFrame) -> dict | None:
     }
 
 
+NOMBRE_BCP_10Y = "Bono BCCh en pesos (BCP) a 10 años - tasa mercado secundario"
+NOMBRE_BCU_10Y = "Bono BCCh en UF (BCU) a 10 años - tasa mercado secundario"
+NOMBRE_BREAKEVEN = "Inflación breakeven (BCP 10Y − BCU 10Y, implícita)"
+
+
+def calcular_serie_inflacion_breakeven(df_macro: pd.DataFrame) -> pd.Series:
+    """Inflación breakeven = tasa BCP nominal a 10 años − tasa BCU real a 10
+    años (mismo emisor y plazo, distinta indexación). Es la inflación que el
+    mercado tiene implícita en los precios de ambos bonos — no un pronóstico
+    oficial de nadie. Serie indexada por fecha, alineada automáticamente
+    (pandas) entre ambas series de origen; se descartan fechas donde falta
+    una de las dos."""
+    bcp = df_macro[df_macro["nombre"] == NOMBRE_BCP_10Y].sort_values("fecha").set_index("fecha")["valor"]
+    bcu = df_macro[df_macro["nombre"] == NOMBRE_BCU_10Y].sort_values("fecha").set_index("fecha")["valor"]
+    if bcp.empty or bcu.empty:
+        return pd.Series(dtype=float)
+    return (bcp - bcu).dropna()
+
+
 def evaluar_graham(
     precio, eps, pe_5y, dividendo, valor_libro, deuda_total,
     activos_corrientes, pasivos_corrientes, yield_aaa, eps_historico,
@@ -453,6 +472,23 @@ def _color_significancia(p_valor) -> str:
         return ""
     color = "#0ca30c" if p_valor < UMBRAL_SIGNIFICANCIA else "#d03b3b"
     return f"color: {color}; font-weight: 700"
+
+
+def _etiqueta_timba(distinguible_del_azar: bool) -> str:
+    """"Timba" (jerga de mesa de dinero): especular sin ventaja estadística
+    real, solo apostar. Traduce el resultado del test de permutación a ese
+    concepto — mismo código de color verde/rojo que el resto de las señales
+    de significancia del dashboard."""
+    if distinguible_del_azar:
+        texto = "Esto sí muestra evidencia de una ventaja real, no timba."
+        color = "#0ca30c"
+    else:
+        texto = (
+            "Esto sería timba, no una estrategia con ventaja real — el resultado "
+            "no se distingue de apostar al azar en las mismas fechas."
+        )
+        color = "#d03b3b"
+    return f"<span style='color:{color}; font-weight:700'>{texto}</span>"
 
 
 @st.cache_data(ttl=3600)
@@ -1163,10 +1199,12 @@ except Exception:
 (
     tab_premercado, tab_macro, tab_acciones, tab_riesgo,
     tab_benchmark, tab_tpm, tab_momentum, tab_calculadora, tab_portafolios,
+    tab_riesgo_bancario,
 ) = st.tabs([
     "Brief Premercado", "Indicadores macro", "Acciones IPSA", "Riesgo",
     "Benchmark", "TPM y Tipo de Cambio", "Momentum IPSA",
     "Calculadora Financiera", "Optimización de Portafolios",
+    "Práctica: Riesgo Bancario",
 ])
 
 # --- Tab 0: Brief Premercado ---
@@ -1211,6 +1249,22 @@ with tab_premercado:
                 "con mayor probabilidad de recesión en EEUU en los siguientes 12-24 meses "
                 "— es una correlación histórica, no una predicción garantizada, y ha dado "
                 "falsas señales en el pasado."
+            )
+
+        breakeven = calcular_serie_inflacion_breakeven(df_macro)
+        if len(breakeven) >= 2:
+            valor_actual = float(breakeven.iloc[-1])
+            cambio_pp = valor_actual - float(breakeven.iloc[-2])
+            fecha_breakeven = pd.Timestamp(breakeven.index[-1]).strftime("%d-%m-%Y")
+            st.metric(
+                "Inflación breakeven (BCP 10Y − BCU 10Y)",
+                f"{valor_actual:.2f} pp",
+                f"{cambio_pp:+.2f} pp",
+            )
+            st.caption(
+                f"al {fecha_breakeven}. Es la inflación que el mercado tiene implícita en los "
+                "precios de ambos bonos (tasa nominal del BCP menos tasa real del BCU, mismo "
+                "emisor y plazo) — no es un pronóstico oficial de nadie."
             )
 
     except Exception as e:
@@ -1320,6 +1374,18 @@ with tab_premercado:
 with tab_macro:
     try:
         df_macro = cargar_series_macro()
+
+        # La inflación breakeven no es una serie propia del BCCh: se calcula
+        # (BCP - BCU) y se agrega como una serie más al selector, igual que
+        # las que sí vienen directas de la base de datos.
+        breakeven = calcular_serie_inflacion_breakeven(df_macro)
+        if not breakeven.empty:
+            df_breakeven = pd.DataFrame({
+                "nombre": NOMBRE_BREAKEVEN,
+                "fecha": breakeven.index,
+                "valor": breakeven.values,
+            })
+            df_macro = pd.concat([df_macro, df_breakeven], ignore_index=True)
 
         series_disponibles = df_macro["nombre"].unique()
         serie_elegida = st.selectbox("Elige un indicador", series_disponibles)
@@ -1965,6 +2031,7 @@ with tab_tpm:
                 "aleatoria, distinguible del azar — 🔴 Rojo = cae en el rango central, "
                 "indistinguible del azar."
             )
+            st.markdown(_etiqueta_timba(distinguible_del_azar), unsafe_allow_html=True)
 
             st.divider()
             st.subheader(f"Trades individuales ({resultado['n_eventos']})")
@@ -2085,6 +2152,7 @@ with tab_momentum:
                 "🟢 Verde = cae en el 5% extremo (superior o inferior), distinguible del azar "
                 "— 🔴 Rojo = cae en el rango central, indistinguible del azar."
             )
+            st.markdown(_etiqueta_timba(distinguible_del_azar_momentum), unsafe_allow_html=True)
 
         st.divider()
         st.info(
@@ -2476,3 +2544,250 @@ with tab_portafolios:
 
     except Exception as e:
         st.error(f"No se pudo calcular la optimización de portafolios: {e}")
+
+# --- Tab 9: Práctica - Riesgo Bancario ---
+with tab_riesgo_bancario:
+    st.warning(
+        "🎓 **Herramientas educativas — no ligadas a ninguna institución real.** "
+        "Todos los valores de esta pestaña los ingresa el usuario; no hay datos "
+        "de ningún banco (chileno o extranjero), reales ni hardcodeados. El "
+        "objetivo es practicar los conceptos de riesgo bancario, no evaluar a "
+        "ninguna entidad en particular."
+    )
+    st.caption(
+        "Cinco calculadoras interactivas: cada una muestra su fórmula, pide los "
+        "inputs y explica qué significa el resultado."
+    )
+
+    try:
+        # ============ 1. LCR ============
+        st.subheader("1. LCR — Coeficiente de Cobertura de Liquidez")
+        st.markdown(
+            "**Fórmula:** LCR = HQLA / Salidas netas de efectivo a 30 días. Mide si "
+            "un banco tiene suficientes activos líquidos de alta calidad (HQLA — "
+            "efectivo, reservas en el banco central, deuda soberana de alta calidad) "
+            "para sobrevivir 30 días de estrés de liquidez severo sin depender de "
+            "financiamiento externo. Parte del marco de Basilea III."
+        )
+        col_hqla, col_salidas = st.columns(2)
+        with col_hqla:
+            lcr_hqla = st.number_input(
+                "HQLA — activos líquidos de alta calidad", min_value=0.0, value=1_000.0,
+                step=50.0, key="lcr_hqla",
+            )
+        with col_salidas:
+            lcr_salidas = st.number_input(
+                "Salidas netas de efectivo proyectadas a 30 días", min_value=0.01,
+                value=800.0, step=50.0, key="lcr_salidas",
+            )
+
+        lcr = lcr_hqla / lcr_salidas * 100
+        st.metric("LCR", f"{lcr:.1f}%", f"{lcr - 100:+.1f} pp vs. mínimo regulatorio (100%)")
+        if lcr >= 100:
+            st.success(f"✅ LCR de {lcr:.1f}% ≥ 100% — cumpliría el mínimo regulatorio de Basilea III.")
+        else:
+            st.error(f"🔻 LCR de {lcr:.1f}% < 100% — no cumpliría el mínimo regulatorio de Basilea III.")
+        st.caption(
+            "El mínimo regulatorio internacional (Basilea III) es 100%: los HQLA "
+            "deben cubrir por completo las salidas netas de efectivo proyectadas a "
+            "30 días bajo un escenario de estrés severo (retiro de depósitos, "
+            "pérdida de acceso a financiamiento mayorista, etc.)."
+        )
+
+        st.divider()
+
+        # ============ 2. ΔEVE y ΔNII ============
+        st.subheader("2. ΔEVE y ΔNII — riesgo de tasa de interés en el libro bancario")
+        st.markdown(
+            "**ΔEVE** (cambio en el Valor Económico del Patrimonio) mide el impacto "
+            "de un shock de tasas sobre el valor presente de todo el balance — riesgo "
+            "de **largo plazo**. **ΔNII** (cambio en el Margen de Interés Neto) mide "
+            "el impacto sobre las utilidades de los próximos 12 meses — riesgo de "
+            "**corto plazo**. Se calculan con gaps de repreciación distintos porque "
+            "responden preguntas distintas."
+        )
+        st.markdown(
+            "**Fórmulas simplificadas (con fines ilustrativos):**\n"
+            "- ΔEVE ≈ −(VP activos que reprecian − VP pasivos que reprecian) × shock\n"
+            "- ΔNII ≈ (Monto activos que reprecian en 12m − Monto pasivos que "
+            "reprecian en 12m) × shock"
+        )
+
+        shock_pb = st.slider(
+            "Shock de tasas (puntos base)", -300, 300, 200, step=25, key="riesgo_shock_pb",
+            help="Shock paralelo de tasas, en puntos base (100 pb = 1 punto porcentual).",
+        )
+        shock_frac = shock_pb / 10_000  # puntos base -> fracción
+
+        col_eve1, col_eve2 = st.columns(2)
+        with col_eve1:
+            vp_activos = st.number_input(
+                "VP de activos que reprecian (sensibles a tasa)", min_value=0.0,
+                value=1_000.0, step=50.0, key="eve_vp_activos",
+            )
+            monto_activos_12m = st.number_input(
+                "Monto de activos que reprecian en 12 meses", min_value=0.0,
+                value=400.0, step=25.0, key="nii_activos_12m",
+            )
+        with col_eve2:
+            vp_pasivos = st.number_input(
+                "VP de pasivos que reprecian (sensibles a tasa)", min_value=0.0,
+                value=400.0, step=50.0, key="eve_vp_pasivos",
+            )
+            monto_pasivos_12m = st.number_input(
+                "Monto de pasivos que reprecian en 12 meses", min_value=0.0,
+                value=350.0, step=25.0, key="nii_pasivos_12m",
+            )
+
+        gap_eve = vp_activos - vp_pasivos
+        delta_eve = -gap_eve * shock_frac * 100  # en las mismas unidades que los inputs (%), ver caption
+
+        gap_nii = monto_activos_12m - monto_pasivos_12m
+        delta_nii = gap_nii * shock_frac * 100
+
+        etiqueta_shock = f"shock de {shock_pb:+d} pb"
+        col_res_eve, col_res_nii = st.columns(2)
+        with col_res_eve:
+            st.metric(f"ΔEVE ({etiqueta_shock})", f"{delta_eve:+.1f}")
+        with col_res_nii:
+            st.metric(f"ΔNII ({etiqueta_shock})", f"{delta_nii:+.1f}")
+
+        st.info(
+            "💡 **Un banco puede tener ΔNII saludable y ΔEVE muy negativo al mismo "
+            "tiempo** (fue, en términos generales, el patrón detrás del colapso de "
+            "Silicon Valley Bank en 2023): si los depósitos son \"pegajosos\" y no "
+            "reprecian rápido, el gap de 12 meses puede verse controlado — pero si el "
+            "banco financia bonos de **largo plazo** con esos mismos depósitos de "
+            "**corto plazo**, el valor económico del patrimonio (ΔEVE) puede caer con "
+            "fuerza ante un alza de tasas, aunque las utilidades del año siguiente no "
+            "lo reflejen todavía. Por eso los reguladores exigen mirar ambas métricas, "
+            "no solo el margen de interés del año en curso."
+        )
+        st.caption(
+            "Simplificación pedagógica: se asume una sensibilidad lineal (duración "
+            "efectiva ≈ 1) sobre el gap de repreciación, en vez de un cálculo de "
+            "duración/convexidad por tramo — suficiente para ilustrar la dirección e "
+            "intuición del riesgo, no para un cálculo regulatorio real."
+        )
+
+        st.divider()
+
+        # ============ 3. CVA ============
+        st.subheader("3. CVA — Ajuste de Valoración por Riesgo de Crédito")
+        st.markdown(
+            "**Fórmula:** CVA = Exposición esperada × PD × LGD (donde LGD = 1 − Tasa "
+            "de recuperación). Es el descuento que se le aplica al valor de un "
+            "derivado o instrumento de crédito por el riesgo de que la contraparte "
+            "no pague — cuánto \"vale\" ese riesgo de no pago, en la misma moneda del "
+            "instrumento."
+        )
+        col_cva1, col_cva2, col_cva3 = st.columns(3)
+        with col_cva1:
+            cva_ee = st.number_input(
+                "Exposición esperada (EE)", min_value=0.0, value=1_000.0, step=50.0, key="cva_ee",
+            )
+        with col_cva2:
+            cva_pd = st.slider("Probabilidad de incumplimiento (PD) %", 0.0, 100.0, 2.0, step=0.1, key="cva_pd")
+        with col_cva3:
+            cva_recuperacion = st.slider("Tasa de recuperación %", 0.0, 100.0, 40.0, step=1.0, key="cva_recuperacion")
+
+        cva_lgd = 1 - cva_recuperacion / 100
+        cva = cva_ee * (cva_pd / 100) * cva_lgd
+        st.metric("CVA", f"{cva:,.2f}")
+        st.caption(
+            f"LGD (pérdida dado el incumplimiento) = 1 − {cva_recuperacion:.0f}% = "
+            f"{cva_lgd:.2f}. Interpretación: es el monto que, en valor esperado, se "
+            "pierde por el riesgo de contraparte — cuanto mayor la PD o menor la tasa "
+            "de recuperación, mayor el ajuste."
+        )
+
+        st.divider()
+
+        # ============ 4. ROIC vs ROE ============
+        st.subheader("4. ROIC vs. ROE — el efecto del apalancamiento")
+        st.markdown(
+            "**Fórmulas:** ROIC = NOPAT / Capital invertido. ROE = Utilidad neta / "
+            "Patrimonio. El ROIC mide el retorno sobre **todo** el capital que "
+            "financia el negocio (deuda + patrimonio); el ROE mide el retorno que le "
+            "queda solo a los **dueños**, después de pagar a los acreedores. La "
+            "diferencia entre ambos es, en gran medida, el efecto del apalancamiento."
+        )
+        col_r1, col_r2 = st.columns(2)
+        with col_r1:
+            roic_nopat = st.number_input(
+                "NOPAT (utilidad operacional neta de impuestos)", value=150.0, step=10.0, key="roic_nopat",
+            )
+            roic_capital = st.number_input(
+                "Capital invertido (deuda + patrimonio)", min_value=0.01, value=1_500.0, step=50.0, key="roic_capital",
+            )
+        with col_r2:
+            roe_utilidad = st.number_input("Utilidad neta", value=120.0, step=10.0, key="roe_utilidad")
+            roe_patrimonio = st.number_input("Patrimonio", min_value=0.01, value=800.0, step=50.0, key="roe_patrimonio")
+
+        roic = roic_nopat / roic_capital * 100
+        roe = roe_utilidad / roe_patrimonio * 100
+        col_res_r1, col_res_r2 = st.columns(2)
+        with col_res_r1:
+            st.metric("ROIC", f"{roic:.2f}%")
+        with col_res_r2:
+            st.metric("ROE", f"{roe:.2f}%")
+
+        if roe > roic:
+            st.caption(
+                f"ROE ({roe:.2f}%) > ROIC ({roic:.2f}%): el apalancamiento está "
+                "amplificando el retorno para los dueños — el negocio genera, sobre el "
+                "capital total, más de lo que cuesta la deuda que lo financia. Ese "
+                "mismo apalancamiento amplifica las pérdidas si el ROIC cae por debajo "
+                "del costo de la deuda."
+            )
+        else:
+            st.caption(
+                f"ROE ({roe:.2f}%) ≤ ROIC ({roic:.2f}%): el apalancamiento no está "
+                "beneficiando a los dueños en este escenario — puede indicar que el "
+                "costo de la deuda supera el retorno que genera el capital invertido."
+            )
+
+        st.divider()
+
+        # ============ 5. Days to Cover (Short Squeeze) ============
+        st.subheader("5. Days to Cover — riesgo de short squeeze")
+        st.markdown(
+            "**Fórmula:** Days to Cover = Interés corto (acciones vendidas en corto) "
+            "/ Volumen promedio diario transado. Estima cuántos días de negociación "
+            "tomaría cerrar todas las posiciones cortas al ritmo de volumen actual — "
+            "cuanto más alto, mayor el riesgo de un *short squeeze* (una subida de "
+            "precio forzada por los propios vendedores en corto corriendo a comprar "
+            "para cerrar posición)."
+        )
+        col_dtc1, col_dtc2 = st.columns(2)
+        with col_dtc1:
+            dtc_interes_corto = st.number_input(
+                "Interés corto (acciones vendidas en corto)", min_value=0.0,
+                value=5_000_000.0, step=100_000.0, key="dtc_interes_corto",
+            )
+        with col_dtc2:
+            dtc_volumen = st.number_input(
+                "Volumen promedio diario transado", min_value=0.01, value=1_000_000.0,
+                step=50_000.0, key="dtc_volumen",
+            )
+
+        days_to_cover = dtc_interes_corto / dtc_volumen
+        st.metric("Days to Cover", f"{days_to_cover:.1f} días")
+        st.caption(
+            "Como referencia informal de mercado: valores altos (aprox. > 5-10 días, "
+            "sin un umbral regulatorio único) suelen asociarse a mayor riesgo de "
+            "short squeeze — pero depende mucho del contexto de cada acción."
+        )
+        st.error(
+            "🇨🇱 **No calculable con datos reales del mercado chileno.** A diferencia "
+            "de EEUU (donde FINRA publica el short interest de cada acción cada dos "
+            "semanas), en la Bolsa de Santiago **no existe información pública de "
+            "posiciones cortas** — no hay una fuente oficial de \"interés corto\" para "
+            "ninguna acción del IPSA. Esta calculadora es puramente ilustrativa con "
+            "cifras hipotéticas que ingresa el usuario. Este vacío de transparencia "
+            "en el mercado chileno es parte de lo que motivó este proyecto desde el "
+            "inicio."
+        )
+
+    except Exception as e:
+        st.error(f"No se pudo calcular la práctica de riesgo bancario: {e}")

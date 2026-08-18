@@ -28,6 +28,10 @@ SERIES_A_DESCARGAR = {
     "F022.SPC.TPR.D090.NO.Z.D": {"nombre": "Swap Promedio Cámara nominal (90 días)", "frecuencia": "diaria"},
     "F022.PDBC.TIN.D014.NO.Z.D": {"nombre": "Tasa libre de riesgo CLP (PDBC 14 días)", "frecuencia": "diaria"},
     "F022.BCLP.TIS.AN10.NO.Z.D": {"nombre": "Bono BCCh en pesos (BCP) a 10 años - tasa mercado secundario", "frecuencia": "diaria"},
+    # Tasa real (bonos en UF, indexados a inflación): BCP - BCU al mismo plazo
+    # es la inflación breakeven implícita en el mercado (ver
+    # calcular_inflacion_breakeven en app/dashboard.py).
+    "F022.BUF.TIS.AN10.UF.Z.D": {"nombre": "Bono BCCh en UF (BCU) a 10 años - tasa mercado secundario", "frecuencia": "diaria"},
 }
 
 BCCH_URL = "https://si3.bcentral.cl/SieteRestWS/SieteRestWS.ashx"
