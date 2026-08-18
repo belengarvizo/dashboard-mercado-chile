@@ -11,6 +11,7 @@ import pandas as pd
 INDICADORES_PREMERCADO = [
     ("S&P 500", "accion", "^GSPC", ""),
     ("Cobre", "macro", "Precio del cobre (USD/oz troy)", "US$/oz troy"),
+    ("Petróleo WTI", "accion", "CL=F", "US$/barril"),
     ("MSCI EM (EEM)", "accion", "EEM", "US$"),
     ("Bovespa", "accion", "^BVSP", ""),
     ("Bono UST 10 años", "macro", "Bono del Tesoro de EEUU a 10 años (UST10Y)", "%"),

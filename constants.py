@@ -59,3 +59,6 @@ TICKERS_BENCHMARK = {
 
 # Las "7 Magníficas" tecnológicas de EEUU.
 TICKERS_MAGNIFICAS = ["AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA"]
+
+# Futuro de petróleo WTI (Crude Oil), usado en el Brief Premercado.
+TICKER_PETROLEO_WTI = "CL=F"

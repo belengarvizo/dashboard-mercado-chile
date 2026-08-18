@@ -15,13 +15,20 @@ sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
 import pandas as pd
 import yfinance as yf
 from models import get_session, PrecioAccion, MetadataActualizacion
-from constants import TICKERS_IPSA, TICKER_PROXY_IPSA, TICKERS_BENCHMARK, TICKERS_MAGNIFICAS
+from constants import (
+    TICKERS_IPSA,
+    TICKER_PROXY_IPSA,
+    TICKERS_BENCHMARK,
+    TICKERS_MAGNIFICAS,
+    TICKER_PETROLEO_WTI,
+)
 
 TICKERS_A_DESCARGAR = (
     TICKERS_IPSA
     + [TICKER_PROXY_IPSA]
     + [t for t in TICKERS_BENCHMARK if t != TICKER_PROXY_IPSA]
     + TICKERS_MAGNIFICAS
+    + [TICKER_PETROLEO_WTI]
 )
 
 

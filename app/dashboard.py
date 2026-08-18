@@ -8,6 +8,7 @@ Correr localmente con: streamlit run app/dashboard.py
 import math
 import os
 import sys
+from datetime import date
 
 sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
 
@@ -28,6 +29,7 @@ from constants import (
     TICKERS_MAGNIFICAS,
 )
 from market_data import calcular_resumen_mercado
+from calendario_economico import proximos_eventos, NOTA_VIGENCIA, INDICADOR_POR_TIPO
 
 st.set_page_config(page_title="Mercado Chile", layout="wide")
 
@@ -1213,6 +1215,44 @@ with tab_premercado:
 
     except Exception as e:
         st.error(f"No se pudo cargar el resumen internacional: {e}")
+
+    st.divider()
+    st.subheader("Calendario económico — próximos 7 días")
+
+    try:
+        hoy = date.today()
+        eventos_semana = proximos_eventos(hoy, dias=7)
+
+        if not eventos_semana:
+            st.info("No hay eventos programados en los próximos 7 días.")
+        else:
+            for evento in eventos_semana:
+                indicador = INDICADOR_POR_TIPO[evento.tipo]
+                if evento.fecha_inicio == evento.fecha_fin:
+                    fecha_texto = evento.fecha_inicio.strftime("%d-%m-%Y")
+                else:
+                    fecha_texto = (
+                        f"{evento.fecha_inicio.strftime('%d-%m')} al "
+                        f"{evento.fecha_fin.strftime('%d-%m-%Y')}"
+                    )
+                nota_estimado = "" if evento.confirmado else " *(fecha estimada, no confirmada explícitamente)*"
+                st.markdown(
+                    f"<span style='background-color:{indicador['color']}; color:white; "
+                    f"padding:2px 8px; border-radius:4px; font-weight:700; font-size:0.85em'>"
+                    f"{indicador['etiqueta']}</span> &nbsp; **{fecha_texto}** — "
+                    f"{indicador['organismo']}: {evento.descripcion}{nota_estimado}",
+                    unsafe_allow_html=True,
+                )
+
+        st.caption(NOTA_VIGENCIA)
+        st.caption(
+            "Las reuniones de la OPEP+ no siguen un calendario anual fijo (a diferencia de "
+            "los bancos centrales): desde 2024 se confirman con solo semanas de anticipación, "
+            "así que este calendario puede no incluir reuniones aún no anunciadas."
+        )
+
+    except Exception as e:
+        st.error(f"No se pudo cargar el calendario económico: {e}")
 
     st.divider()
     st.subheader("Resumen del día (generado por IA)")

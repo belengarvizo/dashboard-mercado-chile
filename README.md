@@ -12,14 +12,21 @@ El dashboard tiene 9 pestañas:
 
 1. **Brief Premercado** — para revisar antes de que abra la Bolsa de Santiago.
    Sección "Importante": % de cambio de la sesión más reciente de S&P 500,
-   cobre, MSCI EM (EEM), Bovespa y el bono UST a 10 años, con flecha y color
-   verde/rojo, pensado para leerse en 10 segundos. Justo debajo, el **spread
-   2s10s** (UST10Y − UST2Y — UST2Y vía `2YY=F` de Yahoo Finance, ya que no
-   existe un ticker "^" clásico para 2 años; verificado con datos reales
-   antes de usarlo), marcado en rojo si la curva está invertida (spread
-   negativo), con una nota breve y cautelosa sobre su asociación histórica
-   con recesiones en EEUU — sin afirmar que sea una predicción garantizada.
-   Debajo de eso, un **resumen diario
+   cobre, **petróleo WTI** (`CL=F`), MSCI EM (EEM), Bovespa y el bono UST a 10
+   años, con flecha y color verde/rojo, pensado para leerse en 10 segundos.
+   Justo debajo, el **spread 2s10s** (UST10Y − UST2Y — UST2Y vía `2YY=F` de
+   Yahoo Finance, ya que no existe un ticker "^" clásico para 2 años;
+   verificado con datos reales antes de usarlo), marcado en rojo si la curva
+   está invertida (spread negativo), con una nota breve y cautelosa sobre su
+   asociación histórica con recesiones en EEUU — sin afirmar que sea una
+   predicción garantizada. A continuación, el **calendario económico de los
+   próximos 7 días** (`calendario_economico.py`): RPM del Banco Central,
+   FOMC de la Fed, publicaciones de IPC (INE) e IMACEC (BCCh), y reuniones
+   ministeriales de la OPEP+, cada una con una etiqueta de color por
+   organismo y, cuando corresponde, una nota de que la fecha es estimada y
+   no confirmada explícitamente por la fuente — ver "Calendario económico
+   2026" más abajo para el detalle de fuentes y limitaciones. Debajo de eso,
+   un **resumen diario
    generado por IA** (Gemini `gemini-3.6-flash`) con dos secciones — "Panorama
    global" (3-5 puntos) y "Posibles efectos para Chile" (lenguaje cauteloso,
    sin afirmaciones causales categóricas) — armado a partir de esos mismos
@@ -262,6 +269,9 @@ hora de la última actualización de cada fuente de datos.
   ticker propio en Yahoo Finance
 - Benchmarks: S&P 500 (`^GSPC`), MSCI Emerging Markets (`EEM`), Bovespa (`^BVSP`)
 - Las 7 Magníficas: AAPL, MSFT, GOOGL, AMZN, NVDA, META, TSLA
+- Petróleo WTI (`CL=F`, futuro Crude Oil) — usado en "Importante" del Brief
+  Premercado y en el prompt de Gemini, para que el resumen diario pueda
+  conectar titulares geopolíticos con su efecto en el precio del petróleo
 - El bono del Tesoro de EEUU a 10 años (`^TNX`) y a 2 años (`2YY=F` — Yahoo
   no tiene un ticker "^" clásico para 2 años, verificado con datos reales
   antes de usarlo) — se descargan junto con las series del BCCh porque el
@@ -285,6 +295,50 @@ vez al día en el cron — el dashboard nunca llama a Gemini directamente, solo
 lee el resultado ya guardado. (Se pidió originalmente `gemini-2.5-flash`,
 pero esa API key ya no tiene acceso a ese modelo — el propio catálogo de
 Google devuelve `gemini-3.6-flash` como el flash vigente.)
+
+### Calendario económico 2026 (`calendario_economico.py`)
+
+Archivo con fechas verificadas de forma manual contra la fuente oficial de
+cada organismo (no se generan ni se infieren automáticamente):
+
+- **RPM (Banco Central de Chile):** comunicado oficial de bcentral.cl
+  "Banco Central publica calendario de RPM, RPF, IPoM, IEF 2026", cruzado
+  contra el calendario económico de tradingeconomics.com.
+- **FOMC (Reserva Federal):** verificado con fetch directo a
+  `federalreserve.gov/monetarypolicy/fomccalendars.htm`.
+- **IPC (INE):** verificado con el PDF oficial "Calendario 2026 —
+  Indicadores de Coyuntura INE" (actualización del 10-04-2026).
+- **IMACEC (Banco Central de Chile):** el Banco Central no publica un
+  calendario anual con todas las fechas exactas; se usa su regla
+  metodológica publicada ("primer día hábil del mes, con rezago de 31 días
+  respecto al mes medido"). Solo la fecha del 1 de septiembre de 2026 está
+  confirmada de forma explícita (fxstreet.com); las de octubre, noviembre y
+  diciembre se calcularon aplicando la misma regla y quedan marcadas como
+  no confirmadas (`confirmado=False`) en el archivo.
+- **OPEP+:** a diferencia de los bancos centrales, la OPEP+ **no** publica
+  un calendario anual fijo — desde 2024 el grupo de países con recortes
+  voluntarios confirma cada reunión con solo semanas de anticipación. Solo
+  se incluye la próxima reunión ministerial confirmada al momento de
+  escribir esto (tradingeconomics.com/opec/calendar); el calendario puede
+  no reflejar reuniones futuras aún no anunciadas.
+
+El calendario completo, con la fuente y el nivel de confianza de cada
+fecha, queda documentado como comentarios en el propio archivo. La pestaña
+"Brief Premercado" muestra una nota de vigencia ("Calendario verificado
+al...") y recuerda cuándo hay que actualizarlo: el Banco Central publica el
+calendario de RPM del año siguiente en septiembre, y la Fed publica el
+calendario de FOMC del año siguiente en diciembre.
+
+### CMF "Hechos Esenciales": evaluado, no implementado
+
+Se investigó si `cmfchile.cl/institucional/hechos/hechos.php` se podía
+consultar de forma programática para mostrar los hechos esenciales
+recientes de las empresas del IPSA. El formulario de búsqueda de esa página
+**requiere resolver un CAPTCHA** para ejecutar la consulta, y no se
+encontró una API pública, feed RSS/XML ni endpoint JSON documentado como
+alternativa. Como un CAPTCHA existe específicamente para bloquear el acceso
+automatizado, no se implementó esta sección — forzarlo requeriría eludir
+esa protección, lo que no corresponde.
 
 ### ⚠️ Limitación conocida: precios congelados en tickers `.SN`
 
@@ -325,6 +379,7 @@ dashboard-mercado-chile/
 │   └── actualizar_todo.py      # Corre los cuatro anteriores en secuencia (usado por el cron de Railway)
 ├── constants.py                 # Listas de tickers compartidas entre scripts y dashboard
 ├── market_data.py                # Cálculo de los indicadores de "Importante", compartido entre el dashboard y generar_brief.py
+├── calendario_economico.py       # Fechas verificadas de RPM, FOMC, IPC, IMACEC y OPEP+ 2026
 ├── models.py                    # Define las tablas de la base de datos
 ├── requirements.txt              # Librerías necesarias
 └── .env.example                  # Plantilla de variables de entorno
