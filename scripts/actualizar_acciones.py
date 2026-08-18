@@ -21,6 +21,7 @@ from constants import (
     TICKERS_BENCHMARK,
     TICKERS_MAGNIFICAS,
     TICKER_PETROLEO_WTI,
+    TICKER_DOW_JONES,
 )
 from retry_utils import con_reintentos_db
 
@@ -29,7 +30,7 @@ TICKERS_A_DESCARGAR = (
     + [TICKER_PROXY_IPSA]
     + [t for t in TICKERS_BENCHMARK if t != TICKER_PROXY_IPSA]
     + TICKERS_MAGNIFICAS
-    + [TICKER_PETROLEO_WTI]
+    + [TICKER_PETROLEO_WTI, TICKER_DOW_JONES]
 )
 
 

@@ -62,3 +62,6 @@ TICKERS_MAGNIFICAS = ["AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA"]
 
 # Futuro de petróleo WTI (Crude Oil), usado en el Brief Premercado.
 TICKER_PETROLEO_WTI = "CL=F"
+
+# Dow Jones Industrial Average, usado en el Brief Premercado.
+TICKER_DOW_JONES = "^DJI"

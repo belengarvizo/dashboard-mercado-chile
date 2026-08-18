@@ -11,10 +11,15 @@ actualizado diariamente.
 El dashboard tiene 10 pestañas:
 
 1. **Brief Premercado** — para revisar antes de que abra la Bolsa de Santiago.
-   Sección "Importante": % de cambio de la sesión más reciente de S&P 500,
-   cobre, **petróleo WTI** (`CL=F`), MSCI EM (EEM), Bovespa y el bono UST a 10
-   años, con flecha y color verde/rojo, pensado para leerse en 10 segundos.
-   Justo debajo, el **spread 2s10s** (UST10Y − UST2Y — UST2Y vía `2YY=F` de
+   Sección "Importante": % de cambio de la última sesión de S&P 500, Dow
+   Jones, cobre, **petróleo WTI** (`CL=F`), el bono UST a 10 años, la tasa
+   de política monetaria de EEUU (Effective Federal Funds Rate, vía FRED),
+   el IPSA (proxy ECH), la TPM de Chile, el IPC, el Imacec y la tasa de
+   desempleo (INE, desestacionalizada, vía BCCh) — con flecha y color
+   verde/rojo, pensado para leerse en 10 segundos. Si el dato más reciente
+   de un indicador no está disponible (ej. NaN), cae automáticamente al
+   último valor válido y muestra su fecha real en vez de la de hoy. Justo
+   debajo, el **spread 2s10s** (UST10Y − UST2Y — UST2Y vía `2YY=F` de
    Yahoo Finance, ya que no existe un ticker "^" clásico para 2 años;
    verificado con datos reales antes de usarlo), marcado en rojo si la curva
    está invertida (spread negativo), con una nota breve y cautelosa sobre su
@@ -306,17 +311,29 @@ hora de la última actualización de cada fuente de datos.
   `SearchSeries` del catálogo del BCCh (código `F022.BUF.TIS.AN10.UF.Z.D`),
   con datos recientes y limpios verificados antes de usarla — mismo patrón
   ya usado para el cobre, el swap cámara y el BCP.
+- Tasa de desocupación nacional (INE, desestacionalizada) — serie
+  `F049.DES.TAS.INE.10.M`, encontrada vía `SearchSeries`, usada en
+  "Importante" del Brief Premercado.
+
+**FRED (Federal Reserve Economic Data, vía su endpoint CSV público, sin API key):**
+- Effective Federal Funds Rate (serie `DFF`) — usada como la tasa de
+  política monetaria de EEUU en "Importante" del Brief Premercado; el BCCh
+  no publica tasas de política de EEUU en su catálogo, y Yahoo Finance no
+  tiene un ticker que la represente directamente (a diferencia de los
+  rendimientos de bonos del Tesoro).
 
 **Yahoo Finance (vía `yfinance`, sin autenticación):**
 - Las 30 acciones del índice IPSA
 - El ETF ECH (iShares MSCI Chile) — usado como proxy del IPSA para el
-  cálculo de Beta y la pestaña Benchmark, porque el índice IPSA no tiene
-  ticker propio en Yahoo Finance
+  cálculo de Beta, la pestaña Benchmark y el indicador "IPSA" de
+  "Importante" del Brief Premercado, porque el índice IPSA no tiene ticker
+  propio en Yahoo Finance
 - Benchmarks: S&P 500 (`^GSPC`), MSCI Emerging Markets (`EEM`), Bovespa (`^BVSP`)
 - Las 7 Magníficas: AAPL, MSFT, GOOGL, AMZN, NVDA, META, TSLA
 - Petróleo WTI (`CL=F`, futuro Crude Oil) — usado en "Importante" del Brief
   Premercado y en el prompt de Gemini, para que el resumen diario pueda
   conectar titulares geopolíticos con su efecto en el precio del petróleo
+- Dow Jones Industrial Average (`^DJI`) — usado en "Importante" del Brief Premercado
 - El bono del Tesoro de EEUU a 10 años (`^TNX`) y a 2 años (`2YY=F` — Yahoo
   no tiene un ticker "^" clásico para 2 años, verificado con datos reales
   antes de usarlo) — se descargan junto con las series del BCCh porque el
