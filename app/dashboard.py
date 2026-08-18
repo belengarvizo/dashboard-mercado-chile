@@ -466,6 +466,15 @@ def _p_valor_normal(t_stat: float) -> float:
     return 2 * (1 - 0.5 * (1 + math.erf(abs(t_stat) / math.sqrt(2))))
 
 
+def _escapar_markdown_matematico(texto: str) -> str:
+    """Escapa "$" antes de mostrar texto externo/dinámico (titulares de
+    noticias, resumen generado por IA) con st.markdown(). Streamlit
+    interpreta cualquier par de "$" como delimitadores de fórmula LaTeX, así
+    que un texto con dos signos de peso/dólar (ej. "US$/oz troy ... US$/barril")
+    se renderiza como una fórmula ilegible en vez de texto normal."""
+    return texto.replace("$", r"\$")
+
+
 UMBRAL_SIGNIFICANCIA = 0.05
 LEYENDA_SIGNIFICANCIA = (
     "🟢 Verde = estadísticamente significativo (p < 0.05) — "
@@ -1335,7 +1344,7 @@ with tab_premercado:
                 f"Generado el {pd.Timestamp(fila_brief['generado_en']).strftime('%d-%m-%Y %H:%M')} "
                 f"para el {pd.Timestamp(fila_brief['fecha']).strftime('%d-%m-%Y')}."
             )
-            st.markdown(fila_brief["contenido"])
+            st.markdown(_escapar_markdown_matematico(fila_brief["contenido"]))
             st.warning(
                 "⚠️ Resumen generado automáticamente por IA a partir de titulares "
                 "públicos — puede contener errores o imprecisiones, no constituye "
@@ -1363,7 +1372,8 @@ with tab_premercado:
                     st.markdown(f"**{dia.strftime('%d-%m-%Y')}**")
                     for _, fila in grupo.iterrows():
                         hora = fila["fecha_publicacion"].strftime("%H:%M")
-                        st.markdown(f"- {hora} · *{fila['fuente']}* — [{fila['titulo']}]({fila['link']})")
+                        titulo_seguro = _escapar_markdown_matematico(fila["titulo"])
+                        st.markdown(f"- {hora} · *{fila['fuente']}* — [{titulo_seguro}]({fila['link']})")
 
         except Exception as e:
             st.error(f"No se pudieron cargar los titulares: {e}")
