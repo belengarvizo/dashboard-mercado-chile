@@ -1239,17 +1239,24 @@ with tab_premercado:
         df_acciones = cargar_precios_acciones()
         indicadores = calcular_resumen_mercado(df_macro, df_acciones)
 
-        columnas = st.columns(len(indicadores))
-        for col, ind in zip(columnas, indicadores):
-            with col:
-                if ind["resultado"]:
-                    valor, cambio_pct, fecha = ind["resultado"]
-                    valor_texto = f"{valor:,.2f}" + (f" {ind['unidad']}" if ind["unidad"] else "")
-                    st.metric(ind["etiqueta"], valor_texto, f"{cambio_pct:+.2f}%")
-                    st.caption(f"al {pd.Timestamp(fecha).strftime('%d-%m-%Y')}")
-                else:
-                    st.metric(ind["etiqueta"], "—")
-                    st.caption("sin datos suficientes")
+        # En filas de a INDICADORES_POR_FILA (no todos en una sola fila): con
+        # 11 indicadores y etiquetas largas (ej. "IPSA (proxy ECH)", "Tasa de
+        # desempleo"), una sola fila de columnas angostas cortaba tanto las
+        # etiquetas como los valores.
+        INDICADORES_POR_FILA = 4
+        for inicio in range(0, len(indicadores), INDICADORES_POR_FILA):
+            grupo = indicadores[inicio:inicio + INDICADORES_POR_FILA]
+            columnas = st.columns(len(grupo))
+            for col, ind in zip(columnas, grupo):
+                with col:
+                    if ind["resultado"]:
+                        valor, cambio_pct, fecha = ind["resultado"]
+                        valor_texto = f"{valor:,.2f}" + (f" {ind['unidad']}" if ind["unidad"] else "")
+                        st.metric(ind["etiqueta"], valor_texto, f"{cambio_pct:+.2f}%")
+                        st.caption(f"al {pd.Timestamp(fecha).strftime('%d-%m-%Y')}")
+                    else:
+                        st.metric(ind["etiqueta"], "—")
+                        st.caption("sin datos suficientes")
 
         spread_2s10s = calcular_spread_2s10s(df_macro)
         if spread_2s10s:

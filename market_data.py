@@ -17,7 +17,7 @@ INDICADORES_PREMERCADO = [
     ("TPM EEUU", "macro", "Tasa de política monetaria de EEUU (Effective Federal Funds Rate)", "%"),
     ("IPSA (proxy ECH)", "accion", "ECH", ""),
     ("TPM Chile", "macro", "Tasa de política monetaria (TPM)", "%"),
-    ("IPC", "macro", "IPC (índice)", ""),
+    ("IPC", "macro", "IPC (índice, empalme base 2023=100)", ""),
     ("Imacec", "macro", "IMACEC", ""),
     ("Tasa de desempleo", "macro", "Tasa de desocupación nacional (INE, desestacionalizada)", "%"),
 ]

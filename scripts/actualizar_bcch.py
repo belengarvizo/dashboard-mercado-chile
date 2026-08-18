@@ -22,7 +22,12 @@ from models import get_session, SerieMacro, MetadataActualizacion
 SERIES_A_DESCARGAR = {
     "F073.TCO.PRE.Z.D": {"nombre": "Tipo de cambio observado", "frecuencia": "diaria"},
     "F022.TPM.TIN.D001.NO.Z.D": {"nombre": "Tasa de política monetaria (TPM)", "frecuencia": "diaria"},
-    "G073.IPC.IND.2018.M": {"nombre": "IPC (índice)", "frecuencia": "mensual"},
+    # El BCCh discontinuó la serie base 2018=100 (G073.IPC.IND.2018.M) en
+    # diciembre de 2023 al cambiar de año base; esta es la serie "empalmada"
+    # (spliced) que la reemplaza, con historia completa desde 2015 y datos
+    # vigentes - encontrada vía SearchSeries al notar que el IPC no se
+    # actualizaba en el dashboard.
+    "G073.IPC.IND.2023.M": {"nombre": "IPC (índice, empalme base 2023=100)", "frecuencia": "mensual"},
     "F032.IMC.IND.Z.Z.EP18.Z.Z.0.M": {"nombre": "IMACEC", "frecuencia": "mensual"},
     "F019.PPB.PRE.100.D": {"nombre": "Precio del cobre (USD/oz troy)", "frecuencia": "diaria"},
     "F022.SPC.TPR.D090.NO.Z.D": {"nombre": "Swap Promedio Cámara nominal (90 días)", "frecuencia": "diaria"},
