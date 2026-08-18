@@ -8,7 +8,7 @@ actualizado diariamente.
 
 ## Qué muestra
 
-El dashboard tiene 8 pestañas:
+El dashboard tiene 9 pestañas:
 
 1. **Brief Premercado** — para revisar antes de que abra la Bolsa de Santiago.
    Sección "Importante": % de cambio de la sesión más reciente de S&P 500,
@@ -205,6 +205,39 @@ El dashboard tiene 8 pestañas:
     - **Modelo de Descuento de Dividendos (Gordon Growth)**: precio implícito
       = D₁ / (r − g), con advertencia visible si g ≥ r (el modelo no es
       matemáticamente válido en ese caso).
+9. **Optimización de Portafolios** — Markowitz (1952) vía simulación de Monte
+   Carlo sobre las 30 acciones del IPSA:
+   - **5.000 portafolios simulados** con pesos aleatorios long-only (vía
+     distribución de Dirichlet, suman 100%), graficados como nube
+     volatilidad (X) vs. retorno esperado (Y), ambos anualizados, usando
+     retorno promedio y matriz de covarianza históricos (excluyendo días de
+     precio congelado). Se marcan el portafolio de **mínima varianza** y el
+     de **máximo Sharpe** (con la tasa libre de riesgo PDBC) dentro de esa
+     nube, con sus 10 posiciones más grandes en una tabla.
+   - **Constructor interactivo**: elige entre 3 y 8 acciones, asigna pesos
+     con sliders (deben sumar 100%, con validación visible), y el
+     portafolio se ubica en tiempo real en la misma nube, con su
+     volatilidad, retorno esperado, Sharpe y VaR histórico 95%.
+   - **Validación out-of-sample** (la pieza central): los pesos de mínima
+     varianza y máximo Sharpe se calculan usando solo la primera mitad
+     cronológica de los datos (in-sample), se congelan sin recalcular, y se
+     aplican sobre la segunda mitad (out-of-sample) — comparados contra un
+     portafolio ingenuo de peso igual (1/30) en el mismo período.
+
+   **Hallazgo:** en el período out-of-sample, el portafolio **ingenuo
+   (1/N)** tuvo el mejor Sharpe ratio real (2,30) — superando tanto al de
+   mínima varianza (2,11) como al de máximo Sharpe (2,26) calculados con
+   datos in-sample. Consistente con hallazgos documentados en la literatura
+   (DeMiguel, Garlappi & Uppal, 2009): la optimización de Markowitz no
+   siempre le gana a la diversificación ingenua fuera de muestra.
+
+   Nota metodológica visible: crítica clásica de **Michaud (1989)** sobre la
+   sensibilidad del modelo a la estimación del retorno esperado, con la
+   validación out-of-sample como demostración directa del problema.
+   Soluciones más robustas de la industria (Black-Litterman, matrices de
+   covarianza por régimen de mercado) quedan fuera del alcance del
+   proyecto — los pesos "óptimos" son ilustrativos del framework, no una
+   recomendación de inversión.
 
 Arriba de las pestañas, y también en la barra lateral, se muestra la fecha y
 hora de la última actualización de cada fuente de datos.

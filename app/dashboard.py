@@ -69,6 +69,9 @@ N_GANADORAS_PERDEDORAS_MOMENTUM = 10
 COSTO_TRANSACCION_MOMENTUM = 0.0015  # 15 puntos base por posición por rebalanceo
 N_PERMUTACIONES_MOMENTUM = 1000
 
+# Optimización de portafolios (Markowitz vía Monte Carlo, long-only).
+N_PORTAFOLIOS_MC = 5000
+
 st.title("Dashboard de mercado chileno")
 st.caption("Datos del Banco Central de Chile y Yahoo Finance, actualizados diariamente")
 
@@ -1002,6 +1005,135 @@ def calcular_momentum_ipsa(df_todas: pd.DataFrame) -> dict:
     }
 
 
+def _matriz_retornos_alineados(df_todas: pd.DataFrame, tickers: list) -> pd.DataFrame:
+    """DataFrame de retornos diarios "reales" (excluyendo días de precio
+    congelado) para los tickers dados, alineados por fecha: solo se
+    conservan los días donde TODOS tienen un retorno real ese día
+    (complete-case), para garantizar una matriz de covarianza válida."""
+    df_todas = df_todas.assign(fecha=pd.to_datetime(df_todas["fecha"]))
+    retornos = {}
+    for ticker in tickers:
+        serie = (
+            df_todas[df_todas["ticker"] == ticker]
+            .sort_values("fecha")
+            .set_index("fecha")["precio_cierre"]
+        )
+        retornos[ticker.replace(".SN", "")] = calcular_retornos_reales(serie)
+    return pd.DataFrame(retornos).dropna()
+
+
+def _simular_portafolios_mc(mu_anual: pd.Series, cov_anual: pd.DataFrame, rf: float, rng: np.random.Generator) -> dict:
+    """N_PORTAFOLIOS_MC portafolios long-only (pesos vía Dirichlet, suman 1)
+    sobre los activos de mu_anual/cov_anual. Devuelve arrays de pesos,
+    retorno, volatilidad y Sharpe, más los índices del portafolio de mínima
+    varianza y de máximo Sharpe DENTRO de la nube simulada."""
+    n_activos = len(mu_anual)
+    pesos = rng.dirichlet(np.ones(n_activos), size=N_PORTAFOLIOS_MC)
+
+    retorno = pesos @ mu_anual.values
+    varianza = np.einsum("ij,jk,ik->i", pesos, cov_anual.values, pesos)
+    volatilidad = np.sqrt(np.maximum(varianza, 0))
+    with np.errstate(divide="ignore", invalid="ignore"):
+        sharpe = np.where(volatilidad > 0, (retorno - rf) / volatilidad, -np.inf)
+
+    idx_min_var = int(np.argmin(volatilidad))
+    idx_max_sharpe = int(np.argmax(sharpe))
+
+    return {
+        "pesos": pesos,
+        "retorno": retorno,
+        "volatilidad": volatilidad,
+        "sharpe": sharpe,
+        "idx_min_var": idx_min_var,
+        "idx_max_sharpe": idx_max_sharpe,
+    }
+
+
+@st.cache_data(ttl=3600)
+def calcular_optimizacion_portafolios(df_todas: pd.DataFrame, df_macro: pd.DataFrame) -> dict:
+    """Simulación de Monte Carlo (Markowitz, long-only) sobre las 30 acciones
+    del IPSA, más una validación out-of-sample: los pesos de mínima varianza
+    y máximo Sharpe se calculan SOLO con la primera mitad cronológica de los
+    datos (in-sample), se congelan, y se aplican sobre la segunda mitad
+    (out-of-sample) para medir el desempeño real — comparado contra un
+    portafolio ingenuo de peso igual (1/30) en el mismo período."""
+    df_retornos = _matriz_retornos_alineados(df_todas, TICKERS_IPSA)
+    tickers_cols = list(df_retornos.columns)
+    n_activos = len(tickers_cols)
+
+    df_macro = df_macro.assign(fecha=pd.to_datetime(df_macro["fecha"]))
+    pdbc = df_macro[df_macro["nombre"] == "Tasa libre de riesgo CLP (PDBC 14 días)"].sort_values("fecha")["valor"]
+    rf = float(pdbc.iloc[-1]) / 100 if len(pdbc) else 0.0
+
+    rng = np.random.default_rng(42)  # semilla fija para reproducibilidad
+
+    # --- Nube completa (todo el histórico disponible) ---
+    mu_anual = df_retornos.mean() * 252
+    cov_anual = df_retornos.cov() * 252
+    sim = _simular_portafolios_mc(mu_anual, cov_anual, rf, rng)
+
+    pesos_min_var = pd.Series(sim["pesos"][sim["idx_min_var"]], index=tickers_cols)
+    pesos_max_sharpe = pd.Series(sim["pesos"][sim["idx_max_sharpe"]], index=tickers_cols)
+
+    resultado = {
+        "tickers": tickers_cols,
+        "n_dias": len(df_retornos),
+        "df_retornos": df_retornos,
+        "rf": rf,
+        "mu_anual": mu_anual,
+        "cov_anual": cov_anual,
+        "vol_mc": sim["volatilidad"],
+        "retorno_mc": sim["retorno"],
+        "sharpe_mc": sim["sharpe"],
+        "vol_min_var": float(sim["volatilidad"][sim["idx_min_var"]]),
+        "retorno_min_var": float(sim["retorno"][sim["idx_min_var"]]),
+        "sharpe_min_var": float(sim["sharpe"][sim["idx_min_var"]]),
+        "pesos_min_var": pesos_min_var,
+        "vol_max_sharpe": float(sim["volatilidad"][sim["idx_max_sharpe"]]),
+        "retorno_max_sharpe": float(sim["retorno"][sim["idx_max_sharpe"]]),
+        "sharpe_max_sharpe": float(sim["sharpe"][sim["idx_max_sharpe"]]),
+        "pesos_max_sharpe": pesos_max_sharpe,
+    }
+
+    # --- Validación out-of-sample ---
+    n_dias = len(df_retornos)
+    mitad = n_dias // 2
+    if mitad >= n_activos + 5:  # margen mínimo para una matriz de covarianza razonable
+        df_in = df_retornos.iloc[:mitad]
+        df_out = df_retornos.iloc[mitad:]
+
+        mu_in = df_in.mean() * 252
+        cov_in = df_in.cov() * 252
+        sim_in = _simular_portafolios_mc(mu_in, cov_in, rf, rng)
+
+        pesos_min_var_in = sim_in["pesos"][sim_in["idx_min_var"]]
+        pesos_max_sharpe_in = sim_in["pesos"][sim_in["idx_max_sharpe"]]
+        pesos_igual_in = np.full(n_activos, 1 / n_activos)
+
+        mu_out = df_out.mean() * 252
+        cov_out = df_out.cov() * 252
+
+        def _metricas_oos(pesos):
+            ret = float(pesos @ mu_out.values)
+            var = float(pesos @ cov_out.values @ pesos)
+            vol = var ** 0.5
+            sharpe = (ret - rf) / vol if vol > 0 else None
+            return {"retorno": ret, "volatilidad": vol, "sharpe": sharpe}
+
+        resultado["oos"] = {
+            "fecha_corte": df_retornos.index[mitad],
+            "n_in": mitad,
+            "n_out": n_dias - mitad,
+            "Mínima varianza (in-sample)": _metricas_oos(pesos_min_var_in),
+            "Máximo Sharpe (in-sample)": _metricas_oos(pesos_max_sharpe_in),
+            "Ingenuo (1/N)": _metricas_oos(pesos_igual_in),
+        }
+    else:
+        resultado["oos"] = None
+
+    return resultado
+
+
 # --- Sidebar: info de última actualización ---
 with st.sidebar:
     st.subheader("Última actualización")
@@ -1028,11 +1160,11 @@ except Exception:
 
 (
     tab_premercado, tab_macro, tab_acciones, tab_riesgo,
-    tab_benchmark, tab_tpm, tab_momentum, tab_calculadora,
+    tab_benchmark, tab_tpm, tab_momentum, tab_calculadora, tab_portafolios,
 ) = st.tabs([
     "Brief Premercado", "Indicadores macro", "Acciones IPSA", "Riesgo",
     "Benchmark", "TPM y Tipo de Cambio", "Momentum IPSA",
-    "Calculadora Financiera",
+    "Calculadora Financiera", "Optimización de Portafolios",
 ])
 
 # --- Tab 0: Brief Premercado ---
@@ -2096,3 +2228,211 @@ with tab_calculadora:
 
     except Exception as e:
         st.error(f"No se pudo calcular la calculadora financiera: {e}")
+
+# --- Tab 8: Optimización de Portafolios ---
+with tab_portafolios:
+    try:
+        st.subheader("Simulación de Monte Carlo — frontera eficiente")
+        st.caption(
+            f"{N_PORTAFOLIOS_MC:,} portafolios con pesos aleatorios (suman 100%, sin "
+            "posiciones cortas) entre las 30 acciones del IPSA, usando retorno promedio "
+            "histórico y matriz de covarianza anualizados — excluyendo días de precio "
+            "congelado (mismo filtro que el resto del dashboard). Cada punto es un "
+            "portafolio simulado."
+        )
+
+        df_acciones = cargar_precios_acciones()
+        df_macro = cargar_series_macro()
+        resultado_opt = calcular_optimizacion_portafolios(df_acciones, df_macro)
+
+        fig_mc = go.Figure()
+        fig_mc.add_trace(go.Scatter(
+            x=resultado_opt["vol_mc"] * 100, y=resultado_opt["retorno_mc"] * 100,
+            mode="markers",
+            marker=dict(
+                size=5, color=resultado_opt["sharpe_mc"],
+                colorscale=[[0, "#fcfcfb"], [1, "#2a78d6"]],
+                colorbar=dict(title="Sharpe"), opacity=0.6,
+            ),
+            name="Portafolios simulados",
+            hovertemplate="Vol: %{x:.2f}%<br>Retorno: %{y:.2f}%<extra></extra>",
+        ))
+        fig_mc.add_trace(go.Scatter(
+            x=[resultado_opt["vol_min_var"] * 100], y=[resultado_opt["retorno_min_var"] * 100],
+            mode="markers", marker=dict(size=18, color="#0ca30c", symbol="star", line=dict(width=1, color="black")),
+            name="Mínima varianza",
+        ))
+        fig_mc.add_trace(go.Scatter(
+            x=[resultado_opt["vol_max_sharpe"] * 100], y=[resultado_opt["retorno_max_sharpe"] * 100],
+            mode="markers", marker=dict(size=18, color="#e34948", symbol="star", line=dict(width=1, color="black")),
+            name="Máximo Sharpe",
+        ))
+        fig_mc.update_layout(
+            xaxis_title="Volatilidad anualizada (%)", yaxis_title="Retorno esperado anualizado (%)",
+            height=550,
+        )
+        # El gráfico se muestra una sola vez, más abajo — después de que el
+        # constructor interactivo decida si agrega o no el punto del usuario,
+        # para no duplicar el mismo gráfico dos veces en la pantalla.
+
+        col_mv, col_ms = st.columns(2)
+        with col_mv:
+            st.markdown(
+                f"**⭐ Mínima varianza** — vol {resultado_opt['vol_min_var'] * 100:.2f}%, "
+                f"retorno {resultado_opt['retorno_min_var'] * 100:.2f}%, "
+                f"Sharpe {resultado_opt['sharpe_min_var']:.2f}"
+            )
+            st.markdown("Top 10 posiciones:")
+            top_mv = resultado_opt["pesos_min_var"].sort_values(ascending=False).head(10) * 100
+            st.dataframe(top_mv.to_frame("Peso (%)").style.format("{:.1f}%"), use_container_width=True)
+        with col_ms:
+            st.markdown(
+                f"**⭐ Máximo Sharpe** — vol {resultado_opt['vol_max_sharpe'] * 100:.2f}%, "
+                f"retorno {resultado_opt['retorno_max_sharpe'] * 100:.2f}%, "
+                f"Sharpe {resultado_opt['sharpe_max_sharpe']:.2f}"
+            )
+            st.markdown("Top 10 posiciones:")
+            top_ms = resultado_opt["pesos_max_sharpe"].sort_values(ascending=False).head(10) * 100
+            st.dataframe(top_ms.to_frame("Peso (%)").style.format("{:.1f}%"), use_container_width=True)
+
+        st.divider()
+        st.subheader("Constructor interactivo de portafolio")
+        st.caption(
+            "Elige entre 3 y 8 acciones y asigna sus pesos — deben sumar 100%. Tu "
+            "portafolio se ubica en tiempo real dentro de la misma nube de arriba."
+        )
+
+        tickers_construir = st.multiselect(
+            "Elige entre 3 y 8 acciones", resultado_opt["tickers"],
+            default=resultado_opt["tickers"][:5], key="construir_tickers",
+        )
+
+        if len(tickers_construir) < 3 or len(tickers_construir) > 8:
+            st.warning(f"⚠️ Elige entre 3 y 8 acciones (llevas {len(tickers_construir)}).")
+            st.plotly_chart(fig_mc, use_container_width=True)
+        else:
+            peso_default = round(100 / len(tickers_construir), 1)
+            cols_pesos = st.columns(len(tickers_construir))
+            pesos_construidos = {}
+            for col, ticker in zip(cols_pesos, tickers_construir):
+                key_slider = f"peso_construir_{ticker}"
+                st.session_state.setdefault(key_slider, peso_default)
+                with col:
+                    pesos_construidos[ticker] = st.slider(ticker, 0.0, 100.0, step=1.0, key=key_slider)
+
+            suma_pesos = sum(pesos_construidos.values())
+            if abs(suma_pesos - 100) > 0.5:
+                st.error(f"⚠️ Los pesos suman {suma_pesos:.1f}% — deben sumar 100%. Ajusta los sliders.")
+                st.plotly_chart(fig_mc, use_container_width=True)
+            else:
+                st.success(f"✅ Los pesos suman {suma_pesos:.1f}%")
+
+                pesos_vector = pd.Series(0.0, index=resultado_opt["tickers"])
+                for ticker, peso in pesos_construidos.items():
+                    pesos_vector[ticker] = peso / 100
+
+                ret_custom = float(pesos_vector.values @ resultado_opt["mu_anual"].values)
+                var_custom = float(pesos_vector.values @ resultado_opt["cov_anual"].values @ pesos_vector.values)
+                vol_custom = var_custom ** 0.5
+                sharpe_custom = (ret_custom - resultado_opt["rf"]) / vol_custom if vol_custom > 0 else None
+
+                pesos_array_construir = np.array([pesos_construidos[t] / 100 for t in tickers_construir])
+                retornos_diarios_custom = resultado_opt["df_retornos"][tickers_construir].to_numpy() @ pesos_array_construir
+                var_hist_95_custom = -np.percentile(retornos_diarios_custom, 5) * 100
+
+                fig_mc.add_trace(go.Scatter(
+                    x=[vol_custom * 100], y=[ret_custom * 100],
+                    mode="markers", marker=dict(size=20, color="#eda100", symbol="diamond", line=dict(width=1, color="black")),
+                    name="Tu portafolio",
+                ))
+                st.plotly_chart(fig_mc, use_container_width=True)
+
+                col_c1, col_c2, col_c3, col_c4 = st.columns(4)
+                col_c1.metric("Volatilidad anualizada", f"{vol_custom * 100:.2f}%")
+                col_c2.metric("Retorno esperado anualizado", f"{ret_custom * 100:.2f}%")
+                col_c3.metric("Sharpe ratio", f"{sharpe_custom:.2f}" if sharpe_custom is not None else "—")
+                col_c4.metric("VaR histórico 95% (diario)", f"{var_hist_95_custom:.2f}%")
+
+        st.divider()
+        st.subheader("Validación out-of-sample")
+        st.caption(
+            "La parte más importante: los pesos de \"Mínima varianza\" y \"Máximo "
+            "Sharpe\" de esta sección se calculan usando **solo la primera mitad "
+            "cronológica** de los datos disponibles (in-sample), se congelan sin "
+            "recalcular, y se aplican sobre la **segunda mitad** (out-of-sample) para "
+            "medir el desempeño real que habrían tenido — comparados contra un "
+            "portafolio ingenuo de peso igual (1/30) en el mismo período."
+        )
+
+        oos = resultado_opt["oos"]
+        if oos is None:
+            st.info("No hay suficientes datos históricos para dividir en dos mitades y validar out-of-sample.")
+        else:
+            st.caption(
+                f"Corte in-sample/out-of-sample: {pd.Timestamp(oos['fecha_corte']).strftime('%d-%m-%Y')} "
+                f"({oos['n_in']} días in-sample, {oos['n_out']} días out-of-sample)."
+            )
+
+            filas_oos = []
+            for nombre, m in oos.items():
+                if isinstance(m, dict) and "retorno" in m:
+                    filas_oos.append({
+                        "Portafolio": nombre,
+                        "Retorno OOS anualizado (%)": m["retorno"] * 100,
+                        "Volatilidad OOS anualizada (%)": m["volatilidad"] * 100,
+                        "Sharpe OOS": m["sharpe"] if m["sharpe"] is not None else float("nan"),
+                    })
+            df_oos = pd.DataFrame(filas_oos).set_index("Portafolio")
+            st.dataframe(
+                df_oos.style.format({
+                    "Retorno OOS anualizado (%)": "{:+.2f}%",
+                    "Volatilidad OOS anualizada (%)": "{:.2f}%",
+                    "Sharpe OOS": "{:.2f}",
+                }),
+                use_container_width=True,
+            )
+
+            ganador_sharpe = df_oos["Sharpe OOS"].idxmax()
+            if ganador_sharpe == "Ingenuo (1/N)":
+                st.warning(
+                    f"📊 **Resultado:** en este período out-of-sample, el portafolio "
+                    f"**ingenuo (1/N)** tuvo el mejor Sharpe ratio real "
+                    f"({df_oos.loc['Ingenuo (1/N)', 'Sharpe OOS']:.2f}), superando a los "
+                    f"portafolios \"óptimos\" calculados con datos in-sample. Esto es "
+                    "consistente con hallazgos documentados en la literatura (ej. "
+                    "DeMiguel, Garlappi & Uppal, 2009): la optimización de Markowitz es "
+                    "muy sensible al error de estimación, y en la práctica frecuentemente "
+                    "no le gana a la diversificación ingenua fuera de muestra."
+                )
+            else:
+                st.success(
+                    f"📊 **Resultado:** en este período out-of-sample, **\"{ganador_sharpe}\"** "
+                    f"tuvo el mejor Sharpe ratio real ({df_oos.loc[ganador_sharpe, 'Sharpe OOS']:.2f}), "
+                    "superando al portafolio ingenuo (1/N) — en este caso particular, la "
+                    "optimización in-sample sí se tradujo en mejor desempeño real. Esto no "
+                    "garantiza que se repita en otros períodos."
+                )
+
+        st.divider()
+        st.info(
+            "**Nota metodológica.** Este es el modelo clásico de **Markowitz (1952)**: "
+            "maximizar retorno esperado para un nivel de riesgo dado (o minimizar riesgo "
+            "para un retorno dado), usando la media y covarianza históricas como "
+            "estimadores del futuro. La **crítica clásica de Michaud (1989)** — el "
+            "\"error-maximizador\" de Markowitz — es que el modelo es muy sensible a la "
+            "estimación del retorno esperado: con solo unos años de historia, esas "
+            "estimaciones tienen alta incertidumbre, y pequeños cambios en los inputs "
+            "pueden producir carteras \"óptimas\" muy distintas. La validación "
+            "out-of-sample de arriba es precisamente una forma directa de exponer ese "
+            "problema. Los portafolios de mínima varianza y máximo Sharpe se identifican "
+            f"por búsqueda entre los {N_PORTAFOLIOS_MC:,} portafolios simulados (Monte "
+            "Carlo), no mediante un solver de optimización cuadrática exacto — una "
+            "aproximación adicional. Soluciones más robustas usadas en la industria "
+            "(Black-Litterman, matrices de covarianza por régimen de mercado, "
+            "shrinkage estimators) quedan fuera del alcance de este proyecto. **Los "
+            "pesos \"óptimos\" mostrados son ilustrativos del framework, no una "
+            "recomendación de inversión.**"
+        )
+
+    except Exception as e:
+        st.error(f"No se pudo calcular la optimización de portafolios: {e}")
