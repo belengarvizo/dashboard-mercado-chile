@@ -55,9 +55,17 @@ def construir_prompt(titulares: list[dict], indicadores: list[dict]) -> str:
     for ind in indicadores:
         if ind["resultado"] is None:
             continue
-        valor, cambio_pct, _fecha = ind["resultado"]
+        valor, cambio_pct, _fecha, cambio_absoluto = ind["resultado"]
         unidad = f" {ind['unidad']}" if ind["unidad"] else ""
-        lineas_indicadores.append(f"- {ind['etiqueta']}: {valor:,.2f}{unidad} ({cambio_pct:+.2f}% vs. sesión anterior)")
+        # Si el indicador ya es una tasa/porcentaje, el cambio se reporta en
+        # puntos porcentuales (ver market_data.calcular_cambio_reciente) para
+        # que Gemini no reciba, ej., "-18,8%" cuando en realidad la tasa bajó
+        # 0,82 puntos porcentuales.
+        if ind["unidad"] == "%":
+            texto_cambio = f"{cambio_absoluto:+.2f} pp vs. sesión anterior"
+        else:
+            texto_cambio = f"{cambio_pct:+.2f}% vs. sesión anterior"
+        lineas_indicadores.append(f"- {ind['etiqueta']}: {valor:,.2f}{unidad} ({texto_cambio})")
 
     lineas_titulares = [f"- [{t['fuente']}] {t['titulo']}" for t in titulares]
 

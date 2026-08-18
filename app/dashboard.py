@@ -1246,13 +1246,22 @@ with tab_premercado:
         INDICADORES_POR_FILA = 4
         for inicio in range(0, len(indicadores), INDICADORES_POR_FILA):
             grupo = indicadores[inicio:inicio + INDICADORES_POR_FILA]
-            columnas = st.columns(len(grupo))
+            # Siempre INDICADORES_POR_FILA columnas (no len(grupo)): así la
+            # última fila, aunque tenga menos elementos, usa columnas del
+            # mismo ancho que las filas de arriba y queda alineada con ellas
+            # en vez de repartir el ancho completo en menos columnas más anchas.
+            columnas = st.columns(INDICADORES_POR_FILA)
             for col, ind in zip(columnas, grupo):
                 with col:
                     if ind["resultado"]:
-                        valor, cambio_pct, fecha = ind["resultado"]
+                        valor, cambio_pct, fecha, cambio_absoluto = ind["resultado"]
                         valor_texto = f"{valor:,.2f}" + (f" {ind['unidad']}" if ind["unidad"] else "")
-                        st.metric(ind["etiqueta"], valor_texto, f"{cambio_pct:+.2f}%")
+                        # Si el indicador ya es una tasa/porcentaje (ej. TPM,
+                        # inflación anual), mostrar puntos porcentuales: el "%
+                        # de cambio" de una tasa (ej. de 4,34% a 3,52% = -18,8%)
+                        # es confuso, lo esperable es el cambio en pp (-0,82 pp).
+                        delta_texto = f"{cambio_absoluto:+.2f} pp" if ind["unidad"] == "%" else f"{cambio_pct:+.2f}%"
+                        st.metric(ind["etiqueta"], valor_texto, delta_texto)
                         st.caption(f"al {pd.Timestamp(fecha).strftime('%d-%m-%Y')}")
                     else:
                         st.metric(ind["etiqueta"], "—")

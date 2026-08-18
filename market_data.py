@@ -17,18 +17,26 @@ INDICADORES_PREMERCADO = [
     ("TPM EEUU", "macro", "Tasa de política monetaria de EEUU (Effective Federal Funds Rate)", "%"),
     ("IPSA (proxy ECH)", "accion", "ECH", ""),
     ("TPM Chile", "macro", "Tasa de política monetaria (TPM)", "%"),
-    ("IPC", "macro", "IPC (índice, empalme base 2023=100)", ""),
+    ("IPC (inflación anual)", "macro", "IPC variación 12 meses (inflación anual, empalme base 2023=100)", "%"),
     ("Imacec", "macro", "IMACEC", ""),
     ("Tasa de desempleo", "macro", "Tasa de desocupación nacional (INE, desestacionalizada)", "%"),
 ]
 
 
-def calcular_cambio_reciente(serie: pd.Series) -> tuple[float, float, object] | None:
-    """(valor actual, % de cambio vs la sesión anterior, fecha) a partir de una
-    serie ordenada por fecha. Descarta observaciones NaN (dato no disponible,
-    ej. una sesión de mercado todavía incompleta) y usa el último valor
-    VÁLIDO junto con su fecha real — nunca devuelve NaN, y nunca junta un
-    dato viejo con la fecha de hoy."""
+def calcular_cambio_reciente(serie: pd.Series) -> tuple[float, float, object, float] | None:
+    """(valor actual, % de cambio vs la sesión anterior, fecha, cambio
+    absoluto) a partir de una serie ordenada por fecha. Descarta
+    observaciones NaN (dato no disponible, ej. una sesión de mercado
+    todavía incompleta) y usa el último valor VÁLIDO junto con su fecha
+    real — nunca devuelve NaN, y nunca junta un dato viejo con la fecha de
+    hoy.
+
+    El cambio absoluto es necesario además del % porque para un indicador
+    que YA es una tasa/porcentaje (ej. TPM, inflación anual), el "% de
+    cambio" es el cambio porcentual de la tasa misma (ej. de 4,34% a 3,52%
+    es -18,8%), no el cambio en puntos porcentuales (-0,82 pp) que es lo
+    que normalmente se espera ver para ese tipo de indicador — quien llama
+    decide cuál mostrar según la unidad."""
     serie = serie.dropna()
     if len(serie) < 2:
         return None
@@ -37,7 +45,8 @@ def calcular_cambio_reciente(serie: pd.Series) -> tuple[float, float, object] | 
     if not valor_anterior:
         return None
     cambio_pct = (valor_actual / valor_anterior - 1) * 100
-    return float(valor_actual), float(cambio_pct), serie.index[-1]
+    cambio_absoluto = valor_actual - valor_anterior
+    return float(valor_actual), float(cambio_pct), serie.index[-1], float(cambio_absoluto)
 
 
 def calcular_resumen_mercado(df_macro: pd.DataFrame, df_acciones: pd.DataFrame) -> list[dict]:

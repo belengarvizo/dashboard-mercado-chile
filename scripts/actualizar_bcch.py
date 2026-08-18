@@ -28,6 +28,10 @@ SERIES_A_DESCARGAR = {
     # vigentes - encontrada vía SearchSeries al notar que el IPC no se
     # actualizaba en el dashboard.
     "G073.IPC.IND.2023.M": {"nombre": "IPC (índice, empalme base 2023=100)", "frecuencia": "mensual"},
+    # Variación a 12 meses del IPC: la cifra de "inflación anual" que
+    # normalmente se reporta (distinta del nivel del índice o de su
+    # variación mensual, que pueden confundirse con "la inflación").
+    "G073.IPC.V12.2023.M": {"nombre": "IPC variación 12 meses (inflación anual, empalme base 2023=100)", "frecuencia": "mensual"},
     "F032.IMC.IND.Z.Z.EP18.Z.Z.0.M": {"nombre": "IMACEC", "frecuencia": "mensual"},
     "F019.PPB.PRE.100.D": {"nombre": "Precio del cobre (USD/oz troy)", "frecuencia": "diaria"},
     "F022.SPC.TPR.D090.NO.Z.D": {"nombre": "Swap Promedio Cámara nominal (90 días)", "frecuencia": "diaria"},
