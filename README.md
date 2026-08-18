@@ -8,7 +8,7 @@ actualizado diariamente.
 
 ## Qué muestra
 
-El dashboard tiene 9 pestañas:
+El dashboard tiene 10 pestañas:
 
 1. **Brief Premercado** — para revisar antes de que abra la Bolsa de Santiago.
    Sección "Importante": % de cambio de la sesión más reciente de S&P 500,
@@ -168,6 +168,26 @@ El dashboard tiene 9 pestañas:
    1,03, p = 0,31 — no significativo al 5%), y el resultado real cae en el
    **percentil 88,5 de 1.000 mezclas aleatorias** — elevado, pero sin cruzar
    el umbral de 95% para considerarse distinguible del azar.
+10. **Calculadora Financiera** — tres modelos interactivos donde el usuario
+    ingresa sus propios valores, sin depender de datos fundamentales de la
+    base:
+    - **CAPM interactivo**: sliders para Rf, Beta y prima de mercado, con el
+      costo de capital resultante en tiempo real. Un selector opcional
+      precarga la Rf (PDBC) y el Beta real de cualquiera de las 30 acciones
+      del IPSA como punto de partida, que el usuario puede seguir ajustando
+      libremente.
+    - **Dodd-Graham Value Screener**: los 10 criterios clásicos (adaptados de
+      *Security Analysis*, Dodd & Graham 1934, y *The Intelligent Investor*,
+      cap. 14) — liquidez corriente, deuda vs. capital de trabajo,
+      estabilidad y crecimiento de utilidades, P/E y P/B moderados, el atajo
+      P/E×P/B ≤ 22,5, rendimiento de utilidades vs. bonos AAA, y dividendo
+      sostenible — cada uno mostrado como cumple/no cumple con su fórmula y
+      una explicación breve. Nota visible: estos criterios se diseñaron para
+      el mercado de EEUU de mediados del siglo XX; aplicarlos sin ajuste a un
+      mercado emergente como Chile es una simplificación.
+    - **Modelo de Descuento de Dividendos (Gordon Growth)**: precio implícito
+      = D₁ / (r − g), con advertencia visible si g ≥ r (el modelo no es
+      matemáticamente válido en ese caso).
 
 Arriba de las pestañas, y también en la barra lateral, se muestra la fecha y
 hora de la última actualización de cada fuente de datos.

@@ -136,6 +136,112 @@ def calcular_spread_2s10s(df_macro: pd.DataFrame) -> dict | None:
     }
 
 
+def evaluar_graham(
+    precio, eps, pe_5y, dividendo, valor_libro, deuda_total,
+    activos_corrientes, pasivos_corrientes, yield_aaa, eps_historico,
+) -> list[dict]:
+    """Evalúa los 10 criterios clásicos de Graham (adaptación al estilo del
+    Screener de "The Intelligent Investor", cap. 14) sobre los inputs
+    ingresados por el usuario. Función pura, sin dependencias de Streamlit."""
+    criterios = []
+
+    liquidez = activos_corrientes / pasivos_corrientes if pasivos_corrientes else None
+    criterios.append({
+        "criterio": "1. Liquidez corriente ≥ 2",
+        "explicacion": "Los activos corrientes deben ser al menos el doble de los "
+                       "pasivos corrientes — mide la solidez financiera de corto plazo.",
+        "valor": f"Activos/Pasivos corrientes = {liquidez:.2f}" if liquidez is not None else "—",
+        "cumple": liquidez is not None and liquidez >= 2,
+    })
+
+    capital_trabajo = activos_corrientes - pasivos_corrientes
+    criterios.append({
+        "criterio": "2. Deuda de largo plazo ≤ capital de trabajo neto",
+        "explicacion": "La deuda total no debería superar el capital de trabajo neto "
+                       "(activos corrientes menos pasivos corrientes).",
+        "valor": f"Deuda {deuda_total:,.0f} vs. capital de trabajo {capital_trabajo:,.0f}",
+        "cumple": deuda_total <= capital_trabajo,
+    })
+
+    criterios.append({
+        "criterio": "3. Estabilidad de utilidades",
+        "explicacion": "Utilidades positivas tanto hoy como hace 10 años. Simplificación: "
+                       "Graham exige ganancias positivas en cada uno de los últimos 10 años, "
+                       "acá solo se verifican los dos extremos del período.",
+        "valor": f"EPS actual {eps:.2f}, EPS hace 10 años {eps_historico:.2f}",
+        "cumple": eps > 0 and eps_historico > 0,
+    })
+
+    criterios.append({
+        "criterio": "4. Historial de dividendos",
+        "explicacion": "La empresa paga dividendos actualmente. Simplificación: Graham "
+                       "exige un historial ininterrumpido de al menos 20 años; acá solo "
+                       "se verifica el dividendo del último período.",
+        "valor": f"Dividendo por acción = {dividendo:.2f}",
+        "cumple": dividendo > 0,
+    })
+
+    crecimiento = (eps - eps_historico) / eps_historico if eps_historico else None
+    criterios.append({
+        "criterio": "5. Crecimiento de utilidades ≥ 33% en 10 años",
+        "explicacion": "El EPS actual debe ser al menos un tercio mayor que el EPS de "
+                       "hace 10 años (Graham compara promedios de 3 años en cada punta; "
+                       "acá se usan los valores puntuales ingresados).",
+        "valor": f"{crecimiento:+.1%}" if crecimiento is not None else "—",
+        "cumple": crecimiento is not None and crecimiento >= 0.33,
+    })
+
+    criterios.append({
+        "criterio": "6. P/E moderado (≤ 15)",
+        "explicacion": "El precio no debería superar 15 veces las utilidades promedio "
+                       "de los últimos años.",
+        "valor": f"P/E promedio 5 años = {pe_5y:.2f}",
+        "cumple": pe_5y is not None and pe_5y > 0 and pe_5y <= 15,
+    })
+
+    pb = precio / valor_libro if valor_libro else None
+    criterios.append({
+        "criterio": "7. P/B moderado (≤ 1,5)",
+        "explicacion": "El precio no debería superar 1,5 veces el valor libro por acción.",
+        "valor": f"P/B = {pb:.2f}" if pb is not None else "—",
+        "cumple": pb is not None and pb <= 1.5,
+    })
+
+    pe_pb = pe_5y * pb if (pe_5y is not None and pb is not None) else None
+    criterios.append({
+        "criterio": "8. P/E × P/B ≤ 22,5",
+        "explicacion": "El atajo combinado de Graham: si el P/E es bajo se tolera un P/B "
+                       "más alto (y viceversa), mientras el producto no supere 22,5 "
+                       "(≈ 15 × 1,5).",
+        "valor": f"{pe_pb:.2f}" if pe_pb is not None else "—",
+        "cumple": pe_pb is not None and pe_pb <= 22.5,
+    })
+
+    rendimiento_utilidades = 100 / pe_5y if pe_5y else None
+    umbral_aaa = (2 / 3) * yield_aaa
+    criterios.append({
+        "criterio": "9. Rendimiento de utilidades ≥ 2/3 del yield de bonos AAA",
+        "explicacion": "El rendimiento de utilidades (inverso del P/E, en %) debe ser al "
+                       "menos dos tercios del rendimiento de un bono corporativo AAA — "
+                       "compensación mínima exigible por el riesgo accionario.",
+        "valor": (
+            f"{rendimiento_utilidades:.2f}% vs. umbral {umbral_aaa:.2f}%"
+            if rendimiento_utilidades is not None else "—"
+        ),
+        "cumple": rendimiento_utilidades is not None and rendimiento_utilidades >= umbral_aaa,
+    })
+
+    criterios.append({
+        "criterio": "10. Dividendo sostenible (payout ≤ 100%)",
+        "explicacion": "El dividendo por acción no debería superar las utilidades por "
+                       "acción del mismo período.",
+        "valor": f"Dividendo {dividendo:.2f} vs. EPS {eps:.2f}",
+        "cumple": eps > 0 and dividendo <= eps,
+    })
+
+    return criterios
+
+
 @st.cache_data(ttl=3600)
 def calcular_crp_y_prima_mercado(df_macro: pd.DataFrame, df_acciones: pd.DataFrame) -> dict:
     """Tasa libre de riesgo local de corto plazo (PDBC, la base del CAPM),
@@ -858,10 +964,11 @@ except Exception:
 
 (
     tab_premercado, tab_macro, tab_acciones, tab_riesgo, tab_magnificas,
-    tab_benchmark, tab_event_study, tab_backtester, tab_momentum,
+    tab_benchmark, tab_event_study, tab_backtester, tab_momentum, tab_calculadora,
 ) = st.tabs([
     "Brief Premercado", "Indicadores macro", "Acciones IPSA", "Riesgo", "7 Magníficas",
     "Benchmark", "Event Study TPM", "Backtester: Estrategia TPM", "Momentum IPSA",
+    "Calculadora Financiera",
 ])
 
 # --- Tab 0: Brief Premercado ---
@@ -1651,3 +1758,166 @@ with tab_momentum:
 
     except Exception as e:
         st.error(f"No se pudo calcular la estrategia de momentum: {e}")
+
+# --- Tab 9: Calculadora Financiera ---
+with tab_calculadora:
+    try:
+        st.caption(
+            "Tres modelos interactivos de valorización clásicos. A diferencia del resto "
+            "del dashboard, estos NO dependen de datos fundamentales descargados — el "
+            "usuario ingresa sus propios valores."
+        )
+
+        # ============ 1. CAPM interactivo ============
+        st.subheader("1. CAPM interactivo")
+        st.markdown(
+            "**Fórmula:** Costo de capital = Rf + Beta × Prima de mercado. El CAPM "
+            "estima el retorno anual que un inversionista debería exigir por invertir "
+            "en una acción, según su riesgo sistemático (Beta) relativo al mercado — "
+            "el mismo modelo que ya usa el heatmap de \"Acciones IPSA\", acá con "
+            "inputs libres para explorar escenarios."
+        )
+
+        OPCION_SIN_PRECARGA = "(ninguno — ajustar manualmente)"
+
+        def _precargar_capm():
+            ticker_sel = st.session_state.get("capm_preload_selector")
+            if not ticker_sel or ticker_sel == OPCION_SIN_PRECARGA:
+                return
+            try:
+                df_macro_c = cargar_series_macro()
+                df_acciones_c = cargar_precios_acciones()
+                df_resumen_c = calcular_resumen_ipsa(df_acciones_c, df_macro_c)
+                capm_insumos_c = calcular_crp_y_prima_mercado(df_macro_c, df_acciones_c)
+                if ticker_sel in df_resumen_c.index:
+                    beta_real = df_resumen_c.loc[ticker_sel, "Beta"]
+                    if pd.notna(beta_real):
+                        st.session_state["capm_beta_slider"] = float(min(max(beta_real, 0.0), 3.0))
+                if capm_insumos_c["rf_cl"] is not None:
+                    st.session_state["capm_rf_slider"] = float(min(max(capm_insumos_c["rf_cl"], 0.0), 15.0))
+                if capm_insumos_c["prima_mercado_local"] is not None:
+                    st.session_state["capm_prima_slider"] = float(
+                        min(max(capm_insumos_c["prima_mercado_local"], 0.0), 15.0)
+                    )
+            except Exception:
+                pass  # si falla la precarga, el usuario igual puede ajustar los sliders a mano
+
+        opciones_precarga = [OPCION_SIN_PRECARGA] + [t.replace(".SN", "") for t in TICKERS_IPSA]
+        st.selectbox(
+            "Precargar valores reales de:", opciones_precarga,
+            key="capm_preload_selector", on_change=_precargar_capm,
+            help="Precarga Rf (PDBC) y Beta reales de la acción elegida como punto de "
+                 "partida — después puedes ajustar los sliders libremente.",
+        )
+
+        # setdefault (no value=) evita el warning de Streamlit por mezclar un
+        # valor por defecto fijo con session_state ya escrito por _precargar_capm.
+        st.session_state.setdefault("capm_rf_slider", 4.5)
+        st.session_state.setdefault("capm_beta_slider", 1.0)
+        st.session_state.setdefault("capm_prima_slider", 6.0)
+
+        col_rf, col_beta, col_prima = st.columns(3)
+        with col_rf:
+            rf_capm = st.slider("Tasa libre de riesgo (Rf) %", 0.0, 15.0, step=0.1, key="capm_rf_slider")
+        with col_beta:
+            beta_capm = st.slider("Beta", 0.0, 3.0, step=0.05, key="capm_beta_slider")
+        with col_prima:
+            prima_capm = st.slider("Prima de mercado %", 0.0, 15.0, step=0.1, key="capm_prima_slider")
+
+        costo_capital_capm = rf_capm + beta_capm * prima_capm
+        st.metric("Costo de capital (CAPM)", f"{costo_capital_capm:.2f}%")
+        st.caption(
+            "Interpretación: es el retorno anual mínimo que debería exigir un "
+            "inversionista para mantener esta acción, dado su riesgo sistemático — un "
+            "Beta > 1 amplifica los movimientos del mercado, un Beta < 1 los atenúa."
+        )
+
+        st.divider()
+
+        # ============ 2. Dodd-Graham Value Screener ============
+        st.subheader("2. Dodd-Graham Value Screener")
+        st.markdown(
+            "**Los 10 criterios clásicos** (adaptados de *Security Analysis*, Dodd & "
+            "Graham, 1934, y *The Intelligent Investor*, Graham, cap. 14) para "
+            "identificar acciones \"value\" según el inversionista defensivo de Graham: "
+            "solidez financiera, estabilidad y crecimiento de utilidades, precio "
+            "moderado respecto a utilidades y activos, y dividendos sostenibles."
+        )
+        st.warning(
+            "⚠️ Estos criterios se diseñaron para el mercado bursátil de EEUU de "
+            "mediados del siglo XX (múltiplos, tasas y estructura de capital muy "
+            "distintos a los de hoy). Aplicarlos sin ajuste a un mercado emergente como "
+            "Chile — con menor liquidez, mayor prima de riesgo país y otra estructura "
+            "tributaria — es una simplificación; no deben tomarse como un veredicto "
+            "definitivo de \"barata\" o \"cara\"."
+        )
+
+        col_g1, col_g2 = st.columns(2)
+        with col_g1:
+            g_precio = st.number_input("Precio actual", min_value=0.0, value=100.0, step=1.0, key="graham_precio")
+            g_eps = st.number_input("EPS (utilidad por acción, actual)", value=8.0, step=0.5, key="graham_eps")
+            g_pe5 = st.number_input("P/E promedio últimos 5 años", min_value=0.0, value=12.0, step=0.5, key="graham_pe5")
+            g_dividendo = st.number_input("Dividendo por acción", min_value=0.0, value=3.0, step=0.5, key="graham_div")
+            g_valor_libro = st.number_input("Valor libro por acción", min_value=0.0, value=70.0, step=1.0, key="graham_vl")
+        with col_g2:
+            g_deuda = st.number_input("Deuda total", min_value=0.0, value=200.0, step=10.0, key="graham_deuda")
+            g_activos_c = st.number_input("Activos corrientes", min_value=0.0, value=400.0, step=10.0, key="graham_ac")
+            g_pasivos_c = st.number_input("Pasivos corrientes", min_value=0.01, value=150.0, step=10.0, key="graham_pc")
+            g_yield_aaa = st.number_input("Yield de bonos AAA (%)", min_value=0.0, value=5.0, step=0.1, key="graham_aaa")
+            g_eps_hist = st.number_input("EPS hace 10 años", value=5.0, step=0.5, key="graham_eps_hist")
+
+        criterios_graham = evaluar_graham(
+            precio=g_precio, eps=g_eps, pe_5y=g_pe5, dividendo=g_dividendo,
+            valor_libro=g_valor_libro, deuda_total=g_deuda,
+            activos_corrientes=g_activos_c, pasivos_corrientes=g_pasivos_c,
+            yield_aaa=g_yield_aaa, eps_historico=g_eps_hist,
+        )
+        n_cumple_graham = sum(c["cumple"] for c in criterios_graham)
+        st.metric("Criterios que cumple", f"{n_cumple_graham} / 10")
+
+        for c in criterios_graham:
+            icono = "✅" if c["cumple"] else "❌"
+            st.markdown(f"{icono} **{c['criterio']}** — {c['valor']}")
+            st.caption(c["explicacion"])
+
+        st.divider()
+
+        # ============ 3. Modelo de Descuento de Dividendos (Gordon Growth) ============
+        st.subheader("3. Modelo de Descuento de Dividendos (Gordon Growth)")
+        st.markdown(
+            "**Fórmula:** Precio implícito = D₁ / (r − g), donde D₁ es el dividendo "
+            "esperado el próximo año, r la tasa de descuento (retorno exigido) y g la "
+            "tasa de crecimiento esperada de los dividendos a perpetuidad. Estima "
+            "cuánto \"debería\" valer una acción según el flujo de dividendos futuros "
+            "que promete, descontado a valor presente."
+        )
+
+        col_d1, col_r, col_g = st.columns(3)
+        with col_d1:
+            d1_gordon = st.number_input(
+                "Dividendo esperado próximo año (D₁)", min_value=0.0, value=5.0, step=0.5, key="gordon_d1"
+            )
+        with col_r:
+            r_gordon = st.slider("Tasa de descuento (r) %", 0.1, 30.0, 10.0, step=0.1, key="gordon_r")
+        with col_g:
+            g_gordon = st.slider("Tasa de crecimiento esperada (g) %", 0.0, 30.0, 4.0, step=0.1, key="gordon_g")
+
+        if g_gordon >= r_gordon:
+            st.error(
+                "⚠️ **g ≥ r: el modelo no es matemáticamente válido.** Con crecimiento "
+                "mayor o igual a la tasa de descuento, el denominador (r − g) es cero o "
+                "negativo, lo que implicaría un precio infinito o negativo — sin sentido "
+                "económico. Ajusta los valores para que r > g."
+            )
+        else:
+            precio_implicito_gordon = d1_gordon / ((r_gordon - g_gordon) / 100)
+            st.metric("Precio implícito", f"${precio_implicito_gordon:,.2f}")
+            st.caption(
+                "Interpretación: si el precio de mercado actual es mayor a este valor "
+                "implícito, el modelo sugiere que la acción podría estar sobrevalorada "
+                "(y viceversa) — asumiendo que los supuestos de r y g se cumplan "
+                "indefinidamente, lo cual rara vez es realista para horizontes largos."
+            )
+
+    except Exception as e:
+        st.error(f"No se pudo calcular la calculadora financiera: {e}")
