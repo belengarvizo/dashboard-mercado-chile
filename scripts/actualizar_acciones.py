@@ -61,6 +61,11 @@ def guardar_historico(session, ticker: str, historico):
     for fecha_idx, fila in historico.iterrows():
         fecha = fecha_idx.date()
         precio = float(fila["Close"])
+        # Yahoo Finance a veces devuelve NaN para el día más reciente (ej.
+        # sesión de mercado todavía incompleta) - no se guarda un "precio" que
+        # en realidad no existe (causaba que el dashboard mostrara "nan").
+        if precio != precio:  # NaN nunca es igual a sí mismo
+            continue
         # Algunos índices/ETFs (ej. benchmarks internacionales) no traen volumen.
         volumen = int(fila["Volume"]) if pd.notna(fila["Volume"]) else None
 

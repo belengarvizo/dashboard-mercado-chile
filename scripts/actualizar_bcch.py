@@ -97,7 +97,16 @@ def descargar_serie(codigo_serie: str, first_date: str = "2015-01-01") -> list[d
 def descargar_serie_yfinance(ticker: str, first_date: str = "2015-01-01") -> list[dict]:
     """Descarga un rendimiento (ya expresado en %, no en precio) vía Yahoo Finance."""
     historico = yf.Ticker(ticker).history(start=first_date)
-    return [{"fecha": fecha_idx.date(), "valor": float(fila["Close"])} for fecha_idx, fila in historico.iterrows()]
+    resultado = []
+    for fecha_idx, fila in historico.iterrows():
+        valor = float(fila["Close"])
+        # Yahoo Finance a veces devuelve NaN para el día más reciente (ej.
+        # sesión de mercado todavía incompleta) - mismo criterio que
+        # descargar_serie() para no guardar un "dato" que en realidad no existe.
+        if valor != valor:  # NaN nunca es igual a sí mismo
+            continue
+        resultado.append({"fecha": fecha_idx.date(), "valor": valor})
+    return resultado
 
 
 def guardar_observaciones(session, codigo: str, nombre: str, frecuencia: str, observaciones: list[dict]):

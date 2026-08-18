@@ -19,7 +19,12 @@ INDICADORES_PREMERCADO = [
 
 
 def calcular_cambio_reciente(serie: pd.Series) -> tuple[float, float, object] | None:
-    """(valor actual, % de cambio vs la sesión anterior, fecha) a partir de una serie ordenada por fecha."""
+    """(valor actual, % de cambio vs la sesión anterior, fecha) a partir de una
+    serie ordenada por fecha. Descarta observaciones NaN (dato no disponible,
+    ej. una sesión de mercado todavía incompleta) y usa el último valor
+    VÁLIDO junto con su fecha real — nunca devuelve NaN, y nunca junta un
+    dato viejo con la fecha de hoy."""
+    serie = serie.dropna()
     if len(serie) < 2:
         return None
     valor_actual = serie.iloc[-1]

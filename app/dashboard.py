@@ -83,13 +83,22 @@ engine = get_engine()
 @st.cache_data(ttl=3600)  # cachea 1 hora, para no golpear la BD en cada click
 def cargar_series_macro():
     query = "SELECT nombre, fecha, valor FROM series_macro ORDER BY fecha"
-    return pd.read_sql(query, engine)
+    df = pd.read_sql(query, engine)
+    # Descarta filas con valor NaN (dato no disponible, ej. una sesión de
+    # Yahoo Finance incompleta al momento de descargar) para que ningún
+    # cálculo aguas abajo tome silenciosamente NaN como "el último valor" —
+    # así, el último valor real que queda es siempre uno válido, con su
+    # fecha real (nunca la fecha de hoy con un dato viejo disfrazado).
+    return df.dropna(subset=["valor"])
 
 
 @st.cache_data(ttl=3600)
 def cargar_precios_acciones():
     query = "SELECT ticker, fecha, precio_cierre, volumen FROM precios_acciones ORDER BY fecha"
-    return pd.read_sql(query, engine)
+    df = pd.read_sql(query, engine)
+    # Solo se descarta por precio_cierre NaN, no por volumen: varios
+    # benchmarks/ETFs internacionales legítimamente no traen volumen.
+    return df.dropna(subset=["precio_cierre"])
 
 
 @st.cache_data(ttl=3600)
