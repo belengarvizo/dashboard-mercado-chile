@@ -117,6 +117,32 @@ def calcular_retornos_reales(serie: pd.Series) -> pd.Series:
     return serie.pct_change()[cambia]
 
 
+def calcular_cambios_periodo(serie: pd.Series) -> dict:
+    """% de cambio 1D/1W/1M/YTD de una serie de precios ordenada por fecha,
+    respecto al último valor disponible. Compartido entre el heatmap de
+    "Acciones IPSA" y la tabla resumen de las 7 Magníficas en "Benchmark"."""
+    if len(serie) < 2:
+        return {"1D %": None, "1W %": None, "1M %": None, "YTD %": None}
+
+    ultimo = serie.iloc[-1]
+    fecha_ultima = serie.index[-1]
+
+    def cambio_desde(dias_atras):
+        objetivo = fecha_ultima - pd.Timedelta(days=dias_atras)
+        previos = serie[serie.index <= objetivo]
+        return (ultimo / previos.iloc[-1] - 1) * 100 if not previos.empty else None
+
+    inicio_anio = serie[serie.index >= pd.Timestamp(fecha_ultima.year, 1, 1)]
+    cambio_ytd = (ultimo / inicio_anio.iloc[0] - 1) * 100 if not inicio_anio.empty else None
+
+    return {
+        "1D %": cambio_desde(1),
+        "1W %": cambio_desde(7),
+        "1M %": cambio_desde(30),
+        "YTD %": cambio_ytd,
+    }
+
+
 def calcular_spread_2s10s(df_macro: pd.DataFrame) -> dict | None:
     """Spread 2s10s (UST10Y - UST2Y) con marca de curva invertida si es negativo."""
     # Mismos strings "nombre" que scripts/actualizar_bcch.py usa al guardar la serie.
@@ -328,16 +354,8 @@ def calcular_resumen_ipsa(df_todas: pd.DataFrame, df_macro: pd.DataFrame) -> pd.
         if len(serie) < 2:
             continue
 
-        ultimo = serie.iloc[-1]
         fecha_ultima = serie.index[-1]
-
-        def cambio_desde(dias_atras):
-            objetivo = fecha_ultima - pd.Timedelta(days=dias_atras)
-            previos = serie[serie.index <= objetivo]
-            return (ultimo / previos.iloc[-1] - 1) * 100 if not previos.empty else None
-
-        inicio_anio = serie[serie.index >= pd.Timestamp(fecha_ultima.year, 1, 1)]
-        cambio_ytd = (ultimo / inicio_anio.iloc[0] - 1) * 100 if not inicio_anio.empty else None
+        cambios = calcular_cambios_periodo(serie)
 
         # Beta: regresión (cov/var) de retornos diarios del último año vs el proxy del IPSA.
         un_anio_atras = fecha_ultima - pd.Timedelta(days=365)
@@ -392,10 +410,10 @@ def calcular_resumen_ipsa(df_todas: pd.DataFrame, df_macro: pd.DataFrame) -> pd.
 
         filas.append({
             "Ticker": ticker.replace(".SN", ""),
-            "1D %": cambio_desde(1),
-            "1W %": cambio_desde(7),
-            "1M %": cambio_desde(30),
-            "YTD %": cambio_ytd,
+            "1D %": cambios["1D %"],
+            "1W %": cambios["1W %"],
+            "1M %": cambios["1M %"],
+            "YTD %": cambios["YTD %"],
             "Beta": beta,
             "Beta ajustada": beta_ajustada,
             "Volatilidad anualizada (%)": volatilidad_anualizada,
@@ -677,6 +695,31 @@ def calcular_distribucion_retornos(df_todas: pd.DataFrame) -> dict:
 
 
 @st.cache_data(ttl=3600)
+def calcular_peor_escenario_historico(df_todas: pd.DataFrame) -> dict:
+    """Peor retorno acumulado de 5 y 10 días hábiles del proxy del IPSA (ECH)
+    DENTRO de los datos disponibles — no es el peor caso históricamente
+    posible, solo el peor observado en esta muestra."""
+    df_todas = df_todas.assign(fecha=pd.to_datetime(df_todas["fecha"]))
+    serie_ech = (
+        df_todas[df_todas["ticker"] == TICKER_PROXY_IPSA]
+        .sort_values("fecha")
+        .set_index("fecha")["precio_cierre"]
+    )
+    retornos_reales = calcular_retornos_reales(serie_ech).dropna()
+
+    peor_5d = None
+    peor_10d = None
+    if len(retornos_reales) >= 5:
+        acumulado_5d = retornos_reales.rolling(5).apply(lambda x: (1 + x).prod() - 1, raw=True)
+        peor_5d = float(acumulado_5d.min())
+    if len(retornos_reales) >= 10:
+        acumulado_10d = retornos_reales.rolling(10).apply(lambda x: (1 + x).prod() - 1, raw=True)
+        peor_10d = float(acumulado_10d.min())
+
+    return {"peor_5d": peor_5d, "peor_10d": peor_10d, "n_obs": len(retornos_reales)}
+
+
+@st.cache_data(ttl=3600)
 def calcular_matriz_correlacion_ipsa(df_todas: pd.DataFrame) -> pd.DataFrame:
     """Matriz de correlación de retornos diarios "reales" (sin días de precio
     congelado) entre las 30 acciones del IPSA."""
@@ -695,6 +738,27 @@ def calcular_matriz_correlacion_ipsa(df_todas: pd.DataFrame) -> pd.DataFrame:
     # correlaciona solo con las fechas donde ambas tienen un retorno real,
     # sin exigir que las 30 coincidan el mismo día.
     return pd.DataFrame(retornos_por_ticker).corr()
+
+
+@st.cache_data(ttl=3600)
+def calcular_resumen_magnificas(df_todas: pd.DataFrame) -> pd.DataFrame:
+    """% de cambio 1D/1W/1M/YTD de las 7 Magníficas — versión simple del
+    heatmap de "Acciones IPSA", sin Beta/VaR/CAPM."""
+    df_todas = df_todas.assign(fecha=pd.to_datetime(df_todas["fecha"]))
+
+    filas = []
+    for ticker in TICKERS_MAGNIFICAS:
+        serie = (
+            df_todas[df_todas["ticker"] == ticker]
+            .sort_values("fecha")
+            .set_index("fecha")["precio_cierre"]
+        )
+        if len(serie) < 2:
+            continue
+        cambios = calcular_cambios_periodo(serie)
+        filas.append({"Ticker": ticker, **cambios})
+
+    return pd.DataFrame(filas).set_index("Ticker")
 
 
 @st.cache_data(ttl=3600)
@@ -963,11 +1027,11 @@ except Exception:
     st.caption("Aún no hay datos cargados. Corre los scripts de actualización primero.")
 
 (
-    tab_premercado, tab_macro, tab_acciones, tab_riesgo, tab_magnificas,
-    tab_benchmark, tab_event_study, tab_backtester, tab_momentum, tab_calculadora,
+    tab_premercado, tab_macro, tab_acciones, tab_riesgo,
+    tab_benchmark, tab_tpm, tab_momentum, tab_calculadora,
 ) = st.tabs([
-    "Brief Premercado", "Indicadores macro", "Acciones IPSA", "Riesgo", "7 Magníficas",
-    "Benchmark", "Event Study TPM", "Backtester: Estrategia TPM", "Momentum IPSA",
+    "Brief Premercado", "Indicadores macro", "Acciones IPSA", "Riesgo",
+    "Benchmark", "TPM y Tipo de Cambio", "Momentum IPSA",
     "Calculadora Financiera",
 ])
 
@@ -1217,7 +1281,7 @@ with tab_acciones:
     except Exception as e:
         st.error(f"No se pudieron cargar los precios de acciones: {e}")
 
-# --- Tab 2b: Riesgo ---
+# --- Tab 3: Riesgo ---
 with tab_riesgo:
     try:
         df_acciones = cargar_precios_acciones()
@@ -1332,32 +1396,109 @@ with tab_riesgo:
             "Solo se aplica a las acciones individuales, no al portafolio."
         )
 
+        def _mostrar_tabla_impacto(df_impacto: pd.DataFrame):
+            max_abs_impacto = df_impacto["Impacto estimado (%)"].abs().max()
+            max_abs_impacto = max_abs_impacto if pd.notna(max_abs_impacto) and max_abs_impacto > 0 else 1
+            estilo_impacto = (
+                df_impacto.style
+                .background_gradient(cmap=CMAP_DIVERGENTE, subset=["Impacto estimado (%)"], vmin=-max_abs_impacto, vmax=max_abs_impacto)
+                .format({"Beta": "{:.2f}", "Impacto estimado (%)": "{:+.2f}%"})
+            )
+            st.dataframe(estilo_impacto, use_container_width=True)
+
+        df_macro_riesgo = cargar_series_macro()
+        df_resumen_riesgo = calcular_resumen_ipsa(df_acciones, df_macro_riesgo)
+        betas_todas = df_resumen_riesgo["Beta"].dropna()
+        tickers_principales_sin_sufijo = [t.replace(".SN", "") for t in TICKERS_IPSA_PRINCIPALES]
+        beta_portafolio_5 = betas_todas.reindex(tickers_principales_sin_sufijo).dropna().mean()
+
+        st.divider()
+        st.subheader("Stress test paramétrico")
+        st.caption(
+            "Simula el impacto estimado de un shock hipotético al mercado chileno "
+            "(proxy ECH) sobre cada acción del IPSA y sobre el portafolio equiponderado "
+            "de las 5 principales, con un modelo de un solo factor: "
+            "**impacto estimado = Beta × shock**."
+        )
+
+        shock_mercado = st.slider(
+            "Shock hipotético al mercado (%, proxy ECH)", -30.0, 30.0, -10.0, step=1.0, key="stress_shock"
+        )
+
+        if pd.notna(beta_portafolio_5):
+            col_beta_port, col_impacto_port = st.columns(2)
+            col_beta_port.metric("Beta del portafolio (5 principales, equiponderado)", f"{beta_portafolio_5:.2f}")
+            col_impacto_port.metric(
+                f"Impacto estimado del portafolio (shock {shock_mercado:+.0f}%)",
+                f"{beta_portafolio_5 * shock_mercado:+.2f}%",
+            )
+
+        df_impacto_stress = betas_todas.to_frame(name="Beta")
+        df_impacto_stress["Impacto estimado (%)"] = df_impacto_stress["Beta"] * shock_mercado
+        df_impacto_stress = df_impacto_stress.sort_values("Impacto estimado (%)")
+        _mostrar_tabla_impacto(df_impacto_stress)
+
+        st.caption(
+            "**Nota metodológica.** Este es un modelo de un solo factor (CAPM/Beta): "
+            "asume que todo el movimiento de una acción ante un shock de mercado se "
+            "explica por su Beta, **ignorando el riesgo idiosincrático** (noticias "
+            "específicas de la empresa) y el **quiebre de correlaciones** típico en "
+            "crisis reales (en una crisis real las correlaciones entre activos suelen "
+            "subir hacia 1, y la volatilidad de todos los activos se dispara más allá de "
+            "lo que el Beta histórico predice) — es una aproximación simplificada, no un "
+            "modelo riguroso de riesgo de cola (tail risk)."
+        )
+
+        st.divider()
+        st.subheader("Peor escenario histórico (dentro de los datos disponibles)")
+
+        resultado_peor = calcular_peor_escenario_historico(df_acciones)
+        st.warning(
+            "⚠️ Esto es el **peor caso observado dentro de los datos disponibles** "
+            "(desde que empezó la descarga), **no el peor caso históricamente posible** "
+            "— no se citan ni asumen cifras externas de crisis pasadas (ej. 2008): un "
+            "mercado real puede caer más de lo que ya cayó en esta muestra."
+        )
+
+        if resultado_peor["peor_5d"] is not None and resultado_peor["peor_10d"] is not None:
+            col_5d, col_10d = st.columns(2)
+            col_5d.metric("Peor retorno acumulado 5 días hábiles (ECH)", f"{resultado_peor['peor_5d'] * 100:+.2f}%")
+            col_10d.metric("Peor retorno acumulado 10 días hábiles (ECH)", f"{resultado_peor['peor_10d'] * 100:+.2f}%")
+            st.caption(f"Calculado sobre {resultado_peor['n_obs']} retornos diarios reales del proxy ECH.")
+
+            if pd.notna(beta_portafolio_5):
+                col_port_5d, col_port_10d = st.columns(2)
+                col_port_5d.metric(
+                    "Impacto estimado en el portafolio (shock 5 días)",
+                    f"{beta_portafolio_5 * resultado_peor['peor_5d'] * 100:+.2f}%",
+                )
+                col_port_10d.metric(
+                    "Impacto estimado en el portafolio (shock 10 días)",
+                    f"{beta_portafolio_5 * resultado_peor['peor_10d'] * 100:+.2f}%",
+                )
+
+            col_tab5, col_tab10 = st.columns(2)
+            with col_tab5:
+                st.markdown("**Impacto estimado por acción — shock de 5 días**")
+                df_impacto_5d = betas_todas.to_frame(name="Beta")
+                df_impacto_5d["Impacto estimado (%)"] = df_impacto_5d["Beta"] * resultado_peor["peor_5d"] * 100
+                df_impacto_5d = df_impacto_5d.sort_values("Impacto estimado (%)")
+                _mostrar_tabla_impacto(df_impacto_5d)
+            with col_tab10:
+                st.markdown("**Impacto estimado por acción — shock de 10 días**")
+                df_impacto_10d = betas_todas.to_frame(name="Beta")
+                df_impacto_10d["Impacto estimado (%)"] = df_impacto_10d["Beta"] * resultado_peor["peor_10d"] * 100
+                df_impacto_10d = df_impacto_10d.sort_values("Impacto estimado (%)")
+                _mostrar_tabla_impacto(df_impacto_10d)
+        else:
+            st.info("No hay suficientes datos del proxy ECH para calcular el peor escenario histórico.")
+
     except Exception as e:
         st.error(f"No se pudieron calcular las métricas de riesgo: {e}")
 
-# --- Tab 3: 7 Magníficas ---
-with tab_magnificas:
-    try:
-        df_siete = cargar_precios_acciones()
-        df_siete = df_siete[df_siete["ticker"].isin(TICKERS_MAGNIFICAS)].copy()
-
-        df_siete["precio_normalizado"] = df_siete.groupby("ticker")["precio_cierre"].transform(
-            lambda serie: serie / serie.iloc[0] * 100
-        )
-
-        fig = px.line(
-            df_siete, x="fecha", y="precio_normalizado", color="ticker",
-            title="7 Magníficas — desempeño normalizado (base 100)",
-            color_discrete_sequence=PALETA_CATEGORICA,
-            category_orders={"ticker": TICKERS_MAGNIFICAS},
-        )
-        st.plotly_chart(fig, use_container_width=True)
-
-    except Exception as e:
-        st.error(f"No se pudieron cargar los datos de las 7 Magníficas: {e}")
-
-# --- Tab 4: Benchmark ---
+# --- Tab 4: Benchmark (incluye 7 Magníficas) ---
 with tab_benchmark:
+    st.subheader("Benchmark internacional")
     try:
         df_bench = cargar_precios_acciones()
         df_bench = df_bench[df_bench["ticker"].isin(TICKERS_BENCHMARK.keys())].copy()
@@ -1382,8 +1523,42 @@ with tab_benchmark:
     except Exception as e:
         st.error(f"No se pudieron cargar los datos de benchmark: {e}")
 
-# --- Tab 5: Event Study TPM ---
-with tab_event_study:
+    st.divider()
+    st.subheader("7 Magníficas")
+    try:
+        df_siete = cargar_precios_acciones()
+        df_siete = df_siete[df_siete["ticker"].isin(TICKERS_MAGNIFICAS)].copy()
+
+        df_siete["precio_normalizado"] = df_siete.groupby("ticker")["precio_cierre"].transform(
+            lambda serie: serie / serie.iloc[0] * 100
+        )
+
+        fig_siete = px.line(
+            df_siete, x="fecha", y="precio_normalizado", color="ticker",
+            title="7 Magníficas — desempeño normalizado (base 100)",
+            color_discrete_sequence=PALETA_CATEGORICA,
+            category_orders={"ticker": TICKERS_MAGNIFICAS},
+        )
+        st.plotly_chart(fig_siete, use_container_width=True)
+
+        df_resumen_magnificas = calcular_resumen_magnificas(df_siete)
+        columnas_pct_magnificas = ["1D %", "1W %", "1M %", "YTD %"]
+        max_abs_magnificas = df_resumen_magnificas[columnas_pct_magnificas].abs().max().max()
+        max_abs_magnificas = max_abs_magnificas if pd.notna(max_abs_magnificas) and max_abs_magnificas > 0 else 1
+
+        estilo_magnificas = (
+            df_resumen_magnificas.style
+            .background_gradient(cmap=CMAP_DIVERGENTE, subset=columnas_pct_magnificas, vmin=-max_abs_magnificas, vmax=max_abs_magnificas)
+            .format({col: "{:+.2f}%" for col in columnas_pct_magnificas}, na_rep="—")
+        )
+        st.dataframe(estilo_magnificas, use_container_width=True)
+
+    except Exception as e:
+        st.error(f"No se pudieron cargar los datos de las 7 Magníficas: {e}")
+
+# --- Tab 5: TPM y Tipo de Cambio (Event Study + Backtester) ---
+with tab_tpm:
+    st.header("Parte 1: ¿Hay un efecto estadístico?")
     try:
         df_macro = cargar_series_macro()
         df_eventos, df_agregado, n_eventos = calcular_event_study_tpm(df_macro)
@@ -1528,8 +1703,8 @@ with tab_event_study:
     except Exception as e:
         st.error(f"No se pudo calcular el event study: {e}")
 
-# --- Tab 7: Backtester Estrategia TPM ---
-with tab_backtester:
+    st.divider()
+    st.header("Parte 2: ¿Se podría haber ganado plata con eso?")
     try:
         st.subheader("Backtest: dirección de la TPM → USD/CLP")
         st.caption(
@@ -1646,7 +1821,7 @@ with tab_backtester:
     except Exception as e:
         st.error(f"No se pudo calcular el backtest: {e}")
 
-# --- Tab 8: Momentum IPSA ---
+# --- Tab 6: Momentum IPSA ---
 with tab_momentum:
     try:
         st.subheader("Momentum IPSA — estrategia 12-1 (Jegadeesh & Titman)")
@@ -1759,7 +1934,7 @@ with tab_momentum:
     except Exception as e:
         st.error(f"No se pudo calcular la estrategia de momentum: {e}")
 
-# --- Tab 9: Calculadora Financiera ---
+# --- Tab 7: Calculadora Financiera ---
 with tab_calculadora:
     try:
         st.caption(

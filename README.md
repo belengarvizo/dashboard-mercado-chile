@@ -8,7 +8,7 @@ actualizado diariamente.
 
 ## Qué muestra
 
-El dashboard tiene 10 pestañas:
+El dashboard tiene 8 pestañas:
 
 1. **Brief Premercado** — para revisar antes de que abra la Bolsa de Santiago.
    Sección "Importante": % de cambio de la sesión más reciente de S&P 500,
@@ -80,11 +80,28 @@ El dashboard tiene 10 pestañas:
    desviación estándar), junto con su **skewness y kurtosis (exceso)** — la
    distancia visible entre el histograma real y la curva normal es evidencia
    directa de las colas gordas que menciona la nota sobre el VaR paramétrico.
-5. **7 Magníficas** — AAPL, MSFT, GOOGL, AMZN, NVDA, META y TSLA, normalizadas
-   a base 100 para comparar su desempeño relativo.
-6. **Benchmark** — el IPSA (vía el ETF ECH, ver nota abajo) comparado con el
+
+   **Stress test paramétrico:** un slider simula un shock hipotético al
+   mercado chileno (-30% a +30%, proxy ECH) y calcula el impacto estimado
+   (Beta × shock) para cada una de las 30 acciones y para el portafolio
+   equiponderado de las 5 principales. Modelo de un solo factor: ignora el
+   riesgo idiosincrático y el quiebre de correlaciones típico en crisis
+   reales — queda documentado en la nota metodológica.
+
+   **Peor escenario histórico:** identifica el peor retorno acumulado de 5 y
+   10 días hábiles que existe **dentro de los datos reales disponibles** del
+   proxy ECH (no una cifra externa de una crisis pasada), lo aplica vía Beta
+   a cada acción y al portafolio, y lo etiqueta explícitamente como el peor
+   caso observado en la muestra — no el peor caso históricamente posible.
+5. **Benchmark** — el IPSA (vía el ETF ECH, ver nota abajo) comparado con el
    S&P 500, MSCI Emerging Markets (EEM) y el Bovespa, normalizado a base 100.
-7. **Event Study TPM** — detecta automáticamente cada cambio de la Tasa de
+   Debajo, la sección **7 Magníficas**: AAPL, MSFT, GOOGL, AMZN, NVDA, META y
+   TSLA normalizadas a base 100 (gráfico sin cambios), más una tabla simple
+   de % de cambio 1D/1W/1M/YTD (coloreada verde/rojo, mismo estilo que el
+   heatmap del IPSA pero sin Beta/VaR/CAPM).
+6. **TPM y Tipo de Cambio** — dos partes en una misma pestaña:
+
+   **Parte 1: ¿Hay un efecto estadístico?** (Event Study) — detecta automáticamente cada cambio de la Tasa de
    Política Monetaria (comparando la serie diaria de la TPM día a día) y mide
    su impacto sobre el tipo de cambio USD/CLP: retorno anormal (AR) y
    acumulado (CAR) en una ventana de -2 a +2 días hábiles alrededor de cada
@@ -126,7 +143,7 @@ El dashboard tiene 10 pestañas:
    nivel global (ej. el índice DXY) en la ventana de evento, para aislar
    mejor el componente local del CAR.
 
-8. **Backtester: Estrategia TPM** — backtest hipotético e ilustrativo sobre
+   **Parte 2: ¿Se podría haber ganado plata con eso?** (Backtester) — backtest hipotético e ilustrativo sobre
    los mismos 37 eventos del Event Study: TPM sube → posición corta en
    USD/CLP, TPM baja → posición larga; entrada al cierre del día del evento,
    salida al cierre 2 días hábiles después, con 8 puntos base de costo de
@@ -149,7 +166,7 @@ El dashboard tiene 10 pestañas:
    dirección** — indistinguible del azar. Consistente con el hallazgo del
    Event Study: no hay evidencia de que esta estrategia direccional le gane
    al mercado con los datos disponibles.
-9. **Momentum IPSA** — estrategia momentum "12-1" de Jegadeesh & Titman
+7. **Momentum IPSA** — estrategia momentum "12-1" de Jegadeesh & Titman
    (1993) sobre las 30 acciones del IPSA: cada fin de mes rankea por retorno
    compuesto de los meses [t-12, t-2] (saltando el mes t-1 más reciente),
    forma portafolios equiponderados "Ganadoras" y "Perdedoras" (10 acciones
@@ -168,7 +185,7 @@ El dashboard tiene 10 pestañas:
    1,03, p = 0,31 — no significativo al 5%), y el resultado real cae en el
    **percentil 88,5 de 1.000 mezclas aleatorias** — elevado, pero sin cruzar
    el umbral de 95% para considerarse distinguible del azar.
-10. **Calculadora Financiera** — tres modelos interactivos donde el usuario
+8. **Calculadora Financiera** — tres modelos interactivos donde el usuario
     ingresa sus propios valores, sin depender de datos fundamentales de la
     base:
     - **CAPM interactivo**: sliders para Rf, Beta y prima de mercado, con el
