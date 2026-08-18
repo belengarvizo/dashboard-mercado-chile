@@ -15,6 +15,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.express as px
+import plotly.graph_objects as go
 from matplotlib.colors import LinearSegmentedColormap
 from scipy import stats
 from sqlalchemy import text
@@ -58,6 +59,15 @@ DIA_ENTRADA_BACKTEST = 0
 DIA_SALIDA_BACKTEST = 2
 COSTO_TRANSACCION_BACKTEST = 0.0008  # 8 puntos base por operación
 N_PERMUTACIONES_BACKTEST = 1000
+
+# Momentum IPSA (Jegadeesh & Titman 12-1): señal = retorno compuesto de los
+# meses [t-12, t-2] (11 meses), saltando el mes t-1 más reciente; se
+# mantiene la cartera durante el mes t, rebalanceo mensual.
+MESES_FORMACION_MOMENTUM = 12
+MESES_SKIP_MOMENTUM = 1
+N_GANADORAS_PERDEDORAS_MOMENTUM = 10
+COSTO_TRANSACCION_MOMENTUM = 0.0015  # 15 puntos base por posición por rebalanceo
+N_PERMUTACIONES_MOMENTUM = 1000
 
 st.title("Dashboard de mercado chileno")
 st.caption("Datos del Banco Central de Chile y Yahoo Finance, actualizados diariamente")
@@ -105,6 +115,25 @@ def calcular_retornos_reales(serie: pd.Series) -> pd.Series:
     "Atraso" del heatmap: comparar cada valor con el del día anterior."""
     cambia = serie.ne(serie.shift(1))
     return serie.pct_change()[cambia]
+
+
+def calcular_spread_2s10s(df_macro: pd.DataFrame) -> dict | None:
+    """Spread 2s10s (UST10Y - UST2Y) con marca de curva invertida si es negativo."""
+    # Mismos strings "nombre" que scripts/actualizar_bcch.py usa al guardar la serie.
+    ust10 = df_macro[df_macro["nombre"] == "Bono del Tesoro de EEUU a 10 años (UST10Y)"].sort_values("fecha")
+    ust2 = df_macro[df_macro["nombre"] == "Bono del Tesoro de EEUU a 2 años (UST2Y, proxy 2YY=F)"].sort_values("fecha")
+    if ust10.empty or ust2.empty:
+        return None
+    ust10_valor = float(ust10["valor"].iloc[-1])
+    ust2_valor = float(ust2["valor"].iloc[-1])
+    spread = ust10_valor - ust2_valor
+    return {
+        "ust10": ust10_valor,
+        "ust2": ust2_valor,
+        "spread": spread,
+        "invertida": spread < 0,
+        "fecha": ust10["fecha"].iloc[-1],
+    }
 
 
 @st.cache_data(ttl=3600)
@@ -251,6 +280,10 @@ def calcular_resumen_ipsa(df_todas: pd.DataFrame, df_macro: pd.DataFrame) -> pd.
             capm_local = None
             capm_crp = None
 
+        # Beta ajustada (Blume): tira la beta cruda hacia 1 (el beta "promedio
+        # de mercado" de largo plazo), un ajuste estándar y simple.
+        beta_ajustada = (2 / 3) * beta + (1 / 3) * 1 if beta is not None else None
+
         filas.append({
             "Ticker": ticker.replace(".SN", ""),
             "1D %": cambio_desde(1),
@@ -258,6 +291,7 @@ def calcular_resumen_ipsa(df_todas: pd.DataFrame, df_macro: pd.DataFrame) -> pd.
             "1M %": cambio_desde(30),
             "YTD %": cambio_ytd,
             "Beta": beta,
+            "Beta ajustada": beta_ajustada,
             "Volatilidad anualizada (%)": volatilidad_anualizada,
             "CAPM local (%)": capm_local,
             "CAPM + CRP (%)": capm_crp,
@@ -509,6 +543,34 @@ def calcular_var(df_todas: pd.DataFrame) -> pd.DataFrame:
 
 
 @st.cache_data(ttl=3600)
+def calcular_distribucion_retornos(df_todas: pd.DataFrame) -> dict:
+    """Retornos diarios "reales" (excluyendo días de precio congelado) de los
+    últimos ~2 años para las 5 acciones principales, con skewness y kurtosis
+    (exceso de Fisher, 0 = normal) — para contrastar visualmente con el
+    supuesto de normalidad del VaR paramétrico."""
+    df_todas = df_todas.assign(fecha=pd.to_datetime(df_todas["fecha"]))
+    fecha_corte = pd.Timestamp.now().normalize() - VENTANA_VAR
+
+    resultado = {}
+    for ticker in TICKERS_IPSA_PRINCIPALES:
+        serie = (
+            df_todas[df_todas["ticker"] == ticker]
+            .sort_values("fecha")
+            .set_index("fecha")["precio_cierre"]
+        )
+        serie = serie[serie.index >= fecha_corte]
+        r = calcular_retornos_reales(serie).dropna()
+        if len(r) < 30:
+            continue
+        resultado[ticker.replace(".SN", "")] = {
+            "retornos": r,
+            "skewness": float(stats.skew(r)),
+            "kurtosis": float(stats.kurtosis(r)),
+        }
+    return resultado
+
+
+@st.cache_data(ttl=3600)
 def calcular_matriz_correlacion_ipsa(df_todas: pd.DataFrame) -> pd.DataFrame:
     """Matriz de correlación de retornos diarios "reales" (sin días de precio
     congelado) entre las 30 acciones del IPSA."""
@@ -646,6 +708,130 @@ def calcular_backtest_tpm(df_macro: pd.DataFrame) -> dict:
     }
 
 
+@st.cache_data(ttl=3600)
+def calcular_retornos_mensuales_ipsa(df_todas: pd.DataFrame) -> pd.DataFrame:
+    """Retornos mensuales "reales" para las 30 acciones del IPSA: se componen
+    los retornos diarios reales (excluyendo días de precio congelado) dentro
+    de cada mes calendario, así que un día congelado no aporta un 0% falso a
+    ningún mes."""
+    df_todas = df_todas.assign(fecha=pd.to_datetime(df_todas["fecha"]))
+
+    retornos_por_ticker = {}
+    for ticker in TICKERS_IPSA:
+        serie = (
+            df_todas[df_todas["ticker"] == ticker]
+            .sort_values("fecha")
+            .set_index("fecha")["precio_cierre"]
+        )
+        retornos_reales = calcular_retornos_reales(serie).dropna()
+        if retornos_reales.empty:
+            continue
+        mensual = retornos_reales.groupby(retornos_reales.index.to_period("M")).apply(
+            lambda x: (1 + x).prod() - 1
+        )
+        retornos_por_ticker[ticker.replace(".SN", "")] = mensual
+
+    return pd.DataFrame(retornos_por_ticker)
+
+
+def _wml_de_un_mes(retornos_hold: pd.Series, ganadoras, perdedoras) -> tuple[float, float, float]:
+    """Retorno neto (con costo de transacción) de las patas Ganadoras y
+    Perdedoras para un mes de holding, y su spread (WML)."""
+    ret_g = retornos_hold[list(ganadoras)].mean() - COSTO_TRANSACCION_MOMENTUM
+    ret_p = retornos_hold[list(perdedoras)].mean() - COSTO_TRANSACCION_MOMENTUM
+    return ret_g, ret_p, ret_g - ret_p
+
+
+@st.cache_data(ttl=3600)
+def calcular_momentum_ipsa(df_todas: pd.DataFrame) -> dict:
+    """Estrategia momentum 12-1 (Jegadeesh & Titman) sobre las 30 acciones del
+    IPSA. Cada mes: rankea por retorno compuesto de los meses [t-12, t-2]
+    (salta t-1), forma Ganadoras/Perdedoras (10 cada una, equiponderadas),
+    mantiene 1 mes, rebalanceo mensual con costo de 15pb por posición. Incluye
+    un test de permutación: en cada mes se sortean al azar 10+10 tickers
+    entre los disponibles ese mes (en vez de usar el ranking real), 1000
+    veces, preservando la estructura temporal (mismas fechas, mismos
+    retornos, mismo costo — solo cambia qué tickers se etiquetan
+    ganadoras/perdedoras)."""
+    df_mensual = calcular_retornos_mensuales_ipsa(df_todas)
+    meses = sorted(df_mensual.index)
+
+    eventos = []
+    for i in range(MESES_FORMACION_MOMENTUM, len(meses)):
+        mes_hold = meses[i]
+        ventana_señal = meses[i - MESES_FORMACION_MOMENTUM: i - MESES_SKIP_MOMENTUM]
+        if len(ventana_señal) < MESES_FORMACION_MOMENTUM - MESES_SKIP_MOMENTUM:
+            continue
+
+        señal = (1 + df_mensual.loc[ventana_señal]).prod(min_count=len(ventana_señal)) - 1
+        señal = señal.dropna()
+        retornos_hold = df_mensual.loc[mes_hold].dropna()
+
+        tickers_validos = señal.index.intersection(retornos_hold.index)
+        if len(tickers_validos) < 2 * N_GANADORAS_PERDEDORAS_MOMENTUM:
+            continue
+
+        eventos.append({
+            "mes": mes_hold,
+            "señal": señal.loc[tickers_validos],
+            "retornos_hold": retornos_hold.loc[tickers_validos],
+        })
+
+    if not eventos:
+        return {"df_wml": pd.DataFrame(), "n_meses": 0}
+
+    filas_wml = []
+    for evento in eventos:
+        ranking = evento["señal"].sort_values(ascending=False)
+        ganadoras = ranking.index[:N_GANADORAS_PERDEDORAS_MOMENTUM]
+        perdedoras = ranking.index[-N_GANADORAS_PERDEDORAS_MOMENTUM:]
+        ret_g, ret_p, wml = _wml_de_un_mes(evento["retornos_hold"], ganadoras, perdedoras)
+        filas_wml.append({
+            "Mes": evento["mes"].to_timestamp(),
+            "Ganadoras (%)": ret_g * 100,
+            "Perdedoras (%)": ret_p * 100,
+            "WML (%)": wml * 100,
+        })
+
+    df_wml = pd.DataFrame(filas_wml)
+    df_wml["Equity WML"] = (1 + df_wml["WML (%)"] / 100).cumprod()
+
+    wml_decimal = df_wml["WML (%)"] / 100
+    t_stat, p_valor = stats.ttest_1samp(wml_decimal, popmean=0)
+    retorno_total = (df_wml["Equity WML"].iloc[-1] - 1) * 100
+
+    # --- Test de permutación ---
+    # Se precomputan arrays de numpy puros (retornos alineados por posición, no
+    # por nombre) para que el loop de 1000 permutaciones no pague el costo de
+    # indexar un pandas Series por etiqueta ~50.000 veces (eso tardaba >3 min;
+    # con arrays de numpy e índices enteros baja a unos pocos segundos).
+    retornos_arrays = [evento["retornos_hold"].reindex(evento["señal"].index).to_numpy() for evento in eventos]
+    n_disponibles_por_mes = [len(arr) for arr in retornos_arrays]
+
+    rng = np.random.default_rng(42)  # semilla fija para reproducibilidad
+    retornos_totales_perm = np.empty(N_PERMUTACIONES_MOMENTUM)
+    for p in range(N_PERMUTACIONES_MOMENTUM):
+        equity_perm = 1.0
+        for retornos_array, n_disponibles in zip(retornos_arrays, n_disponibles_por_mes):
+            elegidos = rng.choice(n_disponibles, size=2 * N_GANADORAS_PERDEDORAS_MOMENTUM, replace=False)
+            ret_g_perm = retornos_array[elegidos[:N_GANADORAS_PERDEDORAS_MOMENTUM]].mean() - COSTO_TRANSACCION_MOMENTUM
+            ret_p_perm = retornos_array[elegidos[N_GANADORAS_PERDEDORAS_MOMENTUM:]].mean() - COSTO_TRANSACCION_MOMENTUM
+            equity_perm *= (1 + (ret_g_perm - ret_p_perm))
+        retornos_totales_perm[p] = (equity_perm - 1) * 100
+
+    percentil_real = float((retornos_totales_perm < retorno_total).mean() * 100)
+
+    return {
+        "df_wml": df_wml,
+        "n_meses": len(df_wml),
+        "t_stat": t_stat,
+        "p_valor": p_valor,
+        "retorno_total": retorno_total,
+        "retornos_totales_perm": retornos_totales_perm,
+        "percentil_real": percentil_real,
+    }
+
+
 # --- Sidebar: info de última actualización ---
 with st.sidebar:
     st.subheader("Última actualización")
@@ -672,10 +858,10 @@ except Exception:
 
 (
     tab_premercado, tab_macro, tab_acciones, tab_riesgo, tab_magnificas,
-    tab_benchmark, tab_event_study, tab_backtester,
+    tab_benchmark, tab_event_study, tab_backtester, tab_momentum,
 ) = st.tabs([
     "Brief Premercado", "Indicadores macro", "Acciones IPSA", "Riesgo", "7 Magníficas",
-    "Benchmark", "Event Study TPM", "Backtester: Estrategia TPM",
+    "Benchmark", "Event Study TPM", "Backtester: Estrategia TPM", "Momentum IPSA",
 ])
 
 # --- Tab 0: Brief Premercado ---
@@ -703,6 +889,24 @@ with tab_premercado:
                 else:
                     st.metric(ind["etiqueta"], "—")
                     st.caption("sin datos suficientes")
+
+        spread_2s10s = calcular_spread_2s10s(df_macro)
+        if spread_2s10s:
+            fecha_spread = pd.Timestamp(spread_2s10s["fecha"]).strftime("%d-%m-%Y")
+            texto_spread = (
+                f"Spread 2s10s (UST10Y − UST2Y): {spread_2s10s['spread']:+.2f} pp "
+                f"(UST10Y {spread_2s10s['ust10']:.2f}% − UST2Y {spread_2s10s['ust2']:.2f}%) al {fecha_spread}."
+            )
+            if spread_2s10s["invertida"]:
+                st.error(f"🔻 **Curva invertida.** {texto_spread}")
+            else:
+                st.success(texto_spread)
+            st.caption(
+                "Una curva invertida (spread 2s10s negativo) se ha asociado históricamente "
+                "con mayor probabilidad de recesión en EEUU en los siguientes 12-24 meses "
+                "— es una correlación histórica, no una predicción garantizada, y ha dado "
+                "falsas señales en el pasado."
+            )
 
     except Exception as e:
         st.error(f"No se pudo cargar el resumen internacional: {e}")
@@ -796,14 +1000,14 @@ with tab_acciones:
     try:
         df_acciones = cargar_precios_acciones()
 
-        # Gráfico principal: solo las 5 acciones más importantes (igual que antes).
-        df_principales = df_acciones[df_acciones["ticker"].isin(TICKERS_IPSA_PRINCIPALES)]
-        tickers_disponibles = TICKERS_IPSA_PRINCIPALES
+        # Gráfico principal: las 30 acciones del IPSA están disponibles para elegir,
+        # pero por defecto se muestran las mismas 5 destacadas de siempre.
+        tickers_disponibles = TICKERS_IPSA
         tickers_elegidos = st.multiselect(
-            "Elige acciones a comparar", tickers_disponibles, default=tickers_disponibles[:2]
+            "Elige acciones a comparar", tickers_disponibles, default=TICKERS_IPSA_PRINCIPALES
         )
 
-        df_filtrado = df_principales[df_principales["ticker"].isin(tickers_elegidos)]
+        df_filtrado = df_acciones[df_acciones["ticker"].isin(tickers_elegidos)]
 
         normalizar = st.checkbox("Normalizar a base 100", value=True)
 
@@ -842,6 +1046,7 @@ with tab_acciones:
 
         formato = {col: "{:+.2f}%" for col in columnas_pct}
         formato["Beta"] = "{:.2f}"
+        formato["Beta ajustada"] = "{:.2f}"
         formato["Volatilidad anualizada (%)"] = "{:.2f}%"
         formato["CAPM local (%)"] = "{:.2f}%"
         formato["CAPM + CRP (%)"] = "{:.2f}%"
@@ -868,6 +1073,10 @@ with tab_acciones:
             "excluyendo días de precio congelado (mismo criterio que \"Atraso\"). "
             "Beta calculado sobre retornos diarios del último año, respecto al ETF ECH "
             "(proxy del IPSA — el índice no tiene ticker propio en Yahoo Finance). "
+            "\"Beta ajustada\" = (2/3) × Beta + (1/3) × 1 (ajuste tipo Blume): tira la beta "
+            "cruda hacia 1, el valor \"promedio de mercado\" de largo plazo, para corregir "
+            "el sesgo de que betas históricas muy altas o muy bajas tienden a acercarse a 1 "
+            "en períodos futuros. "
             "⚠️ en \"Última actualización\" indica que Yahoo Finance no refrescó el precio "
             "de ese ticker hace más de 5 días hábiles — el % de cambio mostrado no es confiable."
         )
@@ -955,6 +1164,44 @@ with tab_riesgo:
             "individuales no se ven aplastadas cerca de cero. La diagonal se deja en blanco "
             "porque es trivialmente 1.0 y no aporta información."
         )
+
+        st.divider()
+        st.subheader("Distribución de retornos diarios — 5 acciones principales")
+        st.caption(
+            "Histograma de retornos diarios reales (últimos ~2 años, excluyendo días de "
+            "precio congelado) con la curva normal superpuesta (misma media y desviación "
+            "estándar). La distancia visible entre el histograma y la curva es evidencia "
+            "directa de las colas gordas que menciona la nota sobre el VaR paramétrico "
+            "más abajo."
+        )
+
+        distribuciones = calcular_distribucion_retornos(df_acciones)
+        if distribuciones:
+            columnas_dist = st.columns(len(distribuciones))
+            for col, (nombre, datos) in zip(columnas_dist, distribuciones.items()):
+                with col:
+                    r = datos["retornos"]
+                    mu, sigma = r.mean(), r.std()
+                    xs = np.linspace(r.min(), r.max(), 200)
+                    normal_pdf = stats.norm.pdf(xs, mu, sigma)
+
+                    fig_hist = go.Figure()
+                    fig_hist.add_trace(go.Histogram(
+                        x=r, histnorm="probability density", name="Real",
+                        marker_color="#2a78d6", opacity=0.75,
+                    ))
+                    fig_hist.add_trace(go.Scatter(
+                        x=xs, y=normal_pdf, mode="lines", name="Normal",
+                        line=dict(color="#e34948", width=2),
+                    ))
+                    fig_hist.update_layout(
+                        title=nombre, showlegend=False, height=280,
+                        margin=dict(l=10, r=10, t=30, b=10),
+                    )
+                    st.plotly_chart(fig_hist, use_container_width=True)
+                    st.caption(f"Skewness: {datos['skewness']:+.2f} | Kurtosis (exceso): {datos['kurtosis']:+.2f}")
+        else:
+            st.info("No hay suficientes datos para calcular las distribuciones.")
 
         st.divider()
         st.info(
@@ -1291,3 +1538,116 @@ with tab_backtester:
 
     except Exception as e:
         st.error(f"No se pudo calcular el backtest: {e}")
+
+# --- Tab 8: Momentum IPSA ---
+with tab_momentum:
+    try:
+        st.subheader("Momentum IPSA — estrategia 12-1 (Jegadeesh & Titman)")
+        st.caption(
+            "Cada fin de mes, rankea las 30 acciones del IPSA por su retorno "
+            "compuesto de los meses [t-12, t-2] (11 meses, saltando el mes t-1 más "
+            "reciente — el clásico \"12-1\" de Jegadeesh & Titman). Forma dos "
+            "portafolios equiponderados de 10 acciones — \"Ganadoras\" (mejor "
+            "ranking) y \"Perdedoras\" (peor ranking) — que se mantienen 1 mes y se "
+            "rebalancean mensualmente, con 15 puntos base de costo de transacción "
+            "por posición por rebalanceo. Excluye días de precio congelado del "
+            "cálculo de retornos (mismo filtro que el resto del dashboard)."
+        )
+
+        df_acciones = cargar_precios_acciones()
+        resultado_momentum = calcular_momentum_ipsa(df_acciones)
+
+        if resultado_momentum["n_meses"] < 2:
+            st.warning("No hay suficientes meses de datos para construir la estrategia de momentum.")
+        else:
+            df_wml = resultado_momentum["df_wml"].copy()
+
+            col1, col2, col3 = st.columns(3)
+            col1.metric("Retorno total WML acumulado", f"{resultado_momentum['retorno_total']:+.2f}%")
+            col2.metric("Meses en el backtest", f"{resultado_momentum['n_meses']}")
+            with col3:
+                st.markdown("**t-test WML vs 0**")
+                st.markdown(
+                    f"<span style='{_color_significancia(resultado_momentum['p_valor'])}'>"
+                    f"t = {resultado_momentum['t_stat']:.2f}, p = {resultado_momentum['p_valor']:.3f}</span>",
+                    unsafe_allow_html=True,
+                )
+            st.caption(LEYENDA_SIGNIFICANCIA)
+
+            df_wml["Retorno acumulado WML (%)"] = (df_wml["Equity WML"] - 1) * 100
+            fig_wml = px.line(
+                df_wml, x="Mes", y="Retorno acumulado WML (%)",
+                title="Curva de equity del spread WML (Ganadoras − Perdedoras)",
+                markers=True,
+            )
+            fig_wml.add_hline(y=0, line_dash="dot", line_color="#898781")
+            st.plotly_chart(fig_wml, use_container_width=True)
+
+            st.subheader(f"Retornos mensuales ({resultado_momentum['n_meses']} meses)")
+            st.dataframe(
+                df_wml.drop(columns=["Retorno acumulado WML (%)"]).style.format({
+                    "Ganadoras (%)": "{:+.2f}%",
+                    "Perdedoras (%)": "{:+.2f}%",
+                    "WML (%)": "{:+.2f}%",
+                    "Equity WML": "{:.4f}",
+                }),
+                use_container_width=True,
+            )
+
+            st.divider()
+            st.subheader("Test de permutación: ¿le gana el momentum al azar?")
+            st.caption(
+                f"En cada uno de los {resultado_momentum['n_meses']} meses se sortearon al azar "
+                f"10 \"ganadoras\" y 10 \"perdedoras\" entre las acciones disponibles ese mes "
+                f"(en vez de usar el ranking de momentum real), {N_PERMUTACIONES_MOMENTUM:,} veces, "
+                "preservando la estructura temporal (mismas fechas, mismos retornos, mismo "
+                "costo de transacción — solo cambia qué acciones se etiquetan "
+                "ganadoras/perdedoras cada mes)."
+            )
+
+            fig_hist_momentum = px.histogram(
+                x=resultado_momentum["retornos_totales_perm"],
+                nbins=50,
+                title=f"Distribución de retornos totales bajo {N_PERMUTACIONES_MOMENTUM:,} mezclas aleatorias",
+                labels={"x": "Retorno total acumulado (%)"},
+            )
+            fig_hist_momentum.add_vline(
+                x=resultado_momentum["retorno_total"], line_color="#e34948", line_width=2,
+                annotation_text="Resultado real", annotation_position="top",
+            )
+            st.plotly_chart(fig_hist_momentum, use_container_width=True)
+
+            percentil_momentum = resultado_momentum["percentil_real"]
+            distinguible_del_azar_momentum = percentil_momentum >= 95 or percentil_momentum <= 5
+            etiqueta_momentum = "distinguible del azar" if distinguible_del_azar_momentum else "indistinguible del azar"
+            color_momentum = "#0ca30c" if distinguible_del_azar_momentum else "#d03b3b"
+            st.markdown(
+                f"**El resultado real ({resultado_momentum['retorno_total']:+.2f}%) cae en el "
+                f"percentil {percentil_momentum:.0f} de la distribución de mezclas al azar** — "
+                f"<span style='color:{color_momentum}; font-weight:700'>{etiqueta_momentum}</span>.",
+                unsafe_allow_html=True,
+            )
+            st.caption(
+                "🟢 Verde = cae en el 5% extremo (superior o inferior), distinguible del azar "
+                "— 🔴 Rojo = cae en el rango central, indistinguible del azar."
+            )
+
+        st.divider()
+        st.info(
+            "**Nota metodológica.** Esta pestaña prueba la versión de **momentum de "
+            "corto/mediano plazo** de Jegadeesh & Titman (1993): acciones que subieron "
+            "en los últimos 12 meses (saltando el más reciente) tienden a seguir "
+            "subiendo en el mes siguiente. Esto es **distinto** — y en apariencia "
+            "contradictorio — de De Bondt & Thaler (1985), que documentan reversión a "
+            "**largo plazo** (3-5 años): acciones \"perdedoras\" durante varios años "
+            "tienden a superar a las \"ganadoras\" en el período siguiente. Ambos "
+            "efectos coexisten en la literatura porque operan en horizontes distintos: "
+            "el diseño de esta pestaña (formación de 11 meses, mantención de 1 mes) "
+            "prueba específicamente el momentum de corto/mediano plazo, no la reversión "
+            "de largo plazo de De Bondt & Thaler. Es un backtest hipotético e "
+            "ilustrativo, con solo 10 acciones por pata (n chico) sobre un universo de "
+            "30 — no es una recomendación de inversión."
+        )
+
+    except Exception as e:
+        st.error(f"No se pudo calcular la estrategia de momentum: {e}")

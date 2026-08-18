@@ -33,10 +33,18 @@ SERIES_A_DESCARGAR = {
 BCCH_URL = "https://si3.bcentral.cl/SieteRestWS/SieteRestWS.ashx"
 
 # El BCCh no publica la tasa de la Fed ni el bono del Tesoro de EEUU como
-# series propias (no existen en su catálogo SearchSeries), así que el bono
-# a 10 años se descarga aparte desde Yahoo Finance.
+# series propias (no existen en su catálogo SearchSeries), así que los bonos
+# de EEUU se descargan aparte desde Yahoo Finance.
 CODIGO_UST10 = "YF.^TNX"
 NOMBRE_UST10 = "Bono del Tesoro de EEUU a 10 años (UST10Y)"
+
+# Yahoo Finance no tiene un índice "^" para el UST 2 años (solo 13 semanas,
+# 5, 10 y 30 años). El sustituto verificado es 2YY=F (2-Year Yield Futures,
+# CME), que cotiza directamente en rendimiento (no en precio) y tiene ~5
+# años de historia con valores económicamente coherentes (0.2% en 2021,
+# subiendo con el ciclo de alzas de la Fed hasta ~4% hoy).
+CODIGO_UST2 = "YF.2YY=F"
+NOMBRE_UST2 = "Bono del Tesoro de EEUU a 2 años (UST2Y, proxy 2YY=F)"
 
 
 def descargar_serie(codigo_serie: str, first_date: str = "2015-01-01") -> list[dict]:
@@ -82,9 +90,9 @@ def descargar_serie(codigo_serie: str, first_date: str = "2015-01-01") -> list[d
     return resultado
 
 
-def descargar_ust10(first_date: str = "2015-01-01") -> list[dict]:
-    """Descarga el rendimiento del bono del Tesoro de EEUU a 10 años (^TNX) vía Yahoo Finance."""
-    historico = yf.Ticker("^TNX").history(start=first_date)
+def descargar_serie_yfinance(ticker: str, first_date: str = "2015-01-01") -> list[dict]:
+    """Descarga un rendimiento (ya expresado en %, no en precio) vía Yahoo Finance."""
+    historico = yf.Ticker(ticker).history(start=first_date)
     return [{"fecha": fecha_idx.date(), "valor": float(fila["Close"])} for fecha_idx, fila in historico.iterrows()]
 
 
@@ -130,8 +138,14 @@ def actualizar_todas_las_series():
             print(f"  -> {len(observaciones)} observaciones procesadas")
 
         print(f"Descargando {NOMBRE_UST10} ({CODIGO_UST10})...")
-        observaciones = descargar_ust10()
+        observaciones = descargar_serie_yfinance("^TNX")
         guardar_observaciones(session, CODIGO_UST10, NOMBRE_UST10, "diaria", observaciones)
+        session.commit()
+        print(f"  -> {len(observaciones)} observaciones procesadas")
+
+        print(f"Descargando {NOMBRE_UST2} ({CODIGO_UST2})...")
+        observaciones = descargar_serie_yfinance("2YY=F", first_date="2021-08-13")
+        guardar_observaciones(session, CODIGO_UST2, NOMBRE_UST2, "diaria", observaciones)
         session.commit()
         print(f"  -> {len(observaciones)} observaciones procesadas")
 

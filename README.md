@@ -8,12 +8,18 @@ actualizado diariamente.
 
 ## Qué muestra
 
-El dashboard tiene 8 pestañas:
+El dashboard tiene 9 pestañas:
 
 1. **Brief Premercado** — para revisar antes de que abra la Bolsa de Santiago.
    Sección "Importante": % de cambio de la sesión más reciente de S&P 500,
    cobre, MSCI EM (EEM), Bovespa y el bono UST a 10 años, con flecha y color
-   verde/rojo, pensado para leerse en 10 segundos. Debajo, un **resumen diario
+   verde/rojo, pensado para leerse en 10 segundos. Justo debajo, el **spread
+   2s10s** (UST10Y − UST2Y — UST2Y vía `2YY=F` de Yahoo Finance, ya que no
+   existe un ticker "^" clásico para 2 años; verificado con datos reales
+   antes de usarlo), marcado en rojo si la curva está invertida (spread
+   negativo), con una nota breve y cautelosa sobre su asociación histórica
+   con recesiones en EEUU — sin afirmar que sea una predicción garantizada.
+   Debajo de eso, un **resumen diario
    generado por IA** (Gemini `gemini-3.6-flash`) con dos secciones — "Panorama
    global" (3-5 puntos) y "Posibles efectos para Chile" (lenguaje cauteloso,
    sin afirmaciones causales categóricas) — armado a partir de esos mismos
@@ -25,17 +31,21 @@ El dashboard tiene 8 pestañas:
    fuentes de noticias más abajo).
 2. **Indicadores macro** — selector para explorar cualquiera de las series del
    BCCh (ver lista completa más abajo) con su gráfico histórico y último valor.
-3. **Acciones IPSA** — gráfico de precios normalizables a base 100 para las 5
-   acciones más importantes (SQM-B, Banco de Chile, Falabella, Copec, CMPC),
-   más un **heatmap de desempeño con las 30 acciones del IPSA**: % de cambio
+3. **Acciones IPSA** — gráfico de precios normalizables a base 100; el
+   selector permite elegir entre **las 30 acciones del IPSA** (incluida
+   LATAM, `LTM.SN`), con las mismas 5 destacadas de siempre (SQM-B, Banco de
+   Chile, Falabella, Copec, CMPC) preseleccionadas por defecto. Debajo, un
+   **heatmap de desempeño con las 30 acciones del IPSA**: % de cambio
    1D/1W/1M/YTD (coloreado verde/rojo), **volatilidad anualizada** (rolling
-   21 días hábiles × √252), **Beta** de cada acción contra el mercado chileno
-   (regresión de retornos diarios del último año vs el ETF ECH, ver
-   limitación de datos más abajo), **costo de capital CAPM** ("CAPM local" y
-   "CAPM + CRP", ver nota sobre riesgo país más abajo) y la fecha del último
-   precio real de cada ticker. Volatilidad, Beta y CAPM excluyen los días de
-   precio congelado del cálculo (ver limitación de datos más abajo) — un
-   retorno de 0% por dato repetido no es volatilidad real cero.
+   21 días hábiles × √252), **Beta** cruda y **Beta ajustada** (ajuste tipo
+   Blume: (2/3) × Beta + (1/3) × 1, tira la beta hacia el "promedio de
+   mercado" de largo plazo) contra el mercado chileno (regresión de retornos
+   diarios del último año vs el ETF ECH, ver limitación de datos más abajo),
+   **costo de capital CAPM** ("CAPM local" y "CAPM + CRP", ver nota sobre
+   riesgo país más abajo) y la fecha del último precio real de cada ticker.
+   Volatilidad, Beta y CAPM excluyen los días de precio congelado del
+   cálculo (ver limitación de datos más abajo) — un retorno de 0% por dato
+   repetido no es volatilidad real cero.
 
    **CAPM y prima de riesgo país (CRP):** "CAPM local" = Rf local (PDBC 14
    días, la tasa libre de riesgo de corto plazo) + Beta × prima de mercado
@@ -64,6 +74,12 @@ El dashboard tiene 8 pestañas:
    × volumen) de los últimos 3 meses, comparado contra las 30 acciones del
    IPSA. Es una **aproximación heurística simplificada**, no un modelo
    riguroso de impacto de mercado ni de profundidad del libro de órdenes.
+
+   También muestra, para las 5 acciones principales, un **histograma de
+   retornos diarios con la curva normal superpuesta** (misma media y
+   desviación estándar), junto con su **skewness y kurtosis (exceso)** — la
+   distancia visible entre el histograma real y la curva normal es evidencia
+   directa de las colas gordas que menciona la nota sobre el VaR paramétrico.
 5. **7 Magníficas** — AAPL, MSFT, GOOGL, AMZN, NVDA, META y TSLA, normalizadas
    a base 100 para comparar su desempeño relativo.
 6. **Benchmark** — el IPSA (vía el ETF ECH, ver nota abajo) comparado con el
@@ -133,6 +149,25 @@ El dashboard tiene 8 pestañas:
    dirección** — indistinguible del azar. Consistente con el hallazgo del
    Event Study: no hay evidencia de que esta estrategia direccional le gane
    al mercado con los datos disponibles.
+9. **Momentum IPSA** — estrategia momentum "12-1" de Jegadeesh & Titman
+   (1993) sobre las 30 acciones del IPSA: cada fin de mes rankea por retorno
+   compuesto de los meses [t-12, t-2] (saltando el mes t-1 más reciente),
+   forma portafolios equiponderados "Ganadoras" y "Perdedoras" (10 acciones
+   cada uno), los mantiene 1 mes con rebalanceo mensual y 15 puntos base de
+   costo de transacción por posición. Muestra la curva de equity del spread
+   WML (Ganadoras − Perdedoras), un t-test simple contra cero, la tabla de
+   retornos mensuales, y el mismo **test de permutación** que el Backtester
+   de TPM — mezcla al azar qué 10+10 acciones son "ganadoras/perdedoras"
+   cada mes (preservando fechas y retornos reales), 1.000 veces. Nota
+   metodológica visible: distingue este diseño (momentum de corto/mediano
+   plazo) de De Bondt & Thaler (1985), que documentan el efecto contrario —
+   reversión a **largo plazo** (3-5 años) — dejando claro que ambos
+   coexisten en la literatura porque operan en horizontes distintos.
+
+   **Hallazgo:** sobre 49 meses de datos, el WML acumulado es +42,9% (t =
+   1,03, p = 0,31 — no significativo al 5%), y el resultado real cae en el
+   **percentil 88,5 de 1.000 mezclas aleatorias** — elevado, pero sin cruzar
+   el umbral de 95% para considerarse distinguible del azar.
 
 Arriba de las pestañas, y también en la barra lateral, se muestra la fecha y
 hora de la última actualización de cada fuente de datos.
@@ -157,9 +192,10 @@ hora de la última actualización de cada fuente de datos.
   ticker propio en Yahoo Finance
 - Benchmarks: S&P 500 (`^GSPC`), MSCI Emerging Markets (`EEM`), Bovespa (`^BVSP`)
 - Las 7 Magníficas: AAPL, MSFT, GOOGL, AMZN, NVDA, META, TSLA
-- El bono del Tesoro de EEUU a 10 años (`^TNX`) — se descarga junto con las
-  series del BCCh porque el Banco Central no publica tasas de EEUU en su
-  catálogo
+- El bono del Tesoro de EEUU a 10 años (`^TNX`) y a 2 años (`2YY=F` — Yahoo
+  no tiene un ticker "^" clásico para 2 años, verificado con datos reales
+  antes de usarlo) — se descargan junto con las series del BCCh porque el
+  Banco Central no publica tasas de EEUU en su catálogo
 
 **Noticias (vía `feedparser`, RSS):**
 - **Diario Financiero** — tiene RSS propio funcionando (`df.cl/noticias/site/list/port/rss.xml`).
