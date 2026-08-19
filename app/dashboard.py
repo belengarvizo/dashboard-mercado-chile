@@ -3168,6 +3168,33 @@ with tab_laboratorio:
 
         st.info(f"**Rf utilizado: {rf_lab * 100:.2f}% anual** — Fuente: {fuente_rf_texto}.")
 
+        # Rf que alimenta el CAPM: en Modo Tarea es la serie diaria real de
+        # Treasury 1Y (la regresión trabaja con excesos de retorno diarios,
+        # así que conserva la variación día a día de la tasa); en Modo
+        # experimental es una Rf diaria CONSTANTE derivada de la Rf manual
+        # (Rf manual ÷ 252 cada día) — nunca se mezcla la serie real con la
+        # manual sin avisarlo. Las medidas ESTÁTICAS (M, LMC, Sharpe,
+        # Treynor, x*) siempre usan el valor puntual rf_lab de arriba, nunca
+        # un promedio de la serie.
+        if rf_modo == "Modo experimental (Rf manual)":
+            rf_serie_para_capm = pd.Series(
+                rf_lab, index=[fecha_inicio_lab - pd.Timedelta(days=5), fecha_fin_lab + pd.Timedelta(days=5)],
+            )
+            nota_capm_rf = (
+                f"En modo experimental, el CAPM usa una Rf diaria **constante** derivada de la Rf manual "
+                f"({rf_lab*100:.2f}% anual ÷ 252 cada día) — no la serie real de Treasury 1Y."
+            )
+        else:
+            rf_serie_para_capm = rf_treasury_serie
+            nota_capm_rf = (
+                "El CAPM usa la **serie diaria** de Treasury 1Y (FRED, DGS1) alineada a cada fecha de la "
+                "regresión — no su promedio. Las medidas estáticas (M, LMC, Sharpe, Treynor, x*) usan en "
+                f"cambio el valor **puntual** del 31-07-2026 ({rf_lab*100:.2f}%) mostrado arriba: son dos "
+                "aplicaciones distintas de la misma Rf, no dos tasas distintas — la serie diaria evita "
+                "perder la variación de la tasa dentro de la regresión, y el valor puntual es "
+                "consistentemente el que pide la tarea para M/LMC/Sharpe/Treynor."
+            )
+
         st.divider()
         st.markdown("## Parte 1A — Frontera Media-Varianza")
 
@@ -3540,7 +3567,7 @@ with tab_laboratorio:
                 .set_index("fecha")["precio_cierre"]
             )
             retornos_M = lab.retornos_portafolio(df_retornos_lab, w_M)
-            df_capm_lab = lab.preparar_regresion_capm(retornos_M, sp500_precio_lab, rf_treasury_serie)
+            df_capm_lab = lab.preparar_regresion_capm(retornos_M, sp500_precio_lab, rf_serie_para_capm)
 
             if len(df_capm_lab) < 30:
                 st.error("No hay suficientes observaciones comunes entre M, el S&P 500 y Rf para el CAPM.")
@@ -3555,6 +3582,7 @@ with tab_laboratorio:
                     f"comunes ({df_capm_lab.index.min().strftime('%d-%m-%Y')} a "
                     f"{df_capm_lab.index.max().strftime('%d-%m-%Y')})."
                 )
+                st.caption(f"ℹ️ {nota_capm_rf}")
 
                 col_c1, col_c2 = st.columns(2)
                 col_c1.metric("Alfa diario", f"{reg_M['alfa']*100:+.4f}%")
@@ -3617,10 +3645,17 @@ with tab_laboratorio:
                 vol_anual_M = float(df_capm_lab["portafolio"].std() * (lab.N_RUEDAS_ANIO ** 0.5))
                 ret_anual_mkt = float(df_capm_lab["mercado"].mean() * lab.N_RUEDAS_ANIO)
                 vol_anual_mkt = float(df_capm_lab["mercado"].std() * (lab.N_RUEDAS_ANIO ** 0.5))
-                rf_anual_muestra = float(df_capm_lab["rf"].mean() * lab.N_RUEDAS_ANIO)
+                # Rf puntual (rf_lab, la misma de la tangencia M y la LMC) —
+                # NO el promedio de la serie diaria usada en el CAPM. Ver
+                # nota_capm_rf arriba: el CAPM necesita la serie diaria para
+                # los excesos de retorno, pero Sharpe/Treynor son medidas
+                # estáticas y deben usar la misma Rf puntual que el resto de
+                # la Parte 1B.
+                rf_anual_muestra = rf_lab
 
                 sharpe_M_lab, treynor_M_lab = lab.sharpe_treynor(ret_anual_M, vol_anual_M, rf_anual_muestra, reg_M["beta"])
                 sharpe_mkt_lab, treynor_mkt_lab = lab.sharpe_treynor(ret_anual_mkt, vol_anual_mkt, rf_anual_muestra, reg_auto_lab["beta"])
+                st.caption(f"Rf utilizada para Sharpe y Treynor: **{rf_anual_muestra*100:.2f}%** (valor puntual, no el promedio de la serie diaria del CAPM).")
 
                 df_desempeno = pd.DataFrame([
                     {"Portafolio": "M", "Retorno": ret_anual_M, "Volatilidad": vol_anual_M, "Beta": reg_M["beta"],
