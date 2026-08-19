@@ -3167,6 +3167,18 @@ with tab_laboratorio:
             fuente_rf_texto = f"Federal Reserve / H.15 (FRED, serie DGS1), observada el {fecha_rf_real.strftime('%d-%m-%Y')}"
 
         st.info(f"**Rf utilizado: {rf_lab * 100:.2f}% anual** — Fuente: {fuente_rf_texto}.")
+        if rf_modo == "Modo experimental (Rf manual)":
+            st.caption(
+                "📌 **LMC/Sharpe/Treynor/x\\*** usan el Rf manual puntual de arriba; **CAPM** usa esa misma "
+                "Rf manual pero convertida a una serie diaria constante (÷252) — nunca la serie real de "
+                "Treasury 1Y en este modo."
+            )
+        else:
+            st.caption(
+                "📌 **LMC/Sharpe/Treynor/x\\*** usan el Rf puntual del 31-07-2026 (arriba); **CAPM** usa la "
+                "serie diaria de Treasury 1Y (no un promedio) — son dos aplicaciones de la misma Rf, no dos "
+                "tasas distintas."
+            )
 
         # Rf que alimenta el CAPM: en Modo Tarea es la serie diaria real de
         # Treasury 1Y (la regresión trabaja con excesos de retorno diarios,
