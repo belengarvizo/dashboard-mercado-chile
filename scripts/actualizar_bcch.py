@@ -16,6 +16,7 @@ sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
 import requests
 import yfinance as yf
 from models import get_session, SerieMacro, MetadataActualizacion
+from retry_utils import con_reintentos_db
 
 # El codigo_serie es el identificador que usa el BCCh para cada serie.
 # Todos los códigos fueron verificados contra SearchSeries de la propia API.
@@ -185,40 +186,50 @@ def guardar_observaciones(session, codigo: str, nombre: str, frecuencia: str, ob
 def actualizar_todas_las_series():
     session = get_session()
 
+    def _guardar_y_commitear(codigo, nombre, frecuencia, observaciones):
+        def _hacerlo():
+            guardar_observaciones(session, codigo, nombre, frecuencia, observaciones)
+            session.commit()
+
+        # La descarga vía API no se reintenta acá (no es el problema
+        # observado); solo la escritura a la BD, propensa a cortes
+        # transitorios de la conexión serverless de Neon. guardar_observaciones
+        # es idempotente (compara contra lo ya guardado), así que reintentar
+        # la función completa -no solo el commit- es seguro.
+        con_reintentos_db(session, _hacerlo)
+
     try:
         for codigo, info in SERIES_A_DESCARGAR.items():
             print(f"Descargando {info['nombre']} ({codigo})...")
             observaciones = descargar_serie(codigo)
-            guardar_observaciones(session, codigo, info["nombre"], info["frecuencia"], observaciones)
-            session.commit()
+            _guardar_y_commitear(codigo, info["nombre"], info["frecuencia"], observaciones)
             print(f"  -> {len(observaciones)} observaciones procesadas")
 
         print(f"Descargando {NOMBRE_UST10} ({CODIGO_UST10})...")
         observaciones = descargar_serie_yfinance("^TNX")
-        guardar_observaciones(session, CODIGO_UST10, NOMBRE_UST10, "diaria", observaciones)
-        session.commit()
+        _guardar_y_commitear(CODIGO_UST10, NOMBRE_UST10, "diaria", observaciones)
         print(f"  -> {len(observaciones)} observaciones procesadas")
 
         print(f"Descargando {NOMBRE_UST2} ({CODIGO_UST2})...")
         observaciones = descargar_serie_yfinance("2YY=F", first_date="2021-08-13")
-        guardar_observaciones(session, CODIGO_UST2, NOMBRE_UST2, "diaria", observaciones)
-        session.commit()
+        _guardar_y_commitear(CODIGO_UST2, NOMBRE_UST2, "diaria", observaciones)
         print(f"  -> {len(observaciones)} observaciones procesadas")
 
         print(f"Descargando {NOMBRE_TPM_EEUU} ({CODIGO_TPM_EEUU})...")
         observaciones = descargar_serie_fred("DFF")
-        guardar_observaciones(session, CODIGO_TPM_EEUU, NOMBRE_TPM_EEUU, "diaria", observaciones)
-        session.commit()
+        _guardar_y_commitear(CODIGO_TPM_EEUU, NOMBRE_TPM_EEUU, "diaria", observaciones)
         print(f"  -> {len(observaciones)} observaciones procesadas")
 
-        # Registra que esta fuente se actualizó ahora
-        meta = session.query(MetadataActualizacion).filter_by(fuente="bcch").first()
-        if meta:
-            meta.ultima_actualizacion = datetime.now()
-        else:
-            session.add(MetadataActualizacion(fuente="bcch", ultima_actualizacion=datetime.now()))
+        def _guardar_metadata():
+            # Registra que esta fuente se actualizó ahora
+            meta = session.query(MetadataActualizacion).filter_by(fuente="bcch").first()
+            if meta:
+                meta.ultima_actualizacion = datetime.now()
+            else:
+                session.add(MetadataActualizacion(fuente="bcch", ultima_actualizacion=datetime.now()))
+            session.commit()
 
-        session.commit()
+        con_reintentos_db(session, _guardar_metadata)
         print("Actualización del BCCh completada.")
 
     except Exception as e:
