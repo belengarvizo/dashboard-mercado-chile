@@ -127,3 +127,99 @@ TICKERS_EEUU_ADICIONALES = [
     "DUK",   # Duke Energy
     "SO",    # Southern Company
 ]
+
+# Tickers adicionales solo para el universo de 50 acciones del S&P 500 de
+# "Laboratorio Financiero" (app/portfolio_lab.py) — no forman parte del Dow
+# Jones ni de TICKERS_EEUU_ADICIONALES, así que hay que descargarlos aparte.
+# Verificados contra la API de Yahoo Finance antes de agregarlos.
+TICKERS_LABORATORIO_ADICIONALES = [
+    "COP",   # ConocoPhillips
+    "SLB",   # SLB (Schlumberger)
+    "MA",    # Mastercard
+    "BAC",   # Bank of America
+    "WFC",   # Wells Fargo
+    "MS",    # Morgan Stanley
+    "BLK",   # BlackRock
+    "PFE",   # Pfizer
+    "ABBV",  # AbbVie
+    "TMO",   # Thermo Fisher Scientific
+    "ABT",   # Abbott Laboratories
+    "UNP",   # Union Pacific
+    "UPS",   # United Parcel Service
+    "LMT",   # Lockheed Martin
+    "DE",    # Deere & Company
+    "ORCL",  # Oracle
+    "ADBE",  # Adobe
+    "AEP",   # American Electric Power
+    "COST",  # Costco Wholesale
+]
+
+# Universo de 50 acciones del S&P 500 para "Laboratorio Financiero": (ticker,
+# nombre de la empresa, sector GICS). Cubre con margen los 6 sectores que
+# exige la tarea (Energy, Financials, Health Care, Industrials, Information
+# Technology, Utilities, con 4 a 8 acciones cada uno, todas ≥2) más otros
+# sectores para completar 50 con nombres grandes y líquidos. Pertenencia al
+# S&P 500 y sector verificados antes de incluirlas; disponibilidad de datos
+# verificada contra la API de Yahoo Finance.
+UNIVERSO_LABORATORIO_50 = [
+    ("XOM", "ExxonMobil", "Energy"),
+    ("CVX", "Chevron", "Energy"),
+    ("COP", "ConocoPhillips", "Energy"),
+    ("SLB", "SLB", "Energy"),
+    ("JPM", "JPMorgan Chase", "Financials"),
+    ("GS", "Goldman Sachs", "Financials"),
+    ("V", "Visa", "Financials"),
+    ("MA", "Mastercard", "Financials"),
+    ("BAC", "Bank of America", "Financials"),
+    ("WFC", "Wells Fargo", "Financials"),
+    ("MS", "Morgan Stanley", "Financials"),
+    ("BLK", "BlackRock", "Financials"),
+    ("LLY", "Eli Lilly", "Health Care"),
+    ("JNJ", "Johnson & Johnson", "Health Care"),
+    ("UNH", "UnitedHealth Group", "Health Care"),
+    ("PFE", "Pfizer", "Health Care"),
+    ("MRK", "Merck & Co.", "Health Care"),
+    ("ABBV", "AbbVie", "Health Care"),
+    ("TMO", "Thermo Fisher Scientific", "Health Care"),
+    ("ABT", "Abbott Laboratories", "Health Care"),
+    ("CAT", "Caterpillar", "Industrials"),
+    ("HON", "Honeywell", "Industrials"),
+    ("GE", "GE Aerospace", "Industrials"),
+    ("BA", "Boeing", "Industrials"),
+    ("UNP", "Union Pacific", "Industrials"),
+    ("UPS", "United Parcel Service", "Industrials"),
+    ("LMT", "Lockheed Martin", "Industrials"),
+    ("DE", "Deere & Company", "Industrials"),
+    ("NVDA", "Nvidia", "Information Technology"),
+    ("AAPL", "Apple", "Information Technology"),
+    ("MSFT", "Microsoft", "Information Technology"),
+    ("AVGO", "Broadcom", "Information Technology"),
+    ("ORCL", "Oracle", "Information Technology"),
+    ("CRM", "Salesforce", "Information Technology"),
+    ("ADBE", "Adobe", "Information Technology"),
+    ("CSCO", "Cisco Systems", "Information Technology"),
+    ("NEE", "NextEra Energy", "Utilities"),
+    ("DUK", "Duke Energy", "Utilities"),
+    ("SO", "Southern Company", "Utilities"),
+    ("AEP", "American Electric Power", "Utilities"),
+    ("AMZN", "Amazon", "Consumer Discretionary"),
+    ("HD", "Home Depot", "Consumer Discretionary"),
+    ("MCD", "McDonald's", "Consumer Discretionary"),
+    ("NKE", "Nike", "Consumer Discretionary"),
+    ("PG", "Procter & Gamble", "Consumer Staples"),
+    ("KO", "Coca-Cola", "Consumer Staples"),
+    ("WMT", "Walmart", "Consumer Staples"),
+    ("COST", "Costco Wholesale", "Consumer Staples"),
+    ("GOOGL", "Alphabet", "Communication Services"),
+    ("META", "Meta Platforms", "Communication Services"),
+]
+
+TICKERS_LABORATORIO_50 = [t for t, _, _ in UNIVERSO_LABORATORIO_50]
+SECTOR_POR_TICKER_LABORATORIO = {t: sector for t, _, sector in UNIVERSO_LABORATORIO_50}
+EMPRESA_POR_TICKER_LABORATORIO = {t: nombre for t, nombre, _ in UNIVERSO_LABORATORIO_50}
+
+# Sectores en los que la tarea exige al menos 2 acciones en la selección.
+SECTORES_OBLIGATORIOS_LABORATORIO = [
+    "Energy", "Financials", "Health Care", "Industrials",
+    "Information Technology", "Utilities",
+]

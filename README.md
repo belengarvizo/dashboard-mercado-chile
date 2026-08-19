@@ -236,6 +236,44 @@ El dashboard tiene 10 pestañas:
       transparencia es parte de lo que motivó este proyecto desde el
       inicio.
 
+11. **Laboratorio Financiero** — pestaña independiente (no modifica la de
+    "Optimización de Portafolios") pensada como herramienta interactiva de
+    estudio para la tarea de Frontera Media-Varianza + LMC + Desempeño,
+    sobre un universo de hasta 50 acciones del S&P 500 (con al menos 2 de
+    cada uno de los sectores Energy, Financials, Health Care, Industrials,
+    Information Technology y Utilities):
+    - **Universo y ventana**: selección editable de acciones (con botón para
+      volver a la muestra recomendada de 50) y ventana histórica de 1 a 5
+      años terminando el 31-07-2026 (modo "Tarea") o en una fecha
+      personalizada.
+    - **Parte 1A — Frontera media-varianza**: un panel de restricciones
+      ("jugar con los supuestos": venta corta, límite ±X% por acción, piso
+      sectorial, ignorar covarianzas) con **presets** para saltar directo a
+      cada punto de la tarea, más una sección de comparación que superpone
+      las 5 fronteras (base, ingenua, ±10%, sin venta corta, sin venta corta
+      + Energy/Industrials≥40%) en un solo gráfico. La frontera "base" (sin
+      restricciones) se resuelve con la solución matricial cerrada de
+      Markowitz/Merton; cualquier restricción de desigualdad se resuelve con
+      SLSQP. Incluye un slider para explorar cualquier punto de la frontera
+      y ver sus pesos.
+    - **Parte 1B — LMC y desempeño**: portafolio de tangencia M (sobre la
+      frontera base), Línea de Mercado de Capitales, regresión CAPM de M
+      contra el S&P 500 (α, β, R², error estándar, test t bilateral de
+      H0: α=0 con p-value exacto vía distribución t, IC 95%), comparación de
+      Sharpe y Treynor entre M y el S&P 500, y asignación óptima según
+      aversión al riesgo (x* = (E[RM]−Rf)/(c·σM²), con slider de c). Incluye
+      una advertencia explícita de **sesgo in-sample**: M se optimiza y se
+      evalúa con la misma ventana de datos.
+    - **Tasa libre de riesgo**: Treasury Constant Maturity a 1 año (serie
+      `DGS1` del H.15 de la Reserva Federal, vía FRED) — no la Effective
+      Federal Funds Rate que usa el resto del dashboard.
+    - **Validaciones visibles** (Σwi≈1, LMC pasa por Rf y por M, β del S&P
+      500 contra sí mismo ≈1, p-value coherente con el estadístico t) y
+      **exportación a CSV** de estadísticas, matriz de covarianzas, puntos
+      de la frontera, pesos de M y resultados CAPM/Sharpe/Treynor.
+    - Lógica separada en `portfolio_lab.py` (sin dependencias de Streamlit,
+      testeable de forma aislada) para no inflar `app/dashboard.py`.
+
 Arriba de las pestañas, y también en la barra lateral, se muestra la fecha y
 hora de la última actualización de cada fuente de datos.
 
@@ -267,6 +305,10 @@ hora de la última actualización de cada fuente de datos.
   no publica tasas de política de EEUU en su catálogo, y Yahoo Finance no
   tiene un ticker que la represente directamente (a diferencia de los
   rendimientos de bonos del Tesoro).
+- Treasury Constant Maturity a 1 año (serie `DGS1`, del H.15 de la Reserva
+  Federal) — la tasa libre de riesgo que usa "Laboratorio Financiero"
+  (distinta de la Effective Federal Funds Rate: es un rendimiento de
+  mercado de bonos, no la tasa de política monetaria).
 
 **Yahoo Finance (vía `yfinance`, sin autenticación):**
 - Las 30 acciones del índice IPSA
@@ -291,6 +333,11 @@ hora de la última actualización de cada fuente de datos.
   no tiene un ticker "^" clásico para 2 años, verificado con datos reales
   antes de usarlo) — se descargan junto con las series del BCCh porque el
   Banco Central no publica tasas de EEUU en su catálogo
+- Universo de 50 acciones del S&P 500 de "Laboratorio Financiero"
+  (`constants.UNIVERSO_LABORATORIO_50`) — verificadas contra la API de
+  Yahoo Finance y clasificadas por sector GICS; cubre con margen los 6
+  sectores que exige la tarea (Energy, Financials, Health Care,
+  Industrials, Information Technology, Utilities)
 
 **Noticias (vía `feedparser`, RSS):**
 - **Diario Financiero** — tiene RSS propio funcionando (`df.cl/noticias/site/list/port/rss.xml`).
@@ -394,6 +441,7 @@ dashboard-mercado-chile/
 │   └── actualizar_todo.py      # Corre los cuatro anteriores en secuencia (usado por el cron de Railway)
 ├── constants.py                 # Listas de tickers compartidas entre scripts y dashboard
 ├── market_data.py                # Cálculo de los indicadores de "Importante", compartido entre el dashboard y generar_brief.py
+├── portfolio_lab.py               # Frontera media-varianza, LMC y CAPM de "Laboratorio Financiero" (sin dependencias de Streamlit)
 ├── calendario_economico.py       # Fechas verificadas de RPM, FOMC, IPC, IMACEC y OPEP+ 2026
 ├── models.py                    # Define las tablas de la base de datos
 ├── requirements.txt              # Librerías necesarias

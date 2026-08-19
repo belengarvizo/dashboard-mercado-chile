@@ -68,6 +68,14 @@ CODIGO_TPM_EEUU = "FRED.DFF"
 NOMBRE_TPM_EEUU = "Tasa de política monetaria de EEUU (Effective Federal Funds Rate)"
 FRED_URL = "https://fred.stlouisfed.org/graph/fredgraph.csv"
 
+# Treasury Constant Maturity a 1 año (serie "DGS1" del H.15 de la Reserva
+# Federal, publicada en FRED) — la tasa libre de riesgo que pide
+# específicamente "Laboratorio Financiero" (distinta de la Effective Federal
+# Funds Rate de arriba, que es la tasa de política monetaria, no un
+# rendimiento de bonos del Tesoro). Mismo endpoint CSV público sin API key.
+CODIGO_TREASURY_1Y = "FRED.DGS1"
+NOMBRE_TREASURY_1Y = "Bono del Tesoro de EEUU a 1 año (Treasury Constant Maturity, H.15)"
+
 
 def descargar_serie(codigo_serie: str, first_date: str = "2015-01-01") -> list[dict]:
     """Pide una serie a la API del BCCh y devuelve una lista de {fecha, valor}."""
@@ -218,6 +226,11 @@ def actualizar_todas_las_series():
         print(f"Descargando {NOMBRE_TPM_EEUU} ({CODIGO_TPM_EEUU})...")
         observaciones = descargar_serie_fred("DFF")
         _guardar_y_commitear(CODIGO_TPM_EEUU, NOMBRE_TPM_EEUU, "diaria", observaciones)
+        print(f"  -> {len(observaciones)} observaciones procesadas")
+
+        print(f"Descargando {NOMBRE_TREASURY_1Y} ({CODIGO_TREASURY_1Y})...")
+        observaciones = descargar_serie_fred("DGS1")
+        _guardar_y_commitear(CODIGO_TREASURY_1Y, NOMBRE_TREASURY_1Y, "diaria", observaciones)
         print(f"  -> {len(observaciones)} observaciones procesadas")
 
         def _guardar_metadata():

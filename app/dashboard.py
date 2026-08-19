@@ -33,8 +33,18 @@ from constants import (
     TICKER_DOW_JONES,
     TICKERS_CHILE_ADICIONALES,
     TICKERS_EEUU_ADICIONALES,
+    TICKERS_LABORATORIO_50,
+    SECTOR_POR_TICKER_LABORATORIO,
+    EMPRESA_POR_TICKER_LABORATORIO,
+    SECTORES_OBLIGATORIOS_LABORATORIO,
 )
-from market_data import calcular_resumen_mercado, INDICADORES_PREMERCADO
+import portfolio_lab as lab
+from market_data import (
+    calcular_resumen_mercado,
+    calcular_retornos_reales,
+    calcular_capm_regresion,
+    INDICADORES_PREMERCADO,
+)
 from calendario_economico import proximos_eventos, NOTA_VIGENCIA, INDICADOR_POR_TIPO
 
 st.set_page_config(page_title="Mercado Chile", layout="wide")
@@ -125,15 +135,6 @@ def cargar_brief_diario():
     # que no mostrar nada.
     query = "SELECT fecha, contenido, generado_en FROM brief_diario ORDER BY fecha DESC LIMIT 1"
     return pd.read_sql(query, engine)
-
-
-def calcular_retornos_reales(serie: pd.Series) -> pd.Series:
-    """Retornos diarios de una serie de precios, excluyendo los días donde el
-    precio no cambió respecto al anterior (dato congelado — no es volatilidad
-    real cero, es ausencia de dato). Mismo criterio que la detección de
-    "Atraso" del heatmap: comparar cada valor con el del día anterior."""
-    cambia = serie.ne(serie.shift(1))
-    return serie.pct_change()[cambia]
 
 
 def calcular_cambios_periodo(serie: pd.Series) -> dict:
@@ -1160,45 +1161,6 @@ def calcular_frontera_media_varianza(df_retornos: pd.DataFrame, rf: float, permi
     }
 
 
-def calcular_capm_regresion(exceso_portafolio: pd.Series, exceso_mercado: pd.Series) -> dict | None:
-    """Regresión CAPM por mínimos cuadrados ordinarios sobre retornos DIARIOS
-    en exceso: Rp,t - Rf,t = α + β(Rm,t - Rf,t) + εt. Devuelve α, β, sus
-    errores estándar clásicos de OLS, el estadístico t de α (test bilateral
-    H0: α=0), su p-value exacto vía la distribución t con n-2 grados de
-    libertad (no la aproximación normal), y el intervalo de confianza 95%
-    de α. t y p-value son invariantes a la frecuencia de anualización
-    (anualizar α y SE(α) por el mismo factor no cambia t=α/SE(α))."""
-    x = exceso_mercado.to_numpy()
-    y = exceso_portafolio.to_numpy()
-    n = len(x)
-    if n < 3:
-        return None
-
-    x_media = x.mean()
-    sxx = float(np.sum((x - x_media) ** 2))
-    if sxx <= 0:
-        return None
-
-    beta = float(np.sum((x - x_media) * (y - y.mean())) / sxx)
-    alfa = float(y.mean() - beta * x_media)
-
-    residuos = y - (alfa + beta * x)
-    gl = n - 2
-    sigma2 = float(np.sum(residuos ** 2) / gl)
-    se_alfa = (sigma2 * (1 / n + x_media ** 2 / sxx)) ** 0.5
-    se_beta = (sigma2 / sxx) ** 0.5
-
-    t_alfa = alfa / se_alfa if se_alfa > 0 else float("inf")
-    p_valor = float(2 * stats.t.sf(abs(t_alfa), df=gl))
-    t_critico = float(stats.t.ppf(0.975, df=gl))
-    ic_95 = (alfa - t_critico * se_alfa, alfa + t_critico * se_alfa)
-
-    return {
-        "alfa": alfa, "beta": beta, "se_alfa": se_alfa, "se_beta": se_beta,
-        "t_alfa": t_alfa, "p_valor": p_valor, "ic_95": ic_95, "n": n, "gl": gl,
-    }
-
-
 @st.cache_data(ttl=3600)
 def calcular_portafolio_exacto(
     df_todas: pd.DataFrame, df_macro: pd.DataFrame, tickers_elegidos: tuple, permitir_short: bool,
@@ -1343,12 +1305,12 @@ except Exception:
 (
     tab_premercado, tab_macro, tab_acciones, tab_acciones_dow, tab_riesgo,
     tab_benchmark, tab_momentum, tab_calculadora, tab_portafolios,
-    tab_riesgo_bancario,
+    tab_riesgo_bancario, tab_laboratorio,
 ) = st.tabs([
     "Brief Premercado", "Indicadores macro", "Acciones IPSA", "Acciones Dow Jones",
     "Riesgo", "Benchmark", "Momentum IPSA",
     "Calculadora Financiera", "Optimización de Portafolios",
-    "Práctica: Riesgo Bancario",
+    "Práctica: Riesgo Bancario", "Laboratorio Financiero",
 ])
 
 # --- Tab 0: Brief Premercado ---
@@ -3006,3 +2968,821 @@ with tab_riesgo_bancario:
 
     except Exception as e:
         st.error(f"No se pudo calcular la práctica de riesgo bancario: {e}")
+
+# --- Tab 10: Laboratorio Financiero ---
+OPCIONES_LABORATORIO = sorted(set(
+    TICKERS_LABORATORIO_50 + TICKERS_DOW_JONES + TICKERS_MAGNIFICAS + TICKERS_EEUU_ADICIONALES
+))
+FECHA_FIN_TAREA = pd.Timestamp("2026-07-31")
+NOMBRE_TREASURY_1Y = "Bono del Tesoro de EEUU a 1 año (Treasury Constant Maturity, H.15)"
+
+
+@st.cache_data(ttl=3600)
+def preparar_datos_lab_cacheado(df_precios: pd.DataFrame, tickers: tuple, fecha_inicio, fecha_fin) -> dict:
+    return lab.preparar_datos_laboratorio(df_precios, list(tickers), fecha_inicio, fecha_fin)
+
+
+@st.cache_data(ttl=3600)
+def calcular_frontera_lab_cacheada(
+    df_retornos: pd.DataFrame, rf: float, permitir_short: bool, limite_abs, restriccion_sectorial, usar_ingenua: bool,
+) -> dict | None:
+    cov_opt = None
+    if usar_ingenua:
+        cov_opt = lab.matriz_covarianza_diagonal(lab.matriz_covarianza_anual(df_retornos))
+    return lab.calcular_frontera(
+        df_retornos, rf, permitir_short=permitir_short, limite_abs=limite_abs,
+        restriccion_sectorial=restriccion_sectorial, cov_optimizacion=cov_opt,
+    )
+
+
+def _grafico_base_frontera() -> go.Figure:
+    fig = go.Figure()
+    fig.update_layout(xaxis_title="Volatilidad anualizada", yaxis_title="Retorno esperado anualizado", height=550)
+    fig.update_xaxes(tickformat=".0%")
+    fig.update_yaxes(tickformat=".0%")
+    return fig
+
+
+def _agregar_frontera_a_grafico(fig: go.Figure, resultado: dict, nombre: str, color: str, dash: str = "solid"):
+    if resultado is None or not resultado["frontera"]:
+        return
+    vols, rets = zip(*sorted(resultado["frontera"]))
+    fig.add_trace(go.Scatter(
+        x=vols, y=rets, mode="lines", line=dict(color=color, width=3, dash=dash), name=nombre,
+    ))
+    fig.add_trace(go.Scatter(
+        x=[resultado["vol_minvar"]], y=[resultado["ret_minvar"]], mode="markers",
+        marker=dict(size=12, color=color, symbol="star", line=dict(width=1, color="black")),
+        name=f"GMV — {nombre}", showlegend=False,
+    ))
+
+
+def _tabla_pesos(pesos: pd.Series, sector_por_ticker: dict, empresa_por_ticker: dict) -> pd.DataFrame:
+    df = pesos.rename("Peso").to_frame()
+    df["Empresa"] = [empresa_por_ticker.get(t, t) for t in df.index]
+    df["Sector"] = [sector_por_ticker.get(t, "Otro") for t in df.index]
+    df.index.name = "Ticker"
+    return df.reset_index()[["Ticker", "Empresa", "Sector", "Peso"]].sort_values("Peso", ascending=False)
+
+
+with tab_laboratorio:
+    st.header("Laboratorio Financiero — Frontera Media-Varianza + LMC + Desempeño")
+    st.caption(
+        "Pestaña independiente para reproducir y **experimentar** con la tarea de Frontera "
+        "Media-Varianza (1A) y LMC/Desempeño (1B): cambia el universo, la ventana, las "
+        "restricciones y la aversión al riesgo, y observa cómo cambian la frontera, el "
+        "portafolio de tangencia y sus estadísticos. No modifica la pestaña "
+        "\"Optimización de Portafolios\" existente."
+    )
+
+    try:
+        df_acciones_lab = cargar_precios_acciones()
+        df_macro_lab = cargar_series_macro()
+
+        # ============================================================
+        # 1-2. Universo de acciones
+        # ============================================================
+        st.subheader("1. Universo de acciones (S&P 500)")
+
+        st.session_state.setdefault("lab_tickers", TICKERS_LABORATORIO_50)
+        if st.button("↺ Usar muestra recomendada de 50 acciones"):
+            st.session_state["lab_tickers"] = TICKERS_LABORATORIO_50
+            st.rerun()
+
+        tickers_lab = st.multiselect(
+            "Acciones seleccionadas", OPCIONES_LABORATORIO, key="lab_tickers",
+        )
+        st.caption(f"Número de acciones seleccionadas: **{len(tickers_lab)}**")
+
+        conteo_sectorial = lab.contar_por_sector(tickers_lab, SECTOR_POR_TICKER_LABORATORIO)
+        cols_sectores = st.columns(len(SECTORES_OBLIGATORIOS_LABORATORIO))
+        sectores_insuficientes = []
+        for col, sector in zip(cols_sectores, SECTORES_OBLIGATORIOS_LABORATORIO):
+            n_sector = conteo_sectorial.get(sector, 0)
+            with col:
+                st.metric(sector, n_sector)
+            if n_sector < 2:
+                sectores_insuficientes.append(sector)
+
+        if sectores_insuficientes:
+            st.warning(
+                "⚠️ La selección actual no cumple el requisito de al menos dos acciones de "
+                f"cada sector de la tarea (falta en: {', '.join(sectores_insuficientes)}). "
+                "El cálculo igual se ejecuta — esto es solo una advertencia."
+            )
+
+        if len(tickers_lab) < 2:
+            st.error("Elige al menos 2 acciones para continuar.")
+            st.stop()
+
+        # ============================================================
+        # 3. Ventana temporal
+        # ============================================================
+        st.subheader("2. Ventana temporal")
+        col_v1, col_v2 = st.columns(2)
+        with col_v1:
+            anios_ventana = st.select_slider(
+                "Ventana histórica (años)", options=[1, 2, 3, 4, 5], value=3, key="lab_ventana_anios",
+            )
+        with col_v2:
+            modo_fecha = st.radio(
+                "Fecha final", ["Modo Tarea (31-07-2026)", "Fecha personalizada"], key="lab_modo_fecha",
+            )
+
+        if modo_fecha == "Modo Tarea (31-07-2026)":
+            fecha_fin_lab = FECHA_FIN_TAREA
+        else:
+            fecha_fin_lab = pd.Timestamp(st.date_input(
+                "Fecha final personalizada", value=FECHA_FIN_TAREA.date(), key="lab_fecha_fin_custom",
+            ))
+        fecha_inicio_lab = fecha_fin_lab - pd.DateOffset(years=anios_ventana)
+
+        datos_lab = preparar_datos_lab_cacheado(df_acciones_lab, tuple(tickers_lab), fecha_inicio_lab, fecha_fin_lab)
+
+        if datos_lab["tickers_excluidos"]:
+            lista_excl = ", ".join(f"{t} ({n} obs.)" for t, n in datos_lab["tickers_excluidos"])
+            st.warning(f"⚠️ Excluidos por historia insuficiente (< 60 observaciones reales): {lista_excl}.")
+
+        col_f1, col_f2, col_f3, col_f4 = st.columns(4)
+        col_f1.metric("Fecha inicial", datos_lab["fecha_inicio"].strftime("%d-%m-%Y"))
+        col_f2.metric("Fecha final", datos_lab["fecha_fin"].strftime("%d-%m-%Y"))
+        col_f3.metric("Observaciones", f"{datos_lab['n_observaciones']:,}")
+        col_f4.metric("Acciones usadas", len(datos_lab["tickers_validos"]))
+
+        df_retornos_lab = datos_lab["df_retornos"]
+        if len(df_retornos_lab.columns) < 2 or len(df_retornos_lab) < 30:
+            st.error("No hay suficientes datos comunes para este universo/ventana. Ajusta la selección.")
+            st.stop()
+
+        # ============================================================
+        # 4. Estadísticas de las acciones
+        # ============================================================
+        st.subheader("3. Retornos y estadísticos de las acciones")
+
+        df_stats_lab = lab.estadisticas_activos(
+            df_retornos_lab, SECTOR_POR_TICKER_LABORATORIO, EMPRESA_POR_TICKER_LABORATORIO,
+        )
+        st.dataframe(
+            df_stats_lab.style.format({
+                "Retorno esperado": "{:+.2%}", "Volatilidad": "{:.2%}", "Varianza": "{:.4f}",
+            }),
+            use_container_width=True,
+        )
+
+        cov_anual_lab = lab.matriz_covarianza_anual(df_retornos_lab)
+        with st.expander("Matriz de correlaciones (heatmap)"):
+            corr_lab = df_retornos_lab.corr()
+            fig_corr = go.Figure(data=go.Heatmap(
+                z=corr_lab.values, x=corr_lab.columns, y=corr_lab.columns,
+                colorscale=COLORSCALE_CORRELACION, zmin=-1, zmax=1,
+            ))
+            fig_corr.update_layout(height=650)
+            st.plotly_chart(fig_corr, use_container_width=True)
+
+        # ============================================================
+        # Rf (se necesita desde acá para poder mostrar tangencia en cualquier frontera)
+        # ============================================================
+        rf_treasury_serie = (
+            df_macro_lab[df_macro_lab["nombre"] == NOMBRE_TREASURY_1Y]
+            .assign(fecha=lambda d: pd.to_datetime(d["fecha"]))
+            .sort_values("fecha")
+            .set_index("fecha")["valor"]
+        ) / 100
+
+        rf_modo = st.radio(
+            "Tasa libre de riesgo", ["Modo Tarea: Treasury 1Y al 31-07-2026", "Modo experimental (Rf manual)"],
+            key="lab_rf_modo",
+        )
+        if rf_modo == "Modo experimental (Rf manual)":
+            rf_lab_pct = st.slider("Rf manual (% anual)", 0.0, 15.0, 4.08, step=0.05, key="lab_rf_manual")
+            rf_lab = rf_lab_pct / 100
+            fuente_rf_texto = "manual (modo experimental)"
+        else:
+            serie_hasta_fin = rf_treasury_serie[rf_treasury_serie.index <= fecha_fin_lab]
+            if serie_hasta_fin.empty:
+                st.error("No hay datos de Treasury 1Y disponibles hasta la fecha elegida.")
+                st.stop()
+            rf_lab = float(serie_hasta_fin.iloc[-1])
+            fecha_rf_real = serie_hasta_fin.index[-1]
+            fuente_rf_texto = f"Federal Reserve / H.15 (FRED, serie DGS1), observada el {fecha_rf_real.strftime('%d-%m-%Y')}"
+
+        st.info(f"**Rf utilizado: {rf_lab * 100:.2f}% anual** — Fuente: {fuente_rf_texto}.")
+
+        st.divider()
+        st.markdown("## Parte 1A — Frontera Media-Varianza")
+
+        # ============================================================
+        # 5-9 y 21-22. Panel de restricciones ("jugar con los supuestos") + presets
+        # ============================================================
+        st.subheader("4. Restricciones — jugar con los supuestos")
+        st.caption(
+            "Estos controles arman la frontera que se grafica más abajo (sección 5). Usa "
+            "los presets para saltar directo a cada punto de la tarea, o combina los "
+            "controles libremente para experimentar."
+        )
+
+        DEFAULTS_LAB = {
+            "lab_permitir_short": True, "lab_usar_limite": False, "lab_limite_abs": 0.10,
+            "lab_usar_sector": False, "lab_sectores_elegidos": ["Energy", "Industrials"],
+            "lab_peso_min_sector": 0.40, "lab_usar_ingenua": False,
+        }
+        for k, v in DEFAULTS_LAB.items():
+            st.session_state.setdefault(k, v)
+
+        PRESETS_LAB = {
+            "Punto 2 — Base (short libre)": {
+                "lab_permitir_short": True, "lab_usar_limite": False, "lab_usar_sector": False, "lab_usar_ingenua": False,
+            },
+            "Punto 3 — Covarianzas ignoradas": {
+                "lab_permitir_short": True, "lab_usar_limite": False, "lab_usar_sector": False, "lab_usar_ingenua": True,
+            },
+            "Punto 4 — Límite ±10%": {
+                "lab_permitir_short": True, "lab_usar_limite": True, "lab_limite_abs": 0.10,
+                "lab_usar_sector": False, "lab_usar_ingenua": False,
+            },
+            "Punto 5 — Sin venta corta": {
+                "lab_permitir_short": False, "lab_usar_limite": False, "lab_usar_sector": False, "lab_usar_ingenua": False,
+            },
+            "Punto 6 — Sin corta + Energy/Industrials≥40%": {
+                "lab_permitir_short": False, "lab_usar_limite": False, "lab_usar_sector": True,
+                "lab_sectores_elegidos": ["Energy", "Industrials"], "lab_peso_min_sector": 0.40,
+                "lab_usar_ingenua": False,
+            },
+        }
+        cols_presets = st.columns(len(PRESETS_LAB))
+        for col, (nombre_preset, valores) in zip(cols_presets, PRESETS_LAB.items()):
+            with col:
+                if st.button(nombre_preset, key=f"preset_{nombre_preset}"):
+                    for k, v in valores.items():
+                        st.session_state[k] = v
+                    st.rerun()
+
+        col_r1, col_r2 = st.columns(2)
+        with col_r1:
+            permitir_short_lab = st.checkbox("Permitir venta corta", key="lab_permitir_short")
+            usar_limite_lab = st.checkbox("Límite absoluto por acción", key="lab_usar_limite")
+            limite_abs_lab = None
+            if usar_limite_lab:
+                limite_abs_lab = st.slider(
+                    "Máximo |wi|", 0.05, 1.0, step=0.05, key="lab_limite_abs",
+                )
+        with col_r2:
+            usar_sector_lab = st.checkbox("Restricción sectorial", key="lab_usar_sector")
+            restriccion_sectorial_lab = None
+            if usar_sector_lab:
+                sectores_elegidos_lab = st.multiselect(
+                    "Sector(es)", SECTORES_OBLIGATORIOS_LABORATORIO, key="lab_sectores_elegidos",
+                )
+                peso_min_sector_lab = st.slider(
+                    "Peso mínimo conjunto", 0.0, 1.0, step=0.05, key="lab_peso_min_sector",
+                )
+                tickers_sector_lab = [
+                    t for t in datos_lab["tickers_validos"]
+                    if SECTOR_POR_TICKER_LABORATORIO.get(t) in sectores_elegidos_lab
+                ]
+                if tickers_sector_lab:
+                    restriccion_sectorial_lab = (tuple(tickers_sector_lab), peso_min_sector_lab)
+            usar_ingenua_lab = st.checkbox(
+                "Ignorar covarianzas al optimizar (Ω_diag)", key="lab_usar_ingenua",
+            )
+
+        resultado_actual = calcular_frontera_lab_cacheada(
+            df_retornos_lab, rf_lab, permitir_short_lab, limite_abs_lab, restriccion_sectorial_lab, usar_ingenua_lab,
+        )
+
+        # ============================================================
+        # 5. Resultado de la frontera actual
+        # ============================================================
+        st.subheader("5. Frontera resultante")
+
+        if resultado_actual is None:
+            st.error(
+                "No se pudo calcular la frontera con esta combinación de restricciones "
+                "(¿matriz de covarianza no invertible, o restricciones incompatibles entre sí?)."
+            )
+        else:
+            if resultado_actual["regularizado"]:
+                st.caption(
+                    "ℹ️ La matriz de covarianza estaba mal condicionada (activos casi "
+                    "colineales) — se aplicó una regularización de Tikhonov ínfima "
+                    "(1e-8 × traza(Ω)/n en la diagonal) para poder invertirla."
+                )
+
+            fig_actual = _grafico_base_frontera()
+            _agregar_frontera_a_grafico(fig_actual, resultado_actual, "Frontera actual", "#2a78d6")
+            fig_actual.add_trace(go.Scatter(
+                x=df_stats_lab["Volatilidad"], y=df_stats_lab["Retorno esperado"],
+                mode="markers", marker=dict(size=7, color="#8a8a8a"), text=df_stats_lab.index,
+                name="Activos individuales",
+            ))
+            if resultado_actual.get("w_tangencia") is not None:
+                fig_actual.add_trace(go.Scatter(
+                    x=[resultado_actual["vol_tangencia"]], y=[resultado_actual["ret_tangencia"]],
+                    mode="markers", marker=dict(size=16, color="#e34948", symbol="star", line=dict(width=1, color="black")),
+                    name="Tangencia (config. actual)",
+                ))
+            st.plotly_chart(fig_actual, use_container_width=True)
+
+            col_g1, col_g2, col_g3, col_g4 = st.columns(4)
+            col_g1.metric("GMV — retorno", f"{resultado_actual['ret_minvar']*100:.2f}%")
+            col_g2.metric("GMV — volatilidad", f"{resultado_actual['vol_minvar']*100:.2f}%")
+            n_efectivo = 1 / float((resultado_actual["w_minvar"] ** 2).sum())
+            col_g3.metric("N efectivo de posiciones (GMV)", f"{n_efectivo:.1f}")
+            col_g4.metric("Σwi (GMV, validación)", f"{resultado_actual['w_minvar'].sum()*100:.2f}%")
+
+            if usar_limite_lab:
+                st.caption(f"Concentración máxima observada: {resultado_actual['w_minvar'].abs().max()*100:.1f}% (límite: {limite_abs_lab*100:.0f}%).")
+            if not permitir_short_lab:
+                st.caption(f"Peso mínimo/máximo en GMV: {resultado_actual['w_minvar'].min()*100:.2f}% / {resultado_actual['w_minvar'].max()*100:.2f}% (sin venta corta: no debería haber negativos).")
+            if usar_sector_lab and restriccion_sectorial_lab is not None:
+                peso_sector_actual = resultado_actual["w_minvar"][list(restriccion_sectorial_lab[0])].sum()
+                cumple = "✅" if peso_sector_actual >= restriccion_sectorial_lab[1] - 1e-6 else "⚠️"
+                st.caption(f"{cumple} Peso conjunto de {', '.join(sectores_elegidos_lab)} en GMV: {peso_sector_actual*100:.2f}% (mínimo exigido: {restriccion_sectorial_lab[1]*100:.0f}%).")
+
+            # --- "¿Qué estoy viendo?" — explicación basada en los resultados reales ---
+            with st.expander("¿Qué estoy viendo?", expanded=False):
+                texto_explicacion = []
+                if usar_ingenua_lab:
+                    frontera_base_cmp = calcular_frontera_lab_cacheada(df_retornos_lab, rf_lab, True, None, None, False)
+                    if frontera_base_cmp is not None:
+                        diff_vol = (resultado_actual["vol_minvar"] - frontera_base_cmp["vol_minvar"]) * 100
+                        texto_explicacion.append(
+                            f"Al **ignorar las covarianzas** (Ω_diag) para optimizar, la volatilidad real del GMV "
+                            f"sube en **{diff_vol:+.2f} puntos porcentuales** respecto a la frontera correcta "
+                            f"({resultado_actual['vol_minvar']*100:.2f}% vs. {frontera_base_cmp['vol_minvar']*100:.2f}%). "
+                            "Esto pasa porque la matriz diagonal no \"ve\" que ciertos activos se mueven juntos "
+                            "(correlación positiva) o se compensan (correlación negativa) — el optimizador no puede "
+                            "aprovechar esa información para diversificar de verdad, así que el resultado, evaluado "
+                            "con el riesgo real, es peor."
+                        )
+                elif usar_limite_lab:
+                    texto_explicacion.append(
+                        f"El límite de ±{limite_abs_lab*100:.0f}% por acción reduce el conjunto factible: ya no se "
+                        "puede concentrar el portafolio en pocas posiciones grandes (largas o cortas). El GMV con "
+                        f"límite tiene {n_efectivo:.1f} posiciones efectivas — compara con la frontera base (sin "
+                        "límite) en la sección de comparación de abajo para ver cuánto cambia."
+                    )
+                elif not permitir_short_lab and usar_sector_lab:
+                    texto_explicacion.append(
+                        "Sin venta corta, el conjunto factible ya es más chico (todos los pesos entre 0 y 1). "
+                        "Agregar además un piso sectorial (Energy+Industrials ≥ mínimo exigido) lo reduce todavía "
+                        "más: el optimizador ya no puede elegir libremente el mix de sectores que minimiza "
+                        "varianza, tiene que aceptar una porción mínima de sectores que quizás no son los más "
+                        "eficientes en términos de riesgo — por eso la volatilidad del GMV con esta restricción "
+                        "suele ser mayor que sin ella."
+                    )
+                elif not permitir_short_lab:
+                    texto_explicacion.append(
+                        "Prohibir la venta corta (wi ≥ 0) elimina todas las combinaciones de pesos negativos que "
+                        "la frontera base sí permite — el conjunto factible se reduce, así que la volatilidad "
+                        "mínima alcanzable con esta restricción nunca puede ser menor que la de la frontera base "
+                        "(compáralas en la sección 7)."
+                    )
+                else:
+                    texto_explicacion.append(
+                        "Esta es la frontera **base**: venta corta permitida, sin límites de concentración ni "
+                        "restricciones sectoriales — el conjunto factible más grande posible, y por lo tanto la "
+                        "frontera con menor volatilidad para cada nivel de retorno (referencia para comparar "
+                        "todas las demás restricciones)."
+                    )
+                st.markdown("\n\n".join(texto_explicacion))
+
+            # ============================================================
+            # 25. Selector de punto de la frontera
+            # ============================================================
+            st.subheader("6. Explorar un punto de la frontera")
+            if resultado_actual["frontera"]:
+                rets_frontera = [r for _, r in resultado_actual["frontera"]]
+                retorno_objetivo = st.slider(
+                    "Retorno objetivo", float(min(rets_frontera)), float(max(rets_frontera)),
+                    value=float(resultado_actual["ret_minvar"]), format="%.4f", key="lab_retorno_objetivo",
+                )
+                idx_cercano = int(np.argmin([abs(r - retorno_objetivo) for r in rets_frontera]))
+                pesos_punto = resultado_actual["pesos_frontera"][idx_cercano]
+                vol_punto, ret_punto = resultado_actual["frontera"][idx_cercano]
+                sharpe_punto = (ret_punto - rf_lab) / vol_punto if vol_punto > 0 else None
+
+                col_p1, col_p2, col_p3 = st.columns(3)
+                col_p1.metric("Retorno del punto más cercano", f"{ret_punto*100:.2f}%")
+                col_p2.metric("Volatilidad", f"{vol_punto*100:.2f}%")
+                col_p3.metric("Sharpe", f"{sharpe_punto:.2f}" if sharpe_punto is not None else "—")
+
+                resumen_sect_punto = lab.resumen_sectorial(pesos_punto, SECTOR_POR_TICKER_LABORATORIO)
+                st.caption(
+                    "Exposición sectorial de este punto: " +
+                    ", ".join(f"{s}: {v*100:.1f}%" for s, v in resumen_sect_punto.sort_values(ascending=False).items())
+                )
+                with st.expander("Pesos de este punto de la frontera"):
+                    st.dataframe(
+                        _tabla_pesos(pesos_punto, SECTOR_POR_TICKER_LABORATORIO, EMPRESA_POR_TICKER_LABORATORIO)
+                        .style.format({"Peso": "{:+.2%}"}),
+                        use_container_width=True,
+                    )
+            else:
+                st.info("Esta configuración no generó puntos de frontera para explorar.")
+
+        # ============================================================
+        # 10. Comparación de todas las fronteras
+        # ============================================================
+        st.subheader("7. Comparación de restricciones")
+        st.caption("Activa las fronteras que quieras superponer en un solo gráfico.")
+
+        col_chk1, col_chk2, col_chk3, col_chk4, col_chk5 = st.columns(5)
+        mostrar_base = col_chk1.checkbox("Frontera base", value=True, key="lab_cmp_base")
+        mostrar_ingenua = col_chk2.checkbox("Frontera ingenua", key="lab_cmp_ingenua")
+        mostrar_10 = col_chk3.checkbox("±10%", key="lab_cmp_10")
+        mostrar_noshort = col_chk4.checkbox("Sin venta corta", key="lab_cmp_noshort")
+        mostrar_sector = col_chk5.checkbox("Sin corta + sectorial ≥40%", key="lab_cmp_sector")
+
+        fig_cmp = _grafico_base_frontera()
+        tickers_ei_cmp = tuple(
+            t for t in datos_lab["tickers_validos"]
+            if SECTOR_POR_TICKER_LABORATORIO.get(t) in ("Energy", "Industrials")
+        )
+
+        if mostrar_base:
+            _agregar_frontera_a_grafico(
+                fig_cmp, calcular_frontera_lab_cacheada(df_retornos_lab, rf_lab, True, None, None, False),
+                "Base", "#2a78d6",
+            )
+        if mostrar_ingenua:
+            _agregar_frontera_a_grafico(
+                fig_cmp, calcular_frontera_lab_cacheada(df_retornos_lab, rf_lab, True, None, None, True),
+                "Ingenua (evaluada con Ω real)", "#eda100", dash="dot",
+            )
+        if mostrar_10:
+            _agregar_frontera_a_grafico(
+                fig_cmp, calcular_frontera_lab_cacheada(df_retornos_lab, rf_lab, True, 0.10, None, False),
+                "±10%", "#1baf7a", dash="dash",
+            )
+        if mostrar_noshort:
+            _agregar_frontera_a_grafico(
+                fig_cmp, calcular_frontera_lab_cacheada(df_retornos_lab, rf_lab, False, None, None, False),
+                "Sin venta corta", "#e34948", dash="dashdot",
+            )
+        if mostrar_sector and tickers_ei_cmp:
+            _agregar_frontera_a_grafico(
+                fig_cmp,
+                calcular_frontera_lab_cacheada(df_retornos_lab, rf_lab, False, None, (tickers_ei_cmp, 0.40), False),
+                "Sin corta + Energy/Industrials≥40%", "#4a3aa7", dash="longdash",
+            )
+        st.plotly_chart(fig_cmp, use_container_width=True)
+        st.caption(
+            "Cada restricción reduce (nunca amplía) el conjunto factible respecto a la frontera "
+            "base — por eso ninguna otra frontera puede quedar por debajo (más volatilidad para "
+            "el mismo retorno) de la base."
+        )
+
+        st.divider()
+        st.markdown("## Parte 1B — LMC y Desempeño")
+        st.caption(
+            "Esta parte usa siempre la **frontera base** (venta corta permitida, sin otras "
+            "restricciones) del punto 1A.2, independiente de la configuración elegida arriba en "
+            "la sección 4 — así lo pide la tarea (1B.2)."
+        )
+
+        frontera_base_1b = calcular_frontera_lab_cacheada(df_retornos_lab, rf_lab, True, None, None, False)
+        if frontera_base_1b is None or frontera_base_1b.get("w_tangencia") is None:
+            st.error("No se pudo calcular el portafolio de tangencia M con la frontera base — revisa el universo elegido.")
+        else:
+            # ============================================================
+            # 12. Portafolio de tangencia M
+            # ============================================================
+            st.subheader("8. Portafolio de tangencia M")
+            w_M = frontera_base_1b["w_tangencia"]
+            n_no_cero = int((w_M.abs() > 1e-4).sum())
+
+            col_m1, col_m2, col_m3, col_m4 = st.columns(4)
+            col_m1.metric("Retorno esperado anual", f"{frontera_base_1b['ret_tangencia']*100:.2f}%")
+            col_m2.metric("Volatilidad anual", f"{frontera_base_1b['vol_tangencia']*100:.2f}%")
+            col_m3.metric("Sharpe", f"{frontera_base_1b['sharpe_tangencia']:.2f}")
+            col_m4.metric("Activos con peso ≠ 0", n_no_cero)
+
+            st.warning(
+                "⚠️ M es la solución **exacta y sin restricciones** (venta corta libre, sin "
+                "límites): con 50 activos correlacionados, esto típicamente produce pesos "
+                "extremos (posiciones largas y cortas muy grandes) y un Sharpe poco realista — "
+                "es la crítica clásica de Michaud (1989) al \"error-maximizador\" de Markowitz. "
+                "Es la solución que pide el punto 1B.2 de la tarea, no una recomendación de "
+                "inversión."
+            )
+
+            tabla_pesos_M = _tabla_pesos(w_M, SECTOR_POR_TICKER_LABORATORIO, EMPRESA_POR_TICKER_LABORATORIO)
+            col_pw1, col_pw2 = st.columns(2)
+            with col_pw1:
+                st.markdown("**Pesos positivos (top 10)**")
+                st.dataframe(
+                    tabla_pesos_M[tabla_pesos_M["Peso"] > 0].head(10).style.format({"Peso": "{:+.2%}"}),
+                    use_container_width=True,
+                )
+            with col_pw2:
+                st.markdown("**Pesos negativos (top 10)**")
+                st.dataframe(
+                    tabla_pesos_M[tabla_pesos_M["Peso"] < 0].sort_values("Peso").head(10).style.format({"Peso": "{:+.2%}"}),
+                    use_container_width=True,
+                )
+            fig_pesos_M = go.Figure(go.Bar(
+                x=tabla_pesos_M["Ticker"], y=tabla_pesos_M["Peso"],
+                marker_color=["#1baf7a" if p >= 0 else "#e34948" for p in tabla_pesos_M["Peso"]],
+            ))
+            fig_pesos_M.update_layout(yaxis_title="Peso", height=350)
+            fig_pesos_M.update_yaxes(tickformat=".0%")
+            st.plotly_chart(fig_pesos_M, use_container_width=True)
+            st.caption(
+                f"Suma pesos positivos: {tabla_pesos_M[tabla_pesos_M['Peso']>0]['Peso'].sum()*100:+.1f}% — "
+                f"Suma pesos negativos: {tabla_pesos_M[tabla_pesos_M['Peso']<0]['Peso'].sum()*100:+.1f}% — "
+                f"Suma total: {tabla_pesos_M['Peso'].sum()*100:.2f}% (validación: debe ser 100%)."
+            )
+
+            # ============================================================
+            # 13. LMC
+            # ============================================================
+            st.subheader("9. Línea de Mercado de Capitales (LMC)")
+            vol_max_lmc = max(
+                frontera_base_1b["vol_tangencia"],
+                max((v for v, _ in frontera_base_1b["frontera"]), default=frontera_base_1b["vol_tangencia"]),
+            ) * 1.4
+            xs_lmc, ys_lmc, pendiente_lmc = lab.linea_mercado_capitales(
+                rf_lab, frontera_base_1b["ret_tangencia"], frontera_base_1b["vol_tangencia"], vol_max_lmc,
+            )
+            fig_lmc = _grafico_base_frontera()
+            _agregar_frontera_a_grafico(fig_lmc, frontera_base_1b, "Frontera base", "#2a78d6")
+            fig_lmc.add_trace(go.Scatter(
+                x=xs_lmc, y=ys_lmc, mode="lines", line=dict(color="#eda100", width=2, dash="dash"), name="LMC",
+            ))
+            fig_lmc.add_trace(go.Scatter(
+                x=[0], y=[rf_lab], mode="markers", marker=dict(size=12, color="black"), name="Rf (σ=0)",
+            ))
+            fig_lmc.add_trace(go.Scatter(
+                x=[frontera_base_1b["vol_tangencia"]], y=[frontera_base_1b["ret_tangencia"]],
+                mode="markers", marker=dict(size=16, color="#e34948", symbol="star", line=dict(width=1, color="black")),
+                name="Portafolio M",
+            ))
+            st.plotly_chart(fig_lmc, use_container_width=True)
+
+            interseccion_ok = abs(ys_lmc[0] - rf_lab) < 1e-9
+            pasa_por_M = abs((rf_lab + pendiente_lmc * frontera_base_1b["vol_tangencia"]) - frontera_base_1b["ret_tangencia"]) < 1e-6
+            col_l1, col_l2, col_l3 = st.columns(3)
+            col_l1.metric("Pendiente LMC (= Sharpe de M)", f"{pendiente_lmc:.2f}")
+            col_l2.metric("Intercepta en Rf (σ=0)", "✅" if interseccion_ok else "⚠️")
+            col_l3.metric("Pasa exactamente por M", "✅" if pasa_por_M else "⚠️")
+            st.caption(f"E(Rc) = Rf + [(E(RM) − Rf)/σM] × σc = {rf_lab*100:.2f}% + {pendiente_lmc:.2f} × σc")
+
+            # ============================================================
+            # 14-15. CAPM y test t de Jensen
+            # ============================================================
+            st.subheader("10. CAPM: M vs. S&P 500")
+
+            sp500_precio_lab = (
+                df_acciones_lab[df_acciones_lab["ticker"] == "^GSPC"]
+                .assign(fecha=lambda d: pd.to_datetime(d["fecha"]))
+                .sort_values("fecha")
+                .set_index("fecha")["precio_cierre"]
+            )
+            retornos_M = lab.retornos_portafolio(df_retornos_lab, w_M)
+            df_capm_lab = lab.preparar_regresion_capm(retornos_M, sp500_precio_lab, rf_treasury_serie)
+
+            if len(df_capm_lab) < 30:
+                st.error("No hay suficientes observaciones comunes entre M, el S&P 500 y Rf para el CAPM.")
+            else:
+                exceso_M_lab = df_capm_lab["portafolio"] - df_capm_lab["rf"]
+                exceso_mkt_lab = df_capm_lab["mercado"] - df_capm_lab["rf"]
+                reg_M = calcular_capm_regresion(exceso_M_lab, exceso_mkt_lab)
+                reg_auto_lab = calcular_capm_regresion(exceso_mkt_lab, exceso_mkt_lab)
+
+                st.caption(
+                    f"Regresión sobre retornos diarios en exceso — {len(df_capm_lab)} observaciones "
+                    f"comunes ({df_capm_lab.index.min().strftime('%d-%m-%Y')} a "
+                    f"{df_capm_lab.index.max().strftime('%d-%m-%Y')})."
+                )
+
+                col_c1, col_c2 = st.columns(2)
+                col_c1.metric("Alfa diario", f"{reg_M['alfa']*100:+.4f}%")
+                col_c2.metric("Alfa anualizado", f"{reg_M['alfa']*252*100:+.2f}%")
+                col_c3, col_c4 = st.columns(2)
+                col_c3.metric("Beta", f"{reg_M['beta']:.3f}")
+                col_c4.metric("R²", f"{reg_M['r2']:.3f}" if reg_M["r2"] is not None else "—")
+                col_c5, col_c6 = st.columns(2)
+                col_c5.metric("Error estándar de alfa (anual)", f"{reg_M['se_alfa']*252*100:.2f}%")
+                col_c6.metric("IC 95% de alfa (anual)", f"[{reg_M['ic_95'][0]*252*100:+.2f}%, {reg_M['ic_95'][1]*252*100:+.2f}%]")
+
+                st.caption(
+                    f"Validación interna — β(S&P 500 vs. sí mismo) = {reg_auto_lab['beta']:.4f} (≈1) — "
+                    f"α = {reg_auto_lab['alfa']*252*100:+.4f}% (≈0)."
+                )
+
+                st.subheader("11. Test t de Jensen: H0: α = 0 vs. H1: α ≠ 0")
+                col_t1, col_t2, col_t3 = st.columns(3)
+                col_t1.metric("t = α̂ / SE(α̂)", f"{reg_M['t_alfa']:.2f}")
+                col_t2.metric("Grados de libertad", f"{reg_M['gl']:,}")
+                col_t3.metric("p-value", f"{reg_M['p_valor']:.4g}")
+
+                if reg_M["p_valor"] < 0.05:
+                    st.success(
+                        "✅ Se rechaza H0 al 5%: existe evidencia estadística de que el alfa de "
+                        "Jensen es distinto de cero."
+                    )
+                else:
+                    st.info(
+                        "ℹ️ No se rechaza H0 al 5%: no existe evidencia estadística suficiente de "
+                        "que el alfa de Jensen sea distinto de cero."
+                    )
+
+                st.subheader("12. ¿Es esto consistente con eficiencia de mercado?")
+                alfa_anual_M = reg_M["alfa"] * 252
+                st.markdown(
+                    f"El alfa de Jensen anualizado de M es **{alfa_anual_M*100:+.2f}%** "
+                    f"(p = {reg_M['p_valor']:.4g}), con β = {reg_M['beta']:.2f} y R² = "
+                    f"{reg_M['r2']:.2f} respecto al S&P 500 — un R² bajo significa que la mayor "
+                    "parte de la varianza de M no la explica el mercado (consistente con un "
+                    "portafolio con posiciones largas y cortas grandes, poco parecido al índice)."
+                )
+                st.warning(
+                    "⚠️ **Sesgo in-sample.** El desempeño de M es in-sample: los mismos retornos "
+                    "utilizados para escoger los pesos óptimos (maximizar Sharpe dentro de esta "
+                    "misma ventana) se utilizan después para evaluar α, Sharpe y Treynor. Esto "
+                    "puede generar *data snooping* / *overfitting* y sobreestimar el desempeño "
+                    "que M habría tenido fuera de muestra — "
+                    f"{'especialmente relevante acá, dado que un alfa anualizado de ' + f'{alfa_anual_M*100:+.1f}%' if abs(alfa_anual_M) > 0.15 else 'aunque en este caso el alfa no es extremo'} "
+                    "es exactamente el tipo de resultado que la optimización in-sample tiende a "
+                    "inflar."
+                )
+
+                # ============================================================
+                # 17-19. Sharpe y Treynor: M vs. S&P 500
+                # ============================================================
+                st.subheader("13. Sharpe y Treynor: M vs. S&P 500")
+
+                ret_anual_M = float(df_capm_lab["portafolio"].mean() * lab.N_RUEDAS_ANIO)
+                vol_anual_M = float(df_capm_lab["portafolio"].std() * (lab.N_RUEDAS_ANIO ** 0.5))
+                ret_anual_mkt = float(df_capm_lab["mercado"].mean() * lab.N_RUEDAS_ANIO)
+                vol_anual_mkt = float(df_capm_lab["mercado"].std() * (lab.N_RUEDAS_ANIO ** 0.5))
+                rf_anual_muestra = float(df_capm_lab["rf"].mean() * lab.N_RUEDAS_ANIO)
+
+                sharpe_M_lab, treynor_M_lab = lab.sharpe_treynor(ret_anual_M, vol_anual_M, rf_anual_muestra, reg_M["beta"])
+                sharpe_mkt_lab, treynor_mkt_lab = lab.sharpe_treynor(ret_anual_mkt, vol_anual_mkt, rf_anual_muestra, reg_auto_lab["beta"])
+
+                df_desempeno = pd.DataFrame([
+                    {"Portafolio": "M", "Retorno": ret_anual_M, "Volatilidad": vol_anual_M, "Beta": reg_M["beta"],
+                     "Sharpe": sharpe_M_lab, "Treynor": treynor_M_lab},
+                    {"Portafolio": "S&P 500", "Retorno": ret_anual_mkt, "Volatilidad": vol_anual_mkt, "Beta": reg_auto_lab["beta"],
+                     "Sharpe": sharpe_mkt_lab, "Treynor": treynor_mkt_lab},
+                ]).set_index("Portafolio")
+                st.dataframe(
+                    df_desempeno.style.format({
+                        "Retorno": "{:+.2%}", "Volatilidad": "{:.2%}", "Beta": "{:.2f}",
+                        "Sharpe": "{:.2f}", "Treynor": "{:+.2%}",
+                    }),
+                    use_container_width=True,
+                )
+                ganador_sharpe_lab = "M" if sharpe_M_lab > sharpe_mkt_lab else "el S&P 500"
+                ganador_treynor_lab = "M" if treynor_M_lab > treynor_mkt_lab else "el S&P 500"
+                st.markdown(
+                    f"**Sharpe** penaliza por **riesgo total (σ)**: {ganador_sharpe_lab} tiene mayor Sharpe "
+                    f"(M: {sharpe_M_lab:.2f} vs. S&P 500: {sharpe_mkt_lab:.2f}). **Treynor** penaliza solo por "
+                    f"**riesgo sistemático (β)**: {ganador_treynor_lab} tiene mayor Treynor "
+                    f"(M: {treynor_M_lab:+.2%} vs. S&P 500: {treynor_mkt_lab:+.2%}). Si el ranking difiere entre "
+                    "ambos, la diferencia viene del riesgo idiosincrático (diversificable) que Treynor ignora "
+                    "y Sharpe sí penaliza."
+                )
+
+                # ============================================================
+                # 20. Asignación óptima según aversión al riesgo
+                # ============================================================
+                st.subheader("14. Asignación óptima según aversión al riesgo")
+                st.caption("x* = (E[RM] − Rf) / (c × σM²) — fracción del capital invertida en M; el resto en Rf.")
+
+                cols_c = st.columns(3)
+                for col, c_val in zip(cols_c, (2, 5, 10)):
+                    x_c = lab.asignacion_optima(frontera_base_1b["ret_tangencia"], rf_lab, frontera_base_1b["vol_tangencia"], c_val)
+                    with col:
+                        st.metric(f"c = {c_val}", f"x* = {x_c*100:.1f}% en M" if x_c is not None else "—")
+                        if x_c is not None:
+                            st.caption(f"{(1-x_c)*100:.1f}% en Rf")
+
+                c_slider = st.slider("Aversión al riesgo c", 1.0, 20.0, value=5.0, step=0.5, key="lab_c_aversion")
+                x_slider = lab.asignacion_optima(frontera_base_1b["ret_tangencia"], rf_lab, frontera_base_1b["vol_tangencia"], c_slider)
+
+                if x_slider is not None:
+                    col_x1, col_x2 = st.columns(2)
+                    col_x1.metric("% invertido en M", f"{x_slider*100:.1f}%")
+                    col_x2.metric("% invertido en Rf", f"{(1-x_slider)*100:.1f}%")
+
+                    if x_slider < 0:
+                        interpretacion_x = (
+                            "**x\\* < 0**: posición contraria — el modelo sugiere ir corto en M y largo en Rf/"
+                            "más de 100% en el activo libre de riesgo. Económicamente implica una aversión al "
+                            "riesgo tan alta (o un M tan poco atractivo ajustado por riesgo) que ni siquiera "
+                            "conviene una posición larga en M; en la práctica, un resultado así con este M "
+                            "(no restringido) suele reflejar el mismo problema de sobreajuste in-sample "
+                            "mencionado arriba, no una recomendación real."
+                        )
+                    elif x_slider < 1:
+                        interpretacion_x = (
+                            "**0 < x\\* < 1 (lending)**: se invierte una parte en M y el resto en el activo "
+                            "libre de riesgo — la combinación clásica de un inversionista con aversión al "
+                            "riesgo moderada/alta relativa al Sharpe de M."
+                        )
+                    elif abs(x_slider - 1) < 1e-6:
+                        interpretacion_x = "**x\\* = 1**: 100% del capital en M, nada en Rf."
+                    else:
+                        interpretacion_x = (
+                            "**x\\* > 1 (borrowing)**: se invierte más del 100% del capital en M, financiando "
+                            "el exceso mediante endeudamiento a la tasa Rf — apalancamiento. Es coherente con "
+                            "el modelo si el inversionista tiene baja aversión al riesgo (c chico) relativa al "
+                            "Sharpe de M, pero asume que puede endeudarse exactamente a Rf, algo poco realista "
+                            "en la práctica."
+                        )
+                    st.markdown(interpretacion_x)
+
+                    fig_alloc = _grafico_base_frontera()
+                    _agregar_frontera_a_grafico(fig_alloc, frontera_base_1b, "Frontera base", "#2a78d6")
+                    fig_alloc.add_trace(go.Scatter(
+                        x=xs_lmc, y=ys_lmc, mode="lines", line=dict(color="#eda100", width=2, dash="dash"), name="LMC",
+                    ))
+                    for c_val, color_c in zip((2, 5, 10), ("#1baf7a", "#e87ba4", "#4a3aa7")):
+                        x_c = lab.asignacion_optima(frontera_base_1b["ret_tangencia"], rf_lab, frontera_base_1b["vol_tangencia"], c_val)
+                        if x_c is not None:
+                            vol_c = x_c * frontera_base_1b["vol_tangencia"]
+                            ret_c = rf_lab + x_c * (frontera_base_1b["ret_tangencia"] - rf_lab)
+                            fig_alloc.add_trace(go.Scatter(
+                                x=[vol_c], y=[ret_c], mode="markers",
+                                marker=dict(size=12, color=color_c, symbol="diamond"), name=f"c={c_val}",
+                            ))
+                    vol_slider_pt = x_slider * frontera_base_1b["vol_tangencia"]
+                    ret_slider_pt = rf_lab + x_slider * (frontera_base_1b["ret_tangencia"] - rf_lab)
+                    fig_alloc.add_trace(go.Scatter(
+                        x=[vol_slider_pt], y=[ret_slider_pt], mode="markers",
+                        marker=dict(size=14, color="black", symbol="x"), name=f"c={c_slider:.1f} (slider)",
+                    ))
+                    st.plotly_chart(fig_alloc, use_container_width=True)
+
+                # ============================================================
+                # 27. Validaciones
+                # ============================================================
+                st.subheader("15. Validaciones")
+                validaciones = [
+                    ("Σwi ≈ 1 (M)", abs(w_M.sum() - 1) < 1e-3),
+                    ("LMC pasa por (0, Rf)", interseccion_ok),
+                    ("LMC pasa por (σM, E(RM))", pasa_por_M),
+                    ("β(S&P 500 vs. sí mismo) ≈ 1", abs(reg_auto_lab["beta"] - 1) < 0.01),
+                    ("Observaciones suficientes para la regresión (≥30)", len(df_capm_lab) >= 30),
+                    ("p-value coherente con t (|t| grande ⇒ p chico)", (reg_M["p_valor"] < 0.05) == (abs(reg_M["t_alfa"]) > 1.96)),
+                ]
+                cols_val = st.columns(3)
+                for i, (nombre_val, ok_val) in enumerate(validaciones):
+                    with cols_val[i % 3]:
+                        st.markdown(f"{'✅' if ok_val else '⚠️'} {nombre_val}")
+
+                # ============================================================
+                # 28. Exportar resultados
+                # ============================================================
+                st.subheader("16. Exportar resultados")
+                col_e1, col_e2, col_e3 = st.columns(3)
+                col_e1.download_button(
+                    "📥 Estadísticas de acciones (CSV)", df_stats_lab.to_csv().encode("utf-8"),
+                    "laboratorio_estadisticas.csv", "text/csv",
+                )
+                col_e1.download_button(
+                    "📥 Matriz de covarianzas (CSV)", cov_anual_lab.to_csv().encode("utf-8"),
+                    "laboratorio_covarianzas.csv", "text/csv",
+                )
+                if resultado_actual is not None and resultado_actual["frontera"]:
+                    df_frontera_export = pd.DataFrame(resultado_actual["frontera"], columns=["Volatilidad", "Retorno"])
+                    col_e2.download_button(
+                        "📥 Puntos de la frontera actual (CSV)", df_frontera_export.to_csv(index=False).encode("utf-8"),
+                        "laboratorio_frontera.csv", "text/csv",
+                    )
+                col_e2.download_button(
+                    "📥 Pesos de M (CSV)", tabla_pesos_M.to_csv(index=False).encode("utf-8"),
+                    "laboratorio_pesos_M.csv", "text/csv",
+                )
+                df_capm_export = pd.DataFrame([{
+                    "alfa_diario": reg_M["alfa"], "alfa_anual": reg_M["alfa"] * 252, "beta": reg_M["beta"],
+                    "r2": reg_M["r2"], "se_alfa": reg_M["se_alfa"], "t_alfa": reg_M["t_alfa"],
+                    "p_valor": reg_M["p_valor"], "ic_95_low": reg_M["ic_95"][0], "ic_95_high": reg_M["ic_95"][1],
+                }])
+                col_e3.download_button(
+                    "📥 Resultados CAPM (CSV)", df_capm_export.to_csv(index=False).encode("utf-8"),
+                    "laboratorio_capm.csv", "text/csv",
+                )
+                col_e3.download_button(
+                    "📥 Sharpe/Treynor M vs. S&P 500 (CSV)", df_desempeno.to_csv().encode("utf-8"),
+                    "laboratorio_sharpe_treynor.csv", "text/csv",
+                )
+
+        st.divider()
+        st.info(
+            "**Nota metodológica.** Retornos diarios reales (excluyendo precio congelado), "
+            "covarianza y frontera anualizadas × 252 ruedas — sin mezclar frecuencias. La "
+            "frontera \"base\" (venta corta libre, sin límites) se resuelve con la solución "
+            "matricial cerrada de Markowitz/Merton; cualquier restricción de desigualdad "
+            "(límite ±X%, sin venta corta, piso sectorial) se resuelve con SLSQP (QP no lineal "
+            "convexo) porque la solución cerrada ya no aplica. Si Ω está mal condicionada se "
+            "regulariza (ver aviso en la sección 5 cuando ocurre). El desempeño de M es "
+            "**in-sample** — ver advertencia en la sección 12. Herramienta educativa para "
+            "reproducir la tarea, no una recomendación de inversión."
+        )
+
+    except Exception as e:
+        st.error(f"No se pudo calcular el laboratorio financiero: {e}")
