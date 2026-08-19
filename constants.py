@@ -107,3 +107,23 @@ TICKERS_DOW_JONES = [
 # Las 5 acciones que se muestran destacadas por defecto en el gráfico
 # principal de la pestaña "Acciones Dow Jones".
 TICKERS_DOW_JONES_PRINCIPALES = ["AAPL", "MSFT", "JPM", "CAT", "KO"]
+
+# Acciones chilenas y estadounidenses adicionales, fuera del IPSA/Dow
+# Jones/Magníficas, agregadas únicamente para ampliar el universo
+# seleccionable en "Optimización de Portafolios" (no son una categoría por
+# sector: Sigdo Koppers es industrial/servicios, y el resto de EEUU mezcla
+# energía, salud, financiero y tecnología). Verificadas contra la API de
+# Yahoo Finance antes de agregarlas.
+TICKERS_CHILE_ADICIONALES = [
+    "SK.SN",  # Sigdo Koppers
+]
+
+TICKERS_EEUU_ADICIONALES = [
+    "XOM",   # ExxonMobil
+    "LLY",   # Eli Lilly
+    "GE",    # GE Aerospace
+    "AVGO",  # Broadcom
+    "NEE",   # NextEra Energy
+    "DUK",   # Duke Energy
+    "SO",    # Southern Company
+]

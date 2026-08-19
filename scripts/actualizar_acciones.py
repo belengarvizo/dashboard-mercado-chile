@@ -23,6 +23,8 @@ from constants import (
     TICKER_PETROLEO_WTI,
     TICKER_DOW_JONES,
     TICKERS_DOW_JONES,
+    TICKERS_CHILE_ADICIONALES,
+    TICKERS_EEUU_ADICIONALES,
 )
 from retry_utils import con_reintentos_db
 
@@ -31,10 +33,12 @@ from retry_utils import con_reintentos_db
 # descargan una sola vez, preservando el orden de la primera aparición.
 TICKERS_A_DESCARGAR = list(dict.fromkeys(
     TICKERS_IPSA
+    + TICKERS_CHILE_ADICIONALES
     + [TICKER_PROXY_IPSA]
     + [t for t in TICKERS_BENCHMARK if t != TICKER_PROXY_IPSA]
     + TICKERS_MAGNIFICAS
     + TICKERS_DOW_JONES
+    + TICKERS_EEUU_ADICIONALES
     + [TICKER_PETROLEO_WTI, TICKER_DOW_JONES]
 ))
 

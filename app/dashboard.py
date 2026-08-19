@@ -19,6 +19,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 from matplotlib.colors import LinearSegmentedColormap
 from scipy import stats
+from scipy.optimize import minimize
 from sqlalchemy import text
 from models import get_engine
 from constants import (
@@ -30,6 +31,8 @@ from constants import (
     TICKERS_DOW_JONES,
     TICKERS_DOW_JONES_PRINCIPALES,
     TICKER_DOW_JONES,
+    TICKERS_CHILE_ADICIONALES,
+    TICKERS_EEUU_ADICIONALES,
 )
 from market_data import calcular_resumen_mercado, INDICADORES_PREMERCADO
 from calendario_economico import proximos_eventos, NOTA_VIGENCIA, INDICADOR_POR_TIPO
@@ -65,6 +68,16 @@ N_PERMUTACIONES_MOMENTUM = 1000
 
 # Optimización de portafolios (Markowitz vía Monte Carlo, long-only).
 N_PORTAFOLIOS_MC = 5000
+
+# Frontera media-varianza exacta (QP), LMC y CAPM/alfa de Jensen: universo
+# combinado Chile + EEUU (no es una categoría por sector, solo agrupa por
+# mercado igual que el resto del dashboard). N_MIN_OBS_FRONTERA es el mínimo
+# de observaciones reales (excluyendo precio congelado) para incluir un
+# activo; N_PUNTOS_FRONTERA es la cantidad de puntos de la curva eficiente.
+UNIVERSO_PORTAFOLIOS_CHILE = list(dict.fromkeys(TICKERS_IPSA + TICKERS_CHILE_ADICIONALES))
+UNIVERSO_PORTAFOLIOS_EEUU = list(dict.fromkeys(TICKERS_DOW_JONES + TICKERS_MAGNIFICAS + TICKERS_EEUU_ADICIONALES))
+N_MIN_OBS_FRONTERA = 60
+N_PUNTOS_FRONTERA = 40
 
 st.title("Dashboard de mercado chileno")
 st.caption("Datos del Banco Central de Chile y Yahoo Finance, actualizados diariamente")
@@ -1034,6 +1047,273 @@ def calcular_optimizacion_portafolios(df_todas: pd.DataFrame, df_macro: pd.DataF
         resultado["oos"] = None
 
     return resultado
+
+
+def _cartera_metrica(w: np.ndarray, mu: np.ndarray, cov: np.ndarray) -> tuple[float, float]:
+    """(retorno, volatilidad) anualizados de una cartera de pesos w."""
+    ret = float(w @ mu)
+    var = float(w @ cov @ w)
+    vol = var ** 0.5 if var > 0 else 0.0
+    return ret, vol
+
+
+def calcular_frontera_media_varianza(df_retornos: pd.DataFrame, rf: float, permitir_short: bool) -> dict | None:
+    """Frontera media-varianza EXACTA de Markowitz (optimización cuadrática,
+    no búsqueda por Monte Carlo): mínima varianza global, portafolio de
+    tangencia (máximo Sharpe) y la curva de la frontera eficiente.
+
+    Con venta corta permitida usa la solución matricial cerrada de dos
+    fondos (Merton, 1972): w_minvar = Σ⁻¹1/A, w_tangencia = Σ⁻¹(μ-Rf)/1'Σ⁻¹(μ-Rf),
+    y cada punto de la frontera vía los multiplicadores de Lagrange
+    A=1'Σ⁻¹1, B=1'Σ⁻¹μ, C=μ'Σ⁻¹μ. Sin venta corta (w≥0) esa solución cerrada
+    no aplica (restricción de desigualdad), así que se resuelve cada punto
+    por separado con SLSQP. Devuelve None si Σ no es invertible/válida para
+    este conjunto de activos."""
+    tickers = list(df_retornos.columns)
+    n = len(tickers)
+    mu = df_retornos.mean().to_numpy() * 252
+    cov = df_retornos.cov().to_numpy() * 252
+
+    if not np.all(np.isfinite(mu)) or not np.all(np.isfinite(cov)):
+        return None
+
+    ones = np.ones(n)
+
+    if permitir_short:
+        try:
+            cov_inv = np.linalg.inv(cov)
+        except np.linalg.LinAlgError:
+            return None
+
+        A = float(ones @ cov_inv @ ones)
+        B = float(ones @ cov_inv @ mu)
+        C = float(mu @ cov_inv @ mu)
+        D = A * C - B ** 2
+        if A <= 0 or D <= 0:
+            return None
+
+        w_minvar = cov_inv @ ones / A
+        excess = mu - rf * ones
+        denom_tan = float(ones @ cov_inv @ excess)
+        if abs(denom_tan) < 1e-12:
+            return None
+        w_tangencia = cov_inv @ excess / denom_tan
+
+        def _peso_frontera(r):
+            return cov_inv @ (((C - B * r) / D) * ones + ((A * r - B) / D) * mu)
+    else:
+        bounds = [(0.0, 1.0)] * n
+        restriccion_suma = {"type": "eq", "fun": lambda w: np.sum(w) - 1.0}
+        w0 = ones / n
+
+        res_minvar = minimize(lambda w: w @ cov @ w, w0, method="SLSQP", bounds=bounds, constraints=[restriccion_suma])
+        if not res_minvar.success:
+            return None
+        w_minvar = res_minvar.x
+
+        def _sharpe_negativo(w):
+            ret, vol = _cartera_metrica(w, mu, cov)
+            return -(ret - rf) / vol if vol > 1e-12 else 1e6
+
+        res_tan = minimize(_sharpe_negativo, w0, method="SLSQP", bounds=bounds, constraints=[restriccion_suma])
+        if not res_tan.success:
+            return None
+        w_tangencia = res_tan.x
+
+        def _peso_frontera(r):
+            restricciones_r = [restriccion_suma, {"type": "eq", "fun": lambda w, r=r: w @ mu - r}]
+            res = minimize(lambda w: w @ cov @ w, w0, method="SLSQP", bounds=bounds, constraints=restricciones_r)
+            return res.x if res.success else None
+
+    ret_minvar, vol_minvar = _cartera_metrica(w_minvar, mu, cov)
+    ret_tangencia, vol_tangencia = _cartera_metrica(w_tangencia, mu, cov)
+    if vol_tangencia <= 0 or not np.isfinite(vol_tangencia):
+        return None
+    sharpe_tangencia = (ret_tangencia - rf) / vol_tangencia
+
+    # Solo el tramo eficiente (retorno >= mínima varianza) de la hipérbola.
+    ret_max = float(mu.max())
+    objetivos = [ret_minvar] if ret_max <= ret_minvar else np.linspace(ret_minvar, ret_max, N_PUNTOS_FRONTERA)
+
+    frontera = []
+    for r in objetivos:
+        w_r = _peso_frontera(r)
+        if w_r is None or abs(np.sum(w_r) - 1.0) > 1e-4 or not np.all(np.isfinite(w_r)):
+            continue
+        ret_r, vol_r = _cartera_metrica(w_r, mu, cov)
+        if np.isfinite(vol_r):
+            frontera.append((vol_r, ret_r))
+
+    return {
+        "tickers": tickers,
+        "mu_anual": pd.Series(mu, index=tickers),
+        "cov_anual": pd.DataFrame(cov, index=tickers, columns=tickers),
+        "w_minvar": pd.Series(w_minvar, index=tickers),
+        "ret_minvar": ret_minvar,
+        "vol_minvar": vol_minvar,
+        "w_tangencia": pd.Series(w_tangencia, index=tickers),
+        "ret_tangencia": ret_tangencia,
+        "vol_tangencia": vol_tangencia,
+        "sharpe_tangencia": sharpe_tangencia,
+        "frontera": frontera,
+        "permitir_short": permitir_short,
+    }
+
+
+def calcular_capm_regresion(exceso_portafolio: pd.Series, exceso_mercado: pd.Series) -> dict | None:
+    """Regresión CAPM por mínimos cuadrados ordinarios sobre retornos DIARIOS
+    en exceso: Rp,t - Rf,t = α + β(Rm,t - Rf,t) + εt. Devuelve α, β, sus
+    errores estándar clásicos de OLS, el estadístico t de α (test bilateral
+    H0: α=0), su p-value exacto vía la distribución t con n-2 grados de
+    libertad (no la aproximación normal), y el intervalo de confianza 95%
+    de α. t y p-value son invariantes a la frecuencia de anualización
+    (anualizar α y SE(α) por el mismo factor no cambia t=α/SE(α))."""
+    x = exceso_mercado.to_numpy()
+    y = exceso_portafolio.to_numpy()
+    n = len(x)
+    if n < 3:
+        return None
+
+    x_media = x.mean()
+    sxx = float(np.sum((x - x_media) ** 2))
+    if sxx <= 0:
+        return None
+
+    beta = float(np.sum((x - x_media) * (y - y.mean())) / sxx)
+    alfa = float(y.mean() - beta * x_media)
+
+    residuos = y - (alfa + beta * x)
+    gl = n - 2
+    sigma2 = float(np.sum(residuos ** 2) / gl)
+    se_alfa = (sigma2 * (1 / n + x_media ** 2 / sxx)) ** 0.5
+    se_beta = (sigma2 / sxx) ** 0.5
+
+    t_alfa = alfa / se_alfa if se_alfa > 0 else float("inf")
+    p_valor = float(2 * stats.t.sf(abs(t_alfa), df=gl))
+    t_critico = float(stats.t.ppf(0.975, df=gl))
+    ic_95 = (alfa - t_critico * se_alfa, alfa + t_critico * se_alfa)
+
+    return {
+        "alfa": alfa, "beta": beta, "se_alfa": se_alfa, "se_beta": se_beta,
+        "t_alfa": t_alfa, "p_valor": p_valor, "ic_95": ic_95, "n": n, "gl": gl,
+    }
+
+
+@st.cache_data(ttl=3600)
+def calcular_portafolio_exacto(
+    df_todas: pd.DataFrame, df_macro: pd.DataFrame, tickers_elegidos: tuple, permitir_short: bool,
+) -> dict:
+    """Frontera media-varianza exacta + LMC + CAPM/alfa de Jensen del
+    portafolio de tangencia M contra el S&P 500, sobre el universo
+    combinado Chile + EEUU elegido por el usuario. Complementa (no
+    reemplaza) la simulación Monte Carlo de calcular_optimizacion_portafolios.
+    Excluye activos con historia insuficiente en vez de romper el cálculo."""
+    df_todas = df_todas.assign(fecha=pd.to_datetime(df_todas["fecha"]))
+    df_macro = df_macro.assign(fecha=pd.to_datetime(df_macro["fecha"]))
+
+    tickers_excluidos = []
+    for ticker in tickers_elegidos:
+        serie = df_todas[df_todas["ticker"] == ticker].sort_values("fecha").set_index("fecha")["precio_cierre"]
+        n_obs = len(calcular_retornos_reales(serie).dropna())
+        if n_obs < N_MIN_OBS_FRONTERA:
+            tickers_excluidos.append((ticker, n_obs))
+    tickers_validos = [t for t in tickers_elegidos if t not in {e[0] for e in tickers_excluidos}]
+
+    if len(tickers_validos) < 2:
+        return {"error": "Se necesitan al menos 2 activos con historia suficiente.", "excluidos": tickers_excluidos}
+
+    df_retornos = _matriz_retornos_alineados(df_todas, tickers_validos)
+    if len(df_retornos) < N_MIN_OBS_FRONTERA or len(df_retornos.columns) < 2:
+        return {
+            "error": "No hay suficientes fechas en común entre los activos elegidos.",
+            "excluidos": tickers_excluidos,
+        }
+
+    # Rf: Effective Federal Funds Rate — el CAPM de esta sección usa el S&P
+    # 500 como mercado (en USD), así que la Rf debe ser la de EEUU, no la TPM
+    # chilena (misma lógica que ya usa el CAPM de "Acciones Dow Jones").
+    tpm_eeuu = (
+        df_macro[df_macro["nombre"] == "Tasa de política monetaria de EEUU (Effective Federal Funds Rate)"]
+        .sort_values("fecha")
+        .set_index("fecha")["valor"]
+    ) / 100
+    if tpm_eeuu.empty:
+        return {"error": "No hay datos de la tasa libre de riesgo de EEUU.", "excluidos": tickers_excluidos}
+    rf_anual = float(tpm_eeuu.iloc[-1])
+
+    frontera = calcular_frontera_media_varianza(df_retornos, rf_anual, permitir_short)
+    if frontera is None:
+        return {
+            "error": "La matriz de covarianza no es válida para este conjunto de activos (¿muy pocos datos o activos redundantes?).",
+            "excluidos": tickers_excluidos,
+        }
+
+    retornos_M = pd.Series(
+        df_retornos.to_numpy() @ frontera["w_tangencia"].reindex(df_retornos.columns).to_numpy(),
+        index=df_retornos.index,
+    )
+    sp500_precio = df_todas[df_todas["ticker"] == "^GSPC"].sort_values("fecha").set_index("fecha")["precio_cierre"]
+    retornos_sp500 = calcular_retornos_reales(sp500_precio)
+
+    conjunto = pd.concat([retornos_M, retornos_sp500], axis=1, join="inner", keys=["M", "mercado"]).dropna()
+    rf_diaria_alineada = tpm_eeuu.reindex(conjunto.index, method="ffill") / 252
+    df_capm = pd.concat([conjunto, rf_diaria_alineada.rename("rf")], axis=1).dropna()
+
+    if len(df_capm) < N_MIN_OBS_FRONTERA:
+        return {
+            "error": (
+                "No hay suficientes fechas en común entre el portafolio M, el S&P 500 "
+                "y la tasa libre de riesgo para correr el CAPM."
+            ),
+            "excluidos": tickers_excluidos,
+        }
+
+    exceso_M = df_capm["M"] - df_capm["rf"]
+    exceso_mercado = df_capm["mercado"] - df_capm["rf"]
+
+    regresion_M = calcular_capm_regresion(exceso_M, exceso_mercado)
+    # Autochequeo: el S&P 500 regresado contra sí mismo debe dar β=1, α=0.
+    regresion_autocheck = calcular_capm_regresion(exceso_mercado, exceso_mercado)
+
+    ret_anual_M = float(df_capm["M"].mean() * 252)
+    vol_anual_M = float(df_capm["M"].std() * (252 ** 0.5))
+    ret_anual_mkt = float(df_capm["mercado"].mean() * 252)
+    vol_anual_mkt = float(df_capm["mercado"].std() * (252 ** 0.5))
+    rf_anual_muestra = float(df_capm["rf"].mean() * 252)
+
+    sharpe_M = (ret_anual_M - rf_anual_muestra) / vol_anual_M if vol_anual_M > 0 else None
+    sharpe_mkt = (ret_anual_mkt - rf_anual_muestra) / vol_anual_mkt if vol_anual_mkt > 0 else None
+    treynor_M = (
+        (ret_anual_M - rf_anual_muestra) / regresion_M["beta"]
+        if regresion_M is not None and regresion_M["beta"] != 0 else None
+    )
+    treynor_mkt = (
+        (ret_anual_mkt - rf_anual_muestra) / regresion_autocheck["beta"]
+        if regresion_autocheck is not None and regresion_autocheck["beta"] != 0 else None
+    )
+
+    return {
+        "error": None,
+        "excluidos": tickers_excluidos,
+        "tickers_usados": tickers_validos,
+        "n_dias_frontera": len(df_retornos),
+        "rf_anual": rf_anual,
+        "frontera": frontera,
+        "n_dias_capm": len(df_capm),
+        "fecha_capm_desde": df_capm.index.min(),
+        "fecha_capm_hasta": df_capm.index.max(),
+        "regresion_M": regresion_M,
+        "regresion_autocheck": regresion_autocheck,
+        "ret_anual_M": ret_anual_M,
+        "vol_anual_M": vol_anual_M,
+        "ret_anual_mkt": ret_anual_mkt,
+        "vol_anual_mkt": vol_anual_mkt,
+        "rf_anual_muestra": rf_anual_muestra,
+        "sharpe_M": sharpe_M,
+        "sharpe_mkt": sharpe_mkt,
+        "treynor_M": treynor_M,
+        "treynor_mkt": treynor_mkt,
+    }
 
 
 # --- Sidebar: info de última actualización ---
@@ -2256,6 +2536,225 @@ with tab_portafolios:
             "shrinkage estimators) quedan fuera del alcance de este proyecto. **Los "
             "pesos \"óptimos\" mostrados son ilustrativos del framework, no una "
             "recomendación de inversión.**"
+        )
+
+        st.divider()
+        st.header("Frontera media-varianza exacta, LMC y CAPM")
+        st.caption(
+            "Complementa la simulación Monte Carlo de arriba: acá la frontera y el "
+            "portafolio de tangencia se calculan con optimización cuadrática exacta "
+            "(no por búsqueda entre portafolios simulados), sobre un universo "
+            "combinado de acciones chilenas y estadounidenses, e incluye la Línea de "
+            "Mercado de Capitales y una prueba t formal sobre el alfa de Jensen."
+        )
+
+        st.subheader("1. Selección de activos y parámetros")
+        col_sel1, col_sel2 = st.columns(2)
+        with col_sel1:
+            tickers_chile_elegidos = st.multiselect(
+                "Acciones chilenas", UNIVERSO_PORTAFOLIOS_CHILE,
+                default=TICKERS_IPSA_PRINCIPALES[:4], key="frontera_chile",
+            )
+        with col_sel2:
+            tickers_eeuu_elegidos = st.multiselect(
+                "Acciones estadounidenses", UNIVERSO_PORTAFOLIOS_EEUU,
+                default=TICKERS_DOW_JONES_PRINCIPALES[:4], key="frontera_eeuu",
+            )
+        tickers_frontera = tickers_chile_elegidos + tickers_eeuu_elegidos
+
+        permitir_short = st.radio(
+            "Restricción de pesos", ["Sin venta corta (w ≥ 0)", "Con venta corta (w libre)"],
+            key="frontera_short",
+        ) == "Con venta corta (w libre)"
+
+        if len(tickers_frontera) < 2:
+            st.warning("⚠️ Elige al menos 2 acciones (puedes mezclar Chile y EEUU) para calcular la frontera.")
+        else:
+            resultado_exacto = calcular_portafolio_exacto(
+                df_acciones, df_macro, tuple(tickers_frontera), permitir_short,
+            )
+
+            if resultado_exacto["excluidos"]:
+                lista_excl = ", ".join(f"{t} ({n} obs.)" for t, n in resultado_exacto["excluidos"])
+                st.warning(
+                    f"⚠️ Excluidos por historia insuficiente (< {N_MIN_OBS_FRONTERA} "
+                    f"observaciones reales): {lista_excl}."
+                )
+
+            if resultado_exacto.get("error"):
+                st.error(f"No se pudo calcular la frontera: {resultado_exacto['error']}")
+            else:
+                st.caption(
+                    "Rf utilizada en toda esta sección: **Effective Federal Funds Rate** "
+                    f"(FRED, serie DFF) = {resultado_exacto['rf_anual'] * 100:.2f}% anual, última "
+                    "tasa disponible — se usa esta y no la TPM chilena porque el CAPM compara "
+                    "contra el S&P 500 (mercado en USD)."
+                )
+
+                frontera = resultado_exacto["frontera"]
+
+                st.subheader("2. Frontera eficiente + Línea de Mercado de Capitales (LMC)")
+
+                fig_frontera = go.Figure()
+                fig_frontera.add_trace(go.Scatter(
+                    x=(frontera["cov_anual"].to_numpy().diagonal() ** 0.5) * 100,
+                    y=frontera["mu_anual"].to_numpy() * 100,
+                    mode="markers+text", text=frontera["tickers"], textposition="top center",
+                    marker=dict(size=9, color="#8a8a8a"),
+                    name="Activos individuales",
+                ))
+                if frontera["frontera"]:
+                    vols_f, rets_f = zip(*frontera["frontera"])
+                    fig_frontera.add_trace(go.Scatter(
+                        x=[v * 100 for v in vols_f], y=[r * 100 for r in rets_f],
+                        mode="lines", line=dict(color="#2a78d6", width=3),
+                        name="Frontera eficiente",
+                    ))
+                fig_frontera.add_trace(go.Scatter(
+                    x=[frontera["vol_minvar"] * 100], y=[frontera["ret_minvar"] * 100],
+                    mode="markers", marker=dict(size=16, color="#0ca30c", symbol="star", line=dict(width=1, color="black")),
+                    name="Mínima varianza global",
+                ))
+                fig_frontera.add_trace(go.Scatter(
+                    x=[frontera["vol_tangencia"] * 100], y=[frontera["ret_tangencia"] * 100],
+                    mode="markers", marker=dict(size=18, color="#e34948", symbol="star", line=dict(width=1, color="black")),
+                    name="Portafolio de tangencia M",
+                ))
+
+                vols_frontera_disp = [v for v, _ in frontera["frontera"]] or [frontera["vol_tangencia"]]
+                vol_max_grafico = max(frontera["vol_tangencia"], max(vols_frontera_disp)) * 1.3
+                xs_lmc = np.linspace(0, vol_max_grafico, 50)
+                ys_lmc = resultado_exacto["rf_anual"] + frontera["sharpe_tangencia"] * xs_lmc
+                fig_frontera.add_trace(go.Scatter(
+                    x=xs_lmc * 100, y=ys_lmc * 100,
+                    mode="lines", line=dict(color="#eda100", width=2, dash="dash"),
+                    name="LMC (CML)",
+                ))
+                fig_frontera.update_layout(
+                    xaxis_title="Volatilidad anualizada (%)", yaxis_title="Retorno esperado anualizado (%)",
+                    height=550,
+                )
+                st.plotly_chart(fig_frontera, use_container_width=True)
+                st.caption(
+                    f"LMC: E(Rp) = Rf + [(E(RM) − Rf) / σM] × σp = {resultado_exacto['rf_anual']*100:.2f}% + "
+                    f"{frontera['sharpe_tangencia']:.2f} × σp — comienza en Rf (σ=0) y pasa exactamente por M."
+                )
+
+                st.subheader("3. Portafolio de tangencia M")
+                col_m1, col_m2 = st.columns(2)
+                col_m1.metric("Retorno esperado anualizado", f"{frontera['ret_tangencia']*100:.2f}%")
+                col_m2.metric("Volatilidad anualizada", f"{frontera['vol_tangencia']*100:.2f}%")
+                col_m3, col_m4 = st.columns(2)
+                col_m3.metric("Sharpe ratio", f"{frontera['sharpe_tangencia']:.2f}")
+                col_m4.metric("Σw_i (validación)", f"{frontera['w_tangencia'].sum()*100:.2f}%")
+
+                st.subheader("4. Pesos de M")
+                pesos_m_df = frontera["w_tangencia"].sort_values(ascending=False).to_frame("Peso").mul(100)
+                st.dataframe(pesos_m_df.style.format("{:+.1f}%"), use_container_width=True)
+
+                st.subheader("5. CAPM y alfa de Jensen (M vs. S&P 500)")
+                regresion_M = resultado_exacto["regresion_M"]
+                if regresion_M is None:
+                    st.error("No se pudo estimar la regresión CAPM (datos insuficientes).")
+                else:
+                    st.caption(
+                        f"Regresión sobre retornos diarios en exceso — {resultado_exacto['n_dias_capm']} "
+                        f"observaciones comunes entre M, el S&P 500 y Rf "
+                        f"({pd.Timestamp(resultado_exacto['fecha_capm_desde']).strftime('%d-%m-%Y')} a "
+                        f"{pd.Timestamp(resultado_exacto['fecha_capm_hasta']).strftime('%d-%m-%Y')})."
+                    )
+                    col_c1, col_c2 = st.columns(2)
+                    col_c1.metric("Alfa de Jensen (anualizado)", f"{regresion_M['alfa'] * 252 * 100:+.2f}%")
+                    col_c2.metric("Beta", f"{regresion_M['beta']:.2f}")
+                    col_c3, col_c4 = st.columns(2)
+                    col_c3.metric("Error estándar de alfa (anualizado)", f"{regresion_M['se_alfa'] * 252 * 100:.2f}%")
+                    col_c4.metric(
+                        "IC 95% de alfa (anualizado)",
+                        f"[{regresion_M['ic_95'][0]*252*100:+.2f}%, {regresion_M['ic_95'][1]*252*100:+.2f}%]",
+                    )
+
+                    auto = resultado_exacto["regresion_autocheck"]
+                    st.caption(
+                        f"Validación interna: β(S&P 500 vs. sí mismo) = {auto['beta']:.4f} (debe ser ≈ 1) — "
+                        f"α = {auto['alfa']*252*100:+.4f}% (debe ser ≈ 0)."
+                    )
+
+                    st.subheader("6. Test t: H0: α = 0 vs. H1: α ≠ 0")
+                    col_t1, col_t2 = st.columns(2)
+                    col_t1.metric("Estadístico t", f"{regresion_M['t_alfa']:.2f}")
+                    col_t2.metric("p-value", f"{regresion_M['p_valor']:.4f}")
+                    st.caption(f"Grados de libertad: {regresion_M['gl']:,}")
+
+                    if regresion_M["p_valor"] < 0.05:
+                        st.success("✅ Se rechaza H0: el alfa es estadísticamente distinto de cero al 5%.")
+                    else:
+                        st.info("ℹ️ No se rechaza H0: no existe evidencia suficiente de que el alfa sea distinto de cero al 5%.")
+                    st.caption(
+                        "Significancia estadística no es lo mismo que importancia económica: un alfa "
+                        "estadísticamente distinto de cero puede ser demasiado pequeño (o insuficiente "
+                        "tras costos de transacción) para ser relevante en la práctica, y viceversa."
+                    )
+
+                    st.subheader("7. Sharpe y Treynor: M vs. S&P 500")
+                    df_comparacion = pd.DataFrame([
+                        {
+                            "Portafolio": "Tangencia M",
+                            "Retorno anual": resultado_exacto["ret_anual_M"],
+                            "Volatilidad": resultado_exacto["vol_anual_M"],
+                            "Beta": regresion_M["beta"],
+                            "Sharpe": resultado_exacto["sharpe_M"],
+                            "Treynor": resultado_exacto["treynor_M"],
+                            "Alfa Jensen (anual)": regresion_M["alfa"] * 252,
+                            "p-value alfa": regresion_M["p_valor"],
+                        },
+                        {
+                            "Portafolio": "S&P 500",
+                            "Retorno anual": resultado_exacto["ret_anual_mkt"],
+                            "Volatilidad": resultado_exacto["vol_anual_mkt"],
+                            "Beta": auto["beta"],
+                            "Sharpe": resultado_exacto["sharpe_mkt"],
+                            "Treynor": resultado_exacto["treynor_mkt"],
+                            "Alfa Jensen (anual)": auto["alfa"] * 252,
+                            "p-value alfa": auto["p_valor"],
+                        },
+                    ]).set_index("Portafolio")
+                    st.dataframe(
+                        df_comparacion.style.format({
+                            "Retorno anual": "{:+.2%}", "Volatilidad": "{:.2%}", "Beta": "{:.2f}",
+                            "Sharpe": "{:.2f}", "Treynor": "{:+.2%}",
+                            "Alfa Jensen (anual)": "{:+.2%}", "p-value alfa": "{:.4f}",
+                        }),
+                        use_container_width=True,
+                    )
+
+                    st.subheader("8. Interpretación")
+                    ganador_sharpe_txt = "M" if resultado_exacto["sharpe_M"] > resultado_exacto["sharpe_mkt"] else "el S&P 500"
+                    ganador_treynor_txt = "M" if resultado_exacto["treynor_M"] > resultado_exacto["treynor_mkt"] else "el S&P 500"
+                    significativo_txt = "sí es" if regresion_M["p_valor"] < 0.05 else "no es"
+                    st.markdown(
+                        f"- **Sharpe:** {ganador_sharpe_txt} tiene mayor ratio de Sharpe "
+                        f"(M: {resultado_exacto['sharpe_M']:.2f} vs. S&P 500: {resultado_exacto['sharpe_mkt']:.2f}) "
+                        "— mide retorno en exceso por unidad de **riesgo total** (volatilidad).\n"
+                        f"- **Treynor:** {ganador_treynor_txt} tiene mayor ratio de Treynor "
+                        f"(M: {resultado_exacto['treynor_M']:+.2%} vs. S&P 500: {resultado_exacto['treynor_mkt']:+.2%}) "
+                        "— mide retorno en exceso por unidad de **riesgo sistemático** (beta).\n"
+                        "- Si el ranking difiere entre Sharpe y Treynor, la diferencia viene del riesgo "
+                        "idiosincrático (diversificable) que Treynor ignora y Sharpe sí penaliza.\n"
+                        f"- El alfa de Jensen de M ({regresion_M['alfa']*252*100:+.2f}% anual) **{significativo_txt}** "
+                        f"estadísticamente significativo al 5% (p = {regresion_M['p_valor']:.4f})."
+                    )
+
+        st.divider()
+        st.info(
+            "**Nota metodológica (frontera exacta).** Retornos diarios (excluyendo días "
+            "de precio congelado), covarianza y frontera anualizadas multiplicando por "
+            "252 ruedas — sin mezclar frecuencias. La Rf de esta sección es la Effective "
+            "Federal Funds Rate (ancla en USD, consistente con el S&P 500 como mercado "
+            "del CAPM); no se ajusta por tipo de cambio entre los activos en CLP y en "
+            "USD — la misma simplificación que ya usa el resto del dashboard (ej. el "
+            "CAPM del IPSA usa Rf local sin ajustar los retornos de EEUU por FX). Estos "
+            "portafolios son ilustrativos del framework de Markowitz/Sharpe/Treynor/"
+            "Jensen, no una recomendación de inversión."
         )
 
     except Exception as e:
