@@ -47,7 +47,7 @@ from market_data import (
 )
 from calendario_economico import proximos_eventos, NOTA_VIGENCIA, INDICADOR_POR_TIPO
 
-st.set_page_config(page_title="Mercado Chile", layout="wide")
+st.set_page_config(page_title="Mercado Económico Chileno", layout="wide")
 
 # Paleta categórica de orden fijo (nunca se reasigna por índice de la
 # selección), y diverging rojo-gris-verde para el heatmap de desempeño.
@@ -89,7 +89,7 @@ UNIVERSO_PORTAFOLIOS_EEUU = list(dict.fromkeys(TICKERS_DOW_JONES + TICKERS_MAGNI
 N_MIN_OBS_FRONTERA = 60
 N_PUNTOS_FRONTERA = 40
 
-st.title("Dashboard de mercado chileno")
+st.title("Mercado Económico Chileno")
 st.caption("Datos del Banco Central de Chile y Yahoo Finance, actualizados diariamente")
 
 engine = get_engine()

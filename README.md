@@ -1,4 +1,4 @@
-# Dashboard de mercado chileno
+# Mercado Económico Chileno
 
 Panel que consolida indicadores macroeconómicos del Banco Central de Chile,
 todas las acciones del IPSA y benchmarks internacionales en un solo lugar,
