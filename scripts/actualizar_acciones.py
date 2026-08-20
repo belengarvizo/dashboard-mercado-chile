@@ -46,9 +46,15 @@ TICKERS_A_DESCARGAR = list(dict.fromkeys(
 
 
 def descargar_ticker(ticker: str, periodo: str = "5y"):
-    """Descarga el histórico de un ticker usando yfinance."""
+    """Descarga el histórico de un ticker usando yfinance.
+
+    timeout=30: sin esto, una llamada de red que se cuelga (Yahoo Finance
+    no responde) deja el script esperando indefinidamente sin lanzar
+    ninguna excepción — pasó en producción (el cron quedó "Running" más
+    de una hora). Con timeout, esa acción específica falla con una
+    excepción normal en vez de colgar el proceso completo."""
     accion = yf.Ticker(ticker)
-    historico = accion.history(period=periodo)
+    historico = accion.history(period=periodo, timeout=30)
     return historico
 
 
@@ -99,23 +105,35 @@ def guardar_historico(session, ticker: str, historico):
 def actualizar_todas_las_acciones():
     session = get_session()
 
+    tickers_fallidos = []
+
     try:
         for ticker in TICKERS_A_DESCARGAR:
             print(f"Descargando {ticker}...")
-            historico = descargar_ticker(ticker)
+            try:
+                historico = descargar_ticker(ticker)
 
-            def _guardar_y_commitear(ticker=ticker, historico=historico):
-                contador_local = guardar_historico(session, ticker, historico)
-                session.commit()
-                return contador_local
+                def _guardar_y_commitear(ticker=ticker, historico=historico):
+                    contador_local = guardar_historico(session, ticker, historico)
+                    session.commit()
+                    return contador_local
 
-            # La descarga vía yfinance no se reintenta acá (no es el problema
-            # observado); solo la escritura a la BD, propensa a cortes
-            # transitorios de la conexión serverless de Neon. guardar_historico
-            # es idempotente (compara contra lo ya guardado), así que reintentar
-            # la función completa -no solo el commit- es seguro.
-            contador = con_reintentos_db(session, _guardar_y_commitear)
-            print(f"  -> {contador} días procesados")
+                # La descarga vía yfinance no se reintenta acá (ya tiene
+                # timeout=30, y reintentar una falla de red repetida no
+                # aporta); solo la escritura a la BD, propensa a cortes
+                # transitorios de la conexión serverless de Neon.
+                # guardar_historico es idempotente (compara contra lo ya
+                # guardado), así que reintentar la función completa -no
+                # solo el commit- es seguro.
+                contador = con_reintentos_db(session, _guardar_y_commitear)
+                print(f"  -> {contador} días procesados")
+            except Exception as e:
+                # Un ticker problemático (timeout, dato corrupto, etc.) no
+                # debe dejar sin actualizar a los demás — se salta y se
+                # reporta al final, en vez de abortar toda la corrida.
+                session.rollback()
+                tickers_fallidos.append((ticker, str(e)))
+                print(f"  ⚠️ Fallo con {ticker}, se salta: {e}")
 
         def _guardar_metadata():
             meta = session.query(MetadataActualizacion).filter_by(fuente="yfinance").first()
@@ -126,7 +144,13 @@ def actualizar_todas_las_acciones():
             session.commit()
 
         con_reintentos_db(session, _guardar_metadata)
-        print("Actualización de acciones completada.")
+
+        if tickers_fallidos:
+            print(f"Actualización de acciones completada con {len(tickers_fallidos)} ticker(s) fallido(s):")
+            for ticker, error in tickers_fallidos:
+                print(f"  - {ticker}: {error}")
+        else:
+            print("Actualización de acciones completada.")
 
     except Exception as e:
         session.rollback()
