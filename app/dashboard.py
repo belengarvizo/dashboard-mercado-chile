@@ -3141,6 +3141,13 @@ with tab_laboratorio:
             if diagnostico_cobertura["tabla"].empty:
                 st.caption("Ninguna acción de la selección actual perdió observaciones dentro de la ventana.")
             else:
+                n_con_perdidas = len(diagnostico_cobertura["tabla"])
+                n_total = len(datos_lab["tickers_validos"])
+                st.caption(
+                    f"{n_con_perdidas} de {n_total} acciones perdieron al menos un día — la tabla lista "
+                    "todas ellas (no es un top parcial), ordenadas de mayor a menor pérdida; las "
+                    f"{n_total - n_con_perdidas} restantes tuvieron cobertura completa."
+                )
                 st.dataframe(diagnostico_cobertura["tabla"], use_container_width=True, hide_index=True)
 
         df_retornos_lab = datos_lab["df_retornos"]
@@ -3210,8 +3217,8 @@ with tab_laboratorio:
         else:
             st.caption(
                 "📌 **LMC/Sharpe/Treynor/x\\*** usan el Rf puntual del 31-07-2026 (arriba); **CAPM** usa la "
-                "serie diaria de Treasury 1Y (no un promedio) — son dos aplicaciones de la misma Rf, no dos "
-                "tasas distintas."
+                "serie diaria de Treasury 1Y (no un promedio) — mismo instrumento y misma serie, distinto "
+                "uso temporal (valor puntual vs. serie diaria), no dos tasas distintas."
             )
 
         # Rf que alimenta el CAPM: en Modo Tarea es la serie diaria real de
@@ -3235,9 +3242,10 @@ with tab_laboratorio:
             nota_capm_rf = (
                 "El CAPM usa la **serie diaria** de Treasury 1Y (FRED, DGS1) alineada a cada fecha de la "
                 "regresión — no su promedio. Las medidas estáticas (M, LMC, Sharpe, Treynor, x*) usan en "
-                f"cambio el valor **puntual** del 31-07-2026 ({rf_lab*100:.2f}%) mostrado arriba: son dos "
-                "aplicaciones distintas de la misma Rf, no dos tasas distintas — la serie diaria evita "
-                "perder la variación de la tasa dentro de la regresión, y el valor puntual es "
+                f"cambio el valor **puntual** del 31-07-2026 ({rf_lab*100:.2f}%) mostrado arriba: es el "
+                "mismo instrumento y la misma serie (Treasury 1Y), con distinto **uso temporal** — "
+                "valor puntual de una fecha vs. serie diaria — no dos tasas distintas. La serie diaria "
+                "evita perder la variación de la tasa dentro de la regresión, y el valor puntual es "
                 "consistentemente el que pide la tarea para M/LMC/Sharpe/Treynor."
             )
 
