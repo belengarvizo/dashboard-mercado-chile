@@ -75,6 +75,41 @@ def preparar_datos_laboratorio(
     }
 
 
+def diagnosticar_cobertura(df_precios: pd.DataFrame, tickers: list, fecha_inicio, fecha_fin) -> dict:
+    """Diagnóstico de transparencia para la UI: cuántas sesiones bursátiles
+    "teóricas" hay en la ventana y cuántas se pierden por ticker antes de
+    llegar a la matriz de retornos alineada. Puramente informativo — NO
+    afecta el cálculo de la frontera/CAPM, solo lo explica.
+
+    "Sesiones teóricas" se toma de los retornos reales de ^GSPC en la
+    ventana (el S&P 500 no tiene precio congelado, y coincide con el
+    calendario NYSE oficial), en vez de un calendario externo, para no
+    agregar una dependencia nueva solo para este diagnóstico."""
+    df_precios = df_precios.assign(fecha=pd.to_datetime(df_precios["fecha"]))
+    fecha_inicio = pd.Timestamp(fecha_inicio)
+    fecha_fin = pd.Timestamp(fecha_fin)
+
+    sp500 = df_precios[df_precios["ticker"] == "^GSPC"].sort_values("fecha").set_index("fecha")["precio_cierre"]
+    sp500 = sp500[(sp500.index >= fecha_inicio) & (sp500.index <= fecha_fin)]
+    sesiones_teoricas = set(calcular_retornos_reales(sp500).dropna().index)
+
+    filas = []
+    for ticker in tickers:
+        serie = df_precios[df_precios["ticker"] == ticker].sort_values("fecha").set_index("fecha")["precio_cierre"]
+        serie = serie[(serie.index >= fecha_inicio) & (serie.index <= fecha_fin)]
+        retornos_ticker = set(calcular_retornos_reales(serie).dropna().index)
+        faltantes = sesiones_teoricas - retornos_ticker
+        if faltantes:
+            filas.append({"Ticker": ticker, "Días perdidos": len(faltantes)})
+
+    df_diag = (
+        pd.DataFrame(filas).sort_values("Días perdidos", ascending=False).reset_index(drop=True)
+        if filas else pd.DataFrame(columns=["Ticker", "Días perdidos"])
+    )
+
+    return {"sesiones_teoricas": len(sesiones_teoricas), "tabla": df_diag}
+
+
 def estadisticas_activos(df_retornos: pd.DataFrame, sector_por_ticker: dict, empresa_por_ticker: dict) -> pd.DataFrame:
     """Retorno esperado, volatilidad y varianza anualizados de cada activo."""
     mu = df_retornos.mean() * N_RUEDAS_ANIO
@@ -283,11 +318,6 @@ def calcular_frontera(
         regularizado = cerrado["regularizado"]
         w_minvar = cerrado["w_minvar"]
         w_tangencia = cerrado.get("w_tangencia")
-        ret_minvar_opt = float(w_minvar @ mu)
-        ret_max = float(mu.max())
-        objetivos = [ret_minvar_opt] if ret_max <= ret_minvar_opt else np.linspace(ret_minvar_opt, ret_max, n_puntos)
-        pesos_frontera = [_peso_frontera_cerrado(cerrado, mu, r) for r in objetivos]
-        pesos_frontera = [w for w in pesos_frontera if np.all(np.isfinite(w)) and abs(np.sum(w) - 1.0) < 1e-4]
     else:
         bounds = _bounds(n, permitir_short, limite_abs)
         w0 = np.ones(n) / n
@@ -295,12 +325,31 @@ def calcular_frontera(
         if w_minvar is None:
             return None
         w_tangencia = _tangencia_slsqp(mu, cov_opt, rf, bounds, restricciones_extra, w0)
-        ret_minvar_opt = float(w_minvar @ mu)
-        ret_max = float(mu.max())
-        pesos_frontera = _frontera_slsqp(mu, cov_opt, bounds, restricciones_extra, ret_minvar_opt, ret_max, n_puntos, w0)
 
     if w_tangencia is not None and (not np.all(np.isfinite(w_tangencia)) or abs(np.sum(w_tangencia) - 1.0) > 1e-3):
         w_tangencia = None
+
+    ret_minvar_opt = float(w_minvar @ mu)
+    ret_max = float(mu.max())
+    # La curva de la frontera se dibuja hasta el mayor retorno alcanzable
+    # entre los activos individuales — pero con venta corta, M (tangencia)
+    # puede tener un retorno MAYOR que cualquier activo individual (apalanca
+    # largos contra cortos), y en ese caso la curva quedaría cortada antes
+    # de llegar a M aunque M sí sea parte de la misma frontera matemática.
+    # Se extiende el rango (con margen del 15%) solo cuando eso ocurre, para
+    # que M quede visiblemente sobre la curva dibujada — esto NO cambia
+    # cómo se calcula ningún punto, solo hasta dónde se piden puntos.
+    if w_tangencia is not None:
+        ret_tangencia_bruto = float(w_tangencia @ mu)
+        if np.isfinite(ret_tangencia_bruto) and ret_tangencia_bruto > ret_max:
+            ret_max = ret_tangencia_bruto * 1.15
+
+    if sin_restricciones:
+        objetivos = [ret_minvar_opt] if ret_max <= ret_minvar_opt else np.linspace(ret_minvar_opt, ret_max, n_puntos)
+        pesos_frontera = [_peso_frontera_cerrado(cerrado, mu, r) for r in objetivos]
+        pesos_frontera = [w for w in pesos_frontera if np.all(np.isfinite(w)) and abs(np.sum(w) - 1.0) < 1e-4]
+    else:
+        pesos_frontera = _frontera_slsqp(mu, cov_opt, bounds, restricciones_extra, ret_minvar_opt, ret_max, n_puntos, w0)
 
     def _metricas(w):
         # Siempre con la covarianza REAL, incluso en el caso "ingenuo".

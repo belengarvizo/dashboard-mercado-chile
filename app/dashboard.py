@@ -2995,6 +2995,11 @@ def calcular_frontera_lab_cacheada(
     )
 
 
+@st.cache_data(ttl=3600)
+def diagnosticar_cobertura_cacheado(df_precios: pd.DataFrame, tickers: tuple, fecha_inicio, fecha_fin) -> dict:
+    return lab.diagnosticar_cobertura(df_precios, list(tickers), fecha_inicio, fecha_fin)
+
+
 def _grafico_base_frontera() -> go.Figure:
     fig = go.Figure()
     fig.update_layout(xaxis_title="Volatilidad anualizada", yaxis_title="Retorno esperado anualizado", height=550)
@@ -3108,6 +3113,35 @@ with tab_laboratorio:
         col_f2.metric("Fecha final", datos_lab["fecha_fin"].strftime("%d-%m-%Y"))
         col_f3.metric("Observaciones", f"{datos_lab['n_observaciones']:,}")
         col_f4.metric("Acciones usadas", len(datos_lab["tickers_validos"]))
+
+        diagnostico_cobertura = diagnosticar_cobertura_cacheado(
+            df_acciones_lab, tuple(datos_lab["tickers_validos"]), fecha_inicio_lab, fecha_fin_lab,
+        )
+        sesiones_teoricas = diagnostico_cobertura["sesiones_teoricas"]
+        n_perdidas = sesiones_teoricas - datos_lab["n_observaciones"]
+        cobertura_pct = (datos_lab["n_observaciones"] / sesiones_teoricas * 100) if sesiones_teoricas else None
+
+        col_cov1, col_cov2, col_cov3, col_cov4 = st.columns(4)
+        col_cov1.metric("Sesiones teóricas (vía S&P 500)", f"{sesiones_teoricas:,}")
+        col_cov2.metric("Observaciones comunes usadas", f"{datos_lab['n_observaciones']:,}")
+        col_cov3.metric("Cobertura", f"{cobertura_pct:.1f}%" if cobertura_pct is not None else "—")
+        col_cov4.metric("Fechas perdidas", f"{n_perdidas:,}")
+
+        with st.expander("¿Por qué se perdieron observaciones?"):
+            st.caption(
+                "\"Sesiones teóricas\" son los días con retorno real del S&P 500 (`^GSPC`) dentro de "
+                "la ventana — no tiene precio congelado, así que coincide con el calendario bursátil "
+                "real. Una fecha se pierde de la matriz final si **al menos una** de las acciones "
+                "elegidas no tiene un precio real ese día (dato faltante o precio congelado — mismo "
+                "criterio que \"Atraso\" en el resto del dashboard). Alinear las fechas exactamente "
+                "así entre todas las acciones es necesario para que la matriz de covarianzas conjunta "
+                "sea válida; no es un error, pero significa que basta con que una sola acción tenga un "
+                "día problemático para que ese día se pierda también para las demás."
+            )
+            if diagnostico_cobertura["tabla"].empty:
+                st.caption("Ninguna acción de la selección actual perdió observaciones dentro de la ventana.")
+            else:
+                st.dataframe(diagnostico_cobertura["tabla"], use_container_width=True, hide_index=True)
 
         df_retornos_lab = datos_lab["df_retornos"]
         if len(df_retornos_lab.columns) < 2 or len(df_retornos_lab) < 30:
@@ -3468,8 +3502,9 @@ with tab_laboratorio:
         st.plotly_chart(fig_cmp, use_container_width=True)
         st.caption(
             "Cada restricción reduce (nunca amplía) el conjunto factible respecto a la frontera "
-            "base — por eso ninguna otra frontera puede quedar por debajo (más volatilidad para "
-            "el mismo retorno) de la base."
+            "base — por eso ninguna otra frontera puede quedar a la izquierda de la base (para el "
+            "mismo retorno, siempre necesita igual o más volatilidad, es decir, queda a la derecha "
+            "en el eje X)."
         )
 
         st.divider()
