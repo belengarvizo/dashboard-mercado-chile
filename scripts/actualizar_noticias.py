@@ -10,6 +10,12 @@ verificó: La Tercera marca "rss": null en toda su configuración de
 sitio, y el sistema legado de Emol en rss.emol.com está caído), así que
 para esas dos se usa una búsqueda de Google Noticias filtrada por sitio
 como sustituto real y verificado (no es el feed oficial del medio).
+
+Yahoo Finance sí tiene RSS propio funcionando (requiere un User-Agent de
+navegador o Yahoo devuelve "Too Many Requests"); se agrega como fuente
+adicional de mercado internacional en inglés — el resumen diario en la
+pestaña Brief Premercado la usa para la sección de panorama global, sin
+reemplazar a las fuentes chilenas.
 """
 
 import os
@@ -28,12 +34,20 @@ FUENTES_RSS = {
     "Diario Financiero": "https://www.df.cl/noticias/site/list/port/rss.xml",
     "La Tercera Pulso": "https://news.google.com/rss/search?q=site:latercera.com+econom%C3%ADa+when:2d&hl=es-419&gl=CL&ceid=CL:es-419",
     "Emol Economía": "https://news.google.com/rss/search?q=site:emol.com+econom%C3%ADa+when:2d&hl=es-419&gl=CL&ceid=CL:es-419",
+    "Yahoo Finance": "https://finance.yahoo.com/news/rssindex",
 }
+
+# Yahoo Finance bloquea con "Too Many Requests" sin un User-Agent de
+# navegador (las otras fuentes no lo necesitan).
+USER_AGENT_NAVEGADOR = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/120.0 Safari/537.36"
+)
 
 
 def descargar_titulares(url: str) -> list[dict]:
     """Descarga un feed RSS y devuelve los titulares de las últimas HORAS_VENTANA horas."""
-    feed = feedparser.parse(url)
+    feed = feedparser.parse(url, request_headers={"User-Agent": USER_AGENT_NAVEGADOR})
     limite = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(hours=HORAS_VENTANA)
 
     resultado = []

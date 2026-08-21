@@ -45,7 +45,7 @@ from market_data import (
     calcular_capm_regresion,
     INDICADORES_PREMERCADO,
 )
-from calendario_economico import proximos_eventos, NOTA_VIGENCIA, INDICADOR_POR_TIPO
+from calendario_economico import proximos_eventos, NOTA_VIGENCIA, INDICADOR_POR_TIPO, CALENDARIO_VERIFICADO_AL
 
 st.set_page_config(page_title="Mercado Económico Chileno", layout="wide")
 
@@ -1314,13 +1314,51 @@ except Exception:
 ])
 
 # --- Tab 0: Brief Premercado ---
+ETIQUETA_EN_POR_ES = {
+    "S&P 500": "S&P 500",
+    "Dow Jones": "Dow Jones",
+    "Cobre": "Copper",
+    "Petróleo WTI": "WTI Oil",
+    "Bono UST 10 años": "UST 10Y Bond",
+    "TPM EEUU": "US Fed Funds Rate",
+    "IPSA (proxy ECH)": "IPSA (ECH proxy)",
+    "TPM Chile": "Chile Policy Rate",
+    "IPC (inflación anual)": "CPI (annual inflation)",
+    "Imacec": "Imacec (economic activity index)",
+    "Tasa de desempleo": "Unemployment rate",
+}
+
+ORGANISMO_EN_POR_TIPO = {
+    "RPM": "Central Bank of Chile", "FOMC": "US Federal Reserve", "IPC": "INE Chile",
+    "IMACEC": "Central Bank of Chile", "OPEP+": "OPEC+",
+}
+DESCRIPCION_EN_POR_TIPO = {
+    "RPM": "Monetary Policy Meeting",
+    "FOMC": "FOMC Meeting (Fed rate decision)",
+    "OPEP+": "OPEC+ ministerial meeting",
+}
+
+
+def _evento_en_ingles(evento) -> str:
+    """Traduce la descripción de un evento del calendario económico (los
+    datos en calendario_economico.py quedan en español porque también los
+    lee el resto del código internamente — la traducción es solo para
+    mostrarla en esta pestaña)."""
+    if evento.tipo in ("IPC", "IMACEC"):
+        periodo = evento.descripcion.split("(")[-1].rstrip(")")
+        nombre = "CPI release" if evento.tipo == "IPC" else "Imacec release"
+        return f"{nombre} ({periodo})"
+    return DESCRIPCION_EN_POR_TIPO.get(evento.tipo, evento.descripcion)
+
+
 with tab_premercado:
     st.caption(
-        "Para revisar antes de que abra la Bolsa de Santiago — pensado para leerse "
-        "rápido, no para analizar en vivo."
+        "This is the only tab shown in English — the rest of the dashboard is in "
+        "Spanish. Meant to be read before the Santiago Stock Exchange opens, quickly, "
+        "not for live analysis."
     )
 
-    st.subheader("Importante")
+    st.subheader("Key indicators")
 
     try:
         df_macro = cargar_series_macro()
@@ -1328,9 +1366,9 @@ with tab_premercado:
         indicadores = calcular_resumen_mercado(df_macro, df_acciones)
 
         # En filas de a INDICADORES_POR_FILA (no todos en una sola fila): con
-        # 11 indicadores y etiquetas largas (ej. "IPSA (proxy ECH)", "Tasa de
-        # desempleo"), una sola fila de columnas angostas cortaba tanto las
-        # etiquetas como los valores.
+        # 11 indicadores y etiquetas largas (ej. "IPSA (ECH proxy)",
+        # "Unemployment rate"), una sola fila de columnas angostas cortaba
+        # tanto las etiquetas como los valores.
         INDICADORES_POR_FILA = 4
         for inicio in range(0, len(indicadores), INDICADORES_POR_FILA):
             grupo = indicadores[inicio:inicio + INDICADORES_POR_FILA]
@@ -1341,131 +1379,137 @@ with tab_premercado:
             columnas = st.columns(INDICADORES_POR_FILA)
             for col, ind in zip(columnas, grupo):
                 with col:
+                    etiqueta_en = ETIQUETA_EN_POR_ES.get(ind["etiqueta"], ind["etiqueta"])
+                    unidad_en = ind["unidad"].replace("barril", "barrel")
                     if ind["resultado"]:
                         valor, cambio_pct, fecha, cambio_absoluto = ind["resultado"]
-                        valor_texto = f"{valor:,.2f}" + (f" {ind['unidad']}" if ind["unidad"] else "")
+                        valor_texto = f"{valor:,.2f}" + (f" {unidad_en}" if unidad_en else "")
                         # Si el indicador ya es una tasa/porcentaje (ej. TPM,
                         # inflación anual), mostrar puntos porcentuales: el "%
                         # de cambio" de una tasa (ej. de 4,34% a 3,52% = -18,8%)
                         # es confuso, lo esperable es el cambio en pp (-0,82 pp).
                         delta_texto = f"{cambio_absoluto:+.2f} pp" if ind["unidad"] == "%" else f"{cambio_pct:+.2f}%"
-                        st.metric(ind["etiqueta"], valor_texto, delta_texto)
-                        st.caption(f"al {pd.Timestamp(fecha).strftime('%d-%m-%Y')}")
+                        st.metric(etiqueta_en, valor_texto, delta_texto)
+                        st.caption(f"as of {pd.Timestamp(fecha).strftime('%Y-%m-%d')}")
                     else:
-                        st.metric(ind["etiqueta"], "—")
-                        st.caption("sin datos suficientes")
+                        st.metric(etiqueta_en, "—")
+                        st.caption("not enough data")
 
         spread_2s10s = calcular_spread_2s10s(df_macro)
         if spread_2s10s:
-            fecha_spread = pd.Timestamp(spread_2s10s["fecha"]).strftime("%d-%m-%Y")
+            fecha_spread = pd.Timestamp(spread_2s10s["fecha"]).strftime("%Y-%m-%d")
             texto_spread = (
-                f"Spread 2s10s (UST10Y − UST2Y): {spread_2s10s['spread']:+.2f} pp "
-                f"(UST10Y {spread_2s10s['ust10']:.2f}% − UST2Y {spread_2s10s['ust2']:.2f}%) al {fecha_spread}."
+                f"2s10s spread (UST10Y − UST2Y): {spread_2s10s['spread']:+.2f} pp "
+                f"(UST10Y {spread_2s10s['ust10']:.2f}% − UST2Y {spread_2s10s['ust2']:.2f}%) as of {fecha_spread}."
             )
             if spread_2s10s["invertida"]:
-                st.error(f"🔻 **Curva invertida.** {texto_spread}")
+                st.error(f"🔻 **Inverted curve.** {texto_spread}")
             else:
                 st.success(texto_spread)
             st.caption(
-                "Una curva invertida (spread 2s10s negativo) se ha asociado históricamente "
-                "con mayor probabilidad de recesión en EEUU en los siguientes 12-24 meses "
-                "— es una correlación histórica, no una predicción garantizada, y ha dado "
-                "falsas señales en el pasado."
+                "An inverted curve (negative 2s10s spread) has historically been associated "
+                "with a higher probability of a US recession over the following 12-24 months "
+                "— it's a historical correlation, not a guaranteed prediction, and it has "
+                "given false signals in the past."
             )
 
         breakeven = calcular_serie_inflacion_breakeven(df_macro)
         if len(breakeven) >= 2:
             valor_actual = float(breakeven.iloc[-1])
             cambio_pp = valor_actual - float(breakeven.iloc[-2])
-            fecha_breakeven = pd.Timestamp(breakeven.index[-1]).strftime("%d-%m-%Y")
+            fecha_breakeven = pd.Timestamp(breakeven.index[-1]).strftime("%Y-%m-%d")
             st.metric(
-                "Inflación breakeven (BCP 10Y − BCU 10Y)",
+                "Breakeven inflation (BCP 10Y − BCU 10Y)",
                 f"{valor_actual:.2f} pp",
                 f"{cambio_pp:+.2f} pp",
             )
             st.caption(
-                f"al {fecha_breakeven}. Es la inflación que el mercado tiene implícita en los "
-                "precios de ambos bonos (tasa nominal del BCP menos tasa real del BCU, mismo "
-                "emisor y plazo) — no es un pronóstico oficial de nadie."
+                f"as of {fecha_breakeven}. This is the inflation the market has priced into "
+                "both bonds (nominal BCP rate minus real BCU rate, same issuer and tenor) — "
+                "not an official forecast from anyone."
             )
 
     except Exception as e:
-        st.error(f"No se pudo cargar el resumen internacional: {e}")
+        st.error(f"Could not load the international summary: {e}")
 
     st.divider()
-    st.subheader("Calendario económico — próximos 7 días")
+    st.subheader("Economic calendar — next 7 days")
 
     try:
         hoy = date.today()
         eventos_semana = proximos_eventos(hoy, dias=7)
 
         if not eventos_semana:
-            st.info("No hay eventos programados en los próximos 7 días.")
+            st.info("No events scheduled in the next 7 days.")
         else:
             for evento in eventos_semana:
                 indicador = INDICADOR_POR_TIPO[evento.tipo]
                 if evento.fecha_inicio == evento.fecha_fin:
-                    fecha_texto = evento.fecha_inicio.strftime("%d-%m-%Y")
+                    fecha_texto = evento.fecha_inicio.strftime("%Y-%m-%d")
                 else:
                     fecha_texto = (
-                        f"{evento.fecha_inicio.strftime('%d-%m')} al "
-                        f"{evento.fecha_fin.strftime('%d-%m-%Y')}"
+                        f"{evento.fecha_inicio.strftime('%b %d')} to "
+                        f"{evento.fecha_fin.strftime('%Y-%m-%d')}"
                     )
-                nota_estimado = "" if evento.confirmado else " *(fecha estimada, no confirmada explícitamente)*"
+                nota_estimado = "" if evento.confirmado else " *(estimated date, not explicitly confirmed)*"
                 st.markdown(
                     f"<span style='background-color:{indicador['color']}; color:white; "
                     f"padding:2px 8px; border-radius:4px; font-weight:700; font-size:0.85em'>"
                     f"{indicador['etiqueta']}</span> &nbsp; **{fecha_texto}** — "
-                    f"{indicador['organismo']}: {evento.descripcion}{nota_estimado}",
+                    f"{ORGANISMO_EN_POR_TIPO.get(evento.tipo, indicador['organismo'])}: "
+                    f"{_evento_en_ingles(evento)}{nota_estimado}",
                     unsafe_allow_html=True,
                 )
 
-        st.caption(NOTA_VIGENCIA)
         st.caption(
-            "Las reuniones de la OPEP+ no siguen un calendario anual fijo (a diferencia de "
-            "los bancos centrales): desde 2024 se confirman con solo semanas de anticipación, "
-            "así que este calendario puede no incluir reuniones aún no anunciadas."
+            f"Calendar verified as of {CALENDARIO_VERIFICADO_AL.strftime('%Y-%m-%d')}. "
+            "The 2027 Monetary Policy Meeting calendar is published in September 2026, "
+            "and the 2027 FOMC calendar in December 2026 — update then."
+        )
+        st.caption(
+            "OPEC+ meetings don't follow a fixed annual calendar (unlike central banks): "
+            "since 2024 they've been confirmed only weeks in advance, so this calendar may "
+            "not include meetings that haven't been announced yet."
         )
 
     except Exception as e:
-        st.error(f"No se pudo cargar el calendario económico: {e}")
+        st.error(f"Could not load the economic calendar: {e}")
 
     st.divider()
-    st.subheader("Resumen del día (generado por IA)")
+    st.subheader("Today's summary (AI-generated)")
 
     try:
         df_brief = cargar_brief_diario()
 
         if df_brief.empty:
             st.info(
-                "Todavía no se ha generado el resumen diario. Corre "
-                "scripts/generar_brief.py (requiere GEMINI_API_KEY) — se genera "
-                "una vez al día como parte del cron, no en cada visita."
+                "The daily summary hasn't been generated yet. Run "
+                "scripts/generar_brief.py (requires GEMINI_API_KEY) — it's generated "
+                "once a day as part of the cron job, not on every visit."
             )
         else:
             fila_brief = df_brief.iloc[0]
             st.caption(
-                f"Generado el {pd.Timestamp(fila_brief['generado_en']).strftime('%d-%m-%Y %H:%M')} "
-                f"para el {pd.Timestamp(fila_brief['fecha']).strftime('%d-%m-%Y')}."
+                f"Generated on {pd.Timestamp(fila_brief['generado_en']).strftime('%Y-%m-%d %H:%M')} "
+                f"for {pd.Timestamp(fila_brief['fecha']).strftime('%Y-%m-%d')}."
             )
             st.markdown(_escapar_markdown_matematico(fila_brief["contenido"]))
             st.warning(
-                "⚠️ Resumen generado automáticamente por IA a partir de titulares "
-                "públicos — puede contener errores o imprecisiones, no constituye "
-                "asesoría de inversión."
+                "⚠️ Summary generated automatically by AI from public headlines — it may "
+                "contain errors or inaccuracies, and does not constitute investment advice."
             )
 
     except Exception as e:
-        st.error(f"No se pudo cargar el resumen diario: {e}")
+        st.error(f"Could not load the daily summary: {e}")
 
     st.divider()
 
-    with st.expander("Titulares relevantes (detalle)"):
+    with st.expander("Relevant headlines (detail)"):
         try:
             df_noticias = cargar_noticias()
 
             if df_noticias.empty:
-                st.info("Todavía no hay titulares descargados. Corre scripts/actualizar_noticias.py.")
+                st.info("No headlines downloaded yet. Run scripts/actualizar_noticias.py.")
             else:
                 df_noticias = df_noticias.assign(fecha_publicacion=pd.to_datetime(df_noticias["fecha_publicacion"]))
                 df_noticias["dia"] = df_noticias["fecha_publicacion"].dt.date
@@ -1473,24 +1517,26 @@ with tab_premercado:
                 # df_noticias ya viene ordenado desc por fecha_publicacion (ver cargar_noticias),
                 # así que agrupar sin volver a ordenar deja primero el día más reciente.
                 for dia, grupo in df_noticias.groupby("dia", sort=False):
-                    st.markdown(f"**{dia.strftime('%d-%m-%Y')}**")
+                    st.markdown(f"**{dia.strftime('%Y-%m-%d')}**")
                     for _, fila in grupo.iterrows():
                         hora = fila["fecha_publicacion"].strftime("%H:%M")
                         titulo_seguro = _escapar_markdown_matematico(fila["titulo"])
                         st.markdown(f"- {hora} · *{fila['fuente']}* — [{titulo_seguro}]({fila['link']})")
 
         except Exception as e:
-            st.error(f"No se pudieron cargar los titulares: {e}")
+            st.error(f"Could not load headlines: {e}")
 
     st.divider()
     st.caption(
-        "**Nota metodológica.** El resumen de arriba se genera automáticamente una "
-        "vez al día a partir de los indicadores de \"Importante\" y los titulares "
-        "de la sección de detalle — no afirma causalidad específica entre una "
-        "noticia puntual y un movimiento de precio. \"La Tercera Pulso\" y \"Emol "
-        "Economía\" no tienen un feed RSS propio funcionando hoy, así que sus "
-        "titulares se obtienen vía una búsqueda de Google Noticias filtrada por "
-        "sitio — no es el feed oficial del medio."
+        "**Methodology note.** The summary above is generated automatically once a day "
+        "from the \"Key indicators\" above and the headlines in the detail section — it "
+        "doesn't claim specific causality between a given news item and a price move. "
+        "Headlines are shown in their original language (mostly Spanish for Chilean "
+        "sources, English for Yahoo Finance) — they aren't translated, so the quoted "
+        "headline matches exactly what each outlet published. \"La Tercera Pulso\" and "
+        "\"Emol Economía\" don't have a working RSS feed of their own today, so their "
+        "headlines come via a site-filtered Google News search instead — not the "
+        "outlet's official feed."
     )
 
 # --- Tab 1: Series macro del BCCh ---

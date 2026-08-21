@@ -1,9 +1,10 @@
 """
-Genera el resumen diario del Brief Premercado (secciones "Panorama global" y
-"Posibles efectos para Chile") usando Gemini, a partir de los titulares
-recientes y los indicadores de mercado del día. Se corre una vez al día como
-parte del cron job de Railway — el dashboard nunca llama a Gemini directamente,
-solo lee el resultado ya guardado en la tabla brief_diario.
+Genera el resumen diario del Brief Premercado (secciones "Global Overview" y
+"Possible Effects for Chile", en inglés — es la única pestaña del dashboard
+que queda en ese idioma) usando Gemini, a partir de los titulares recientes y
+los indicadores de mercado del día. Se corre una vez al día como parte del
+cron job de Railway — el dashboard nunca llama a Gemini directamente, solo
+lee el resultado ya guardado en la tabla brief_diario.
 
 Requiere la variable de entorno:
   GEMINI_API_KEY -> API key de Google AI Studio para Gemini
@@ -27,27 +28,28 @@ HORAS_VENTANA_TITULARES = 48
 # diluya ni crezca sin control.
 MAX_TITULARES_PROMPT = 60
 
-PROMPT_TEMPLATE = """Eres un analista financiero que prepara un brief matutino para \
-inversionistas en Chile, antes de que abra la Bolsa de Santiago.
+PROMPT_TEMPLATE = """You are a financial analyst preparing a morning brief for \
+investors in Chile, before the Santiago Stock Exchange opens.
 
-Indicadores de mercado internacional (última sesión disponible):
+International market indicators (latest available session):
 {indicadores}
 
-Titulares recientes de prensa económica chilena e internacional:
+Recent headlines from Chilean and international financial press (titles may be \
+in Spanish — read them in Spanish, but write your summary in English):
 {titulares}
 
-Escribe un resumen en español, en formato Markdown, con exactamente estas dos \
-secciones (usa esos títulos exactos, como encabezados de nivel 2):
+Write a summary in English, in Markdown format, with exactly these two sections \
+(use these exact titles, as level-2 headings):
 
-## Panorama global
-3 a 5 puntos (viñetas) sintetizando los temas más relevantes del día a partir de \
-los indicadores y titulares de arriba. Usa un lenguaje moderado y no sensacionalista.
+## Global Overview
+3 to 5 bullet points synthesizing the day's most relevant themes based on the \
+indicators and headlines above. Use measured, non-sensationalist language.
 
-## Posibles efectos para Chile
-Cómo esos temas podrían conectar con el cobre, el tipo de cambio (USD/CLP) o el \
-mercado local (IPSA). Usa siempre lenguaje cauteloso ("podría", "es posible que", \
-"eventualmente") — nunca afirmaciones causales categóricas ni garantías sobre \
-movimientos futuros de precios."""
+## Possible Effects for Chile
+How those themes could connect to copper, the exchange rate (USD/CLP), or the \
+local market (IPSA). Always use cautious language ("could", "it's possible that", \
+"eventually") — never categorical causal claims or guarantees about future price \
+movements."""
 
 
 def construir_prompt(titulares: list[dict], indicadores: list[dict]) -> str:
