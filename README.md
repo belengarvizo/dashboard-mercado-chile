@@ -37,15 +37,24 @@ El dashboard tiene 10 pestañas:
    no confirmada explícitamente por la fuente — ver "Calendario económico
    2026" más abajo para el detalle de fuentes y limitaciones. Debajo de eso,
    un **resumen diario
-   generado por IA** (Gemini `gemini-3.6-flash`) con dos secciones — "Panorama
-   global" (3-5 puntos) y "Posibles efectos para Chile" (lenguaje cauteloso,
-   sin afirmaciones causales categóricas) — armado a partir de esos mismos
+   generado por IA** (Gemini `gemini-3.6-flash`) con cuatro secciones — "Global
+   Overview" (3-5 puntos macro), "Financial Highlights" (noticias financieras
+   a nivel de empresa/acción: resultados, M&A, movimientos puntuales), "Political
+   & Geopolitical Events" (con Chile y Global como subgrupos separados, nunca
+   mezclados) y "Possible Effects for Chile" (lenguaje cauteloso, sin
+   afirmaciones causales categóricas) — cualquier sección/subgrupo se deja
+   corto o casi vacío si ese día no hay nada genuinamente destacable, en vez
+   de rellenarlo — armado a partir de esos mismos
    indicadores más los titulares recientes, con un disclaimer visible de que
-   es contenido generado por IA. Se genera **una vez al día en el cron**, no
-   en cada visita. Los titulares crudos (24-48h de Diario Financiero, La
-   Tercera Pulso y Emol Economía) quedan como detalle secundario colapsado,
-   agrupados por fecha y enlazados a la fuente original (ver nota sobre las
-   fuentes de noticias más abajo).
+   es contenido generado por IA. **Esta es la única pestaña del dashboard que
+   se muestra en inglés** — el resto queda en español. Se genera **una vez al
+   día en el cron**, no en cada visita. Los titulares crudos (24-48h de Diario
+   Financiero, La Tercera Pulso, Emol Economía y Yahoo Finance — este último
+   vía su feed de titulares de mercado atado a `^GSPC`, no el feed general
+   que mezcla contenido de finanzas personales) quedan como detalle
+   secundario colapsado, agrupados por fecha, en su idioma original (no se
+   traducen) y enlazados a la fuente original (ver nota sobre las fuentes de
+   noticias más abajo).
 2. **Indicadores macro** — selector para explorar cualquiera de las series del
    BCCh (ver lista completa más abajo) con su gráfico histórico y último valor.
    Incluye la **inflación breakeven** (tasa BCP nominal a 10 años − tasa BCU
@@ -350,13 +359,15 @@ hora de la última actualización de cada fuente de datos.
 
 **Resumen diario con IA (Gemini, vía `google-genai`):** `scripts/generar_brief.py`
 arma un prompt con los indicadores de "Importante" y hasta 60 titulares
-recientes, y llama a Gemini (`gemini-3.6-flash`, autenticado con
-`GEMINI_API_KEY`) para generar el resumen de dos secciones que se muestra en
-"Brief Premercado". Se guarda en la tabla `brief_diario` y se regenera una
-vez al día en el cron — el dashboard nunca llama a Gemini directamente, solo
-lee el resultado ya guardado. (Se pidió originalmente `gemini-2.5-flash`,
-pero esa API key ya no tiene acceso a ese modelo — el propio catálogo de
-Google devuelve `gemini-3.6-flash` como el flash vigente.)
+recientes (15 por cada una de las 4 fuentes — cupo parejo, no un solo corte
+por fecha sobre todas juntas, para que ninguna fuente de bajo volumen quede
+invisible), y llama a Gemini (`gemini-3.6-flash`, autenticado con
+`GEMINI_API_KEY`) para generar el resumen de cuatro secciones (en inglés) que
+se muestra en "Brief Premercado". Se guarda en la tabla `brief_diario` y se
+regenera una vez al día en el cron — el dashboard nunca llama a Gemini
+directamente, solo lee el resultado ya guardado. (Se pidió originalmente
+`gemini-2.5-flash`, pero esa API key ya no tiene acceso a ese modelo — el
+propio catálogo de Google devuelve `gemini-3.6-flash` como el flash vigente.)
 
 ### Calendario económico 2026 (`calendario_economico.py`)
 

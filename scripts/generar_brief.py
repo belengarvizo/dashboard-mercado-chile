@@ -1,10 +1,12 @@
 """
-Genera el resumen diario del Brief Premercado (secciones "Global Overview" y
-"Possible Effects for Chile", en inglés — es la única pestaña del dashboard
-que queda en ese idioma) usando Gemini, a partir de los titulares recientes y
-los indicadores de mercado del día. Se corre una vez al día como parte del
-cron job de Railway — el dashboard nunca llama a Gemini directamente, solo
-lee el resultado ya guardado en la tabla brief_diario.
+Genera el resumen diario del Brief Premercado (secciones "Global Overview",
+"Financial Highlights", "Political & Geopolitical Events" — con Chile y
+Global como subgrupos separados — y "Possible Effects for Chile", en inglés
+— es la única pestaña del dashboard que queda en ese idioma) usando Gemini,
+a partir de los titulares recientes y los indicadores de mercado del día.
+Se corre una vez al día como parte del cron job de Railway — el dashboard
+nunca llama a Gemini directamente, solo lee el resultado ya guardado en la
+tabla brief_diario.
 
 Requiere la variable de entorno:
   GEMINI_API_KEY -> API key de Google AI Studio para Gemini
@@ -46,18 +48,45 @@ Recent headlines from Chilean and international financial press (titles may be \
 in Spanish — read them in Spanish, but write your summary in English):
 {titulares}
 
-Write a summary in English, in Markdown format, with exactly these two sections \
+Write a summary in English, in Markdown format, with exactly these four sections \
 (use these exact titles, as level-2 headings):
 
 ## Global Overview
-3 to 5 bullet points synthesizing the day's most relevant themes based on the \
-indicators and headlines above. Use measured, non-sensationalist language.
+3 to 5 bullet points synthesizing the day's most relevant macro themes (equity \
+indices, rates, commodities, growth outlook) based on the indicators and headlines \
+above. Use measured, non-sensationalist language.
+
+## Financial Highlights
+3 to 5 bullet points on notable COMPANY- and STOCK-specific financial news from \
+the headlines above — earnings, M&A, guidance changes, dividends, major individual \
+stock moves and why. This is distinct from Global Overview: skip broad macro \
+themes here and focus on specific companies/tickers. If the headlines don't have \
+enough genuinely notable company-level news, it's fine to include fewer than 3 \
+points, or note briefly that there wasn't much company-specific news today —  \
+never pad this section with macro content or invented details just to fill it.
+
+## Political & Geopolitical Events
+Two separate sub-lists (use these as level-3 headings inside this section):
+
+### Chile
+1 to 3 bullet points on Chilean political/policy developments from the headlines \
+above (government, congress, regulation, elections) — economic policy only, not \
+market data (that belongs in the other sections).
+
+### Global
+1 to 3 bullet points on international geopolitical developments from the \
+headlines above (conflicts, trade tensions, diplomatic disputes, elections \
+abroad) that are relevant to markets.
+
+Keep the two sub-lists clearly separate — don't mix Chilean and international \
+items together. If either sub-list has no genuinely relevant headlines that day, \
+say so briefly instead of inventing or padding.
 
 ## Possible Effects for Chile
-How those themes could connect to copper, the exchange rate (USD/CLP), or the \
-local market (IPSA). Always use cautious language ("could", "it's possible that", \
-"eventually") — never categorical causal claims or guarantees about future price \
-movements."""
+How the themes above (from any of the previous sections) could connect to \
+copper, the exchange rate (USD/CLP), or the local market (IPSA). Always use \
+cautious language ("could", "it's possible that", "eventually") — never \
+categorical causal claims or guarantees about future price movements."""
 
 
 def construir_prompt(titulares: list[dict], indicadores: list[dict]) -> str:
