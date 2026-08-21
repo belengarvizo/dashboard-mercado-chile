@@ -15,7 +15,12 @@ Yahoo Finance sí tiene RSS propio funcionando (requiere un User-Agent de
 navegador o Yahoo devuelve "Too Many Requests"); se agrega como fuente
 adicional de mercado internacional en inglés — el resumen diario en la
 pestaña Brief Premercado la usa para la sección de panorama global, sin
-reemplazar a las fuentes chilenas.
+reemplazar a las fuentes chilenas. Se usa el feed de titulares de
+mercado atado al S&P 500 (`?s=^GSPC`), no el feed general de noticias
+("news/rssindex"): el general mezcla contenido de finanzas personales
+(tarjetas de crédito, seguros, tasas de depósito) que no aporta a un
+brief de mercado; el de `^GSPC` trae solo movimientos de acciones,
+índices y bonos — verificado en vivo antes de elegirlo.
 """
 
 import os
@@ -34,7 +39,7 @@ FUENTES_RSS = {
     "Diario Financiero": "https://www.df.cl/noticias/site/list/port/rss.xml",
     "La Tercera Pulso": "https://news.google.com/rss/search?q=site:latercera.com+econom%C3%ADa+when:2d&hl=es-419&gl=CL&ceid=CL:es-419",
     "Emol Economía": "https://news.google.com/rss/search?q=site:emol.com+econom%C3%ADa+when:2d&hl=es-419&gl=CL&ceid=CL:es-419",
-    "Yahoo Finance": "https://finance.yahoo.com/news/rssindex",
+    "Yahoo Finance": "https://finance.yahoo.com/rss/2.0/headline?s=%5EGSPC&region=US&lang=en-US",
 }
 
 # Yahoo Finance bloquea con "Too Many Requests" sin un User-Agent de

@@ -1476,7 +1476,7 @@ with tab_premercado:
         st.error(f"Could not load the economic calendar: {e}")
 
     st.divider()
-    st.subheader("Today's summary (AI-generated)")
+    st.subheader("Today's summary")
 
     try:
         df_brief = cargar_brief_diario()

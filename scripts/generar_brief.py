@@ -20,20 +20,21 @@ import pandas as pd
 from google import genai
 from models import get_session, get_engine, Noticia, BriefDiario
 from market_data import calcular_resumen_mercado
+from scripts.actualizar_noticias import FUENTES_RSS
 
 MODELO_GEMINI = "gemini-3.6-flash"
 HORAS_VENTANA_TITULARES = 48
-# Las fuentes vía Google Noticias (ver actualizar_noticias.py) traen algo de
-# ruido no económico; se limita a los más recientes para que el prompt no se
-# diluya ni crezca sin control.
-MAX_TITULARES_PROMPT = 60
-# Yahoo Finance es la única fuente en inglés/internacional, pero tiene mucho
-# menos volumen que las tres chilenas juntas (~45 vs. ~220 titulares en 48h)
-# — con un solo corte por fecha más reciente, las chilenas se quedan con las
-# 60 posiciones y Yahoo queda en cero (pasó en la práctica: se verificó que
-# ninguno de sus titulares llegaba al prompt real). Por eso se le reserva un
-# cupo propio en vez de competir por fecha con las demás.
-MAX_TITULARES_YAHOO = 15
+# Cupo por FUENTE, no un corte único por fecha sobre todas juntas: con un
+# solo corte global, una fuente de mucho volumen (ej. Emol vía Google
+# Noticias, ~100 titulares en 48h) desplaza por completo a una de menor
+# volumen (ej. Yahoo Finance, ~20) — se verificó en la práctica que esto
+# dejaba a Yahoo en cero titulares dentro del prompt real. Con un cupo
+# parejo por fuente, cada una llega con al menos algo (o con menos si ese
+# día no tiene tanto contenido — no se rellena con más de otra fuente para
+# no forzar contenido menos relevante solo por completar un número fijo).
+# Cuál de esos titulares termina realmente usado en cada sección del
+# resumen lo decide Gemini al redactar según relevancia, no este corte.
+TITULARES_POR_FUENTE = 15
 
 PROMPT_TEMPLATE = """You are a financial analyst preparing a morning brief for \
 investors in Chile, before the Santiago Stock Exchange opens.
@@ -85,29 +86,27 @@ def construir_prompt(titulares: list[dict], indicadores: list[dict]) -> str:
 
 
 def obtener_titulares_recientes(session) -> list[dict]:
-    """Trae los titulares recientes para el prompt, con un cupo reservado
-    para Yahoo Finance (ver MAX_TITULARES_YAHOO) — sin eso, las fuentes
-    chilenas (mucho mayor volumen) desplazan a Yahoo por completo del corte
-    por fecha, y la sección "Global Overview" termina sin ningún insumo
-    internacional en inglés pese a que la fuente sí se descargó."""
+    """Trae los titulares recientes para el prompt, con un cupo parejo por
+    fuente (TITULARES_POR_FUENTE) en vez de un solo corte por fecha sobre
+    todas juntas — así ninguna fuente de bajo volumen (ej. Yahoo Finance)
+    queda invisible para Gemini solo porque otra tiene mucho más volumen
+    ese día. Qué titulares terminan efectivamente reflejados en cada
+    sección del resumen lo decide Gemini por relevancia al redactar, no
+    esta selección — si una fuente no trae nada útil ese día, el prompt
+    simplemente le deja usar otra en su lugar."""
     limite = datetime.now() - timedelta(hours=HORAS_VENTANA_TITULARES)
 
-    yahoo = (
-        session.query(Noticia)
-        .filter(Noticia.fecha_publicacion >= limite, Noticia.fuente == "Yahoo Finance")
-        .order_by(Noticia.fecha_publicacion.desc())
-        .limit(MAX_TITULARES_YAHOO)
-        .all()
-    )
-    resto = (
-        session.query(Noticia)
-        .filter(Noticia.fecha_publicacion >= limite, Noticia.fuente != "Yahoo Finance")
-        .order_by(Noticia.fecha_publicacion.desc())
-        .limit(MAX_TITULARES_PROMPT - len(yahoo))
-        .all()
-    )
+    noticias = []
+    for fuente in FUENTES_RSS:
+        noticias.extend(
+            session.query(Noticia)
+            .filter(Noticia.fecha_publicacion >= limite, Noticia.fuente == fuente)
+            .order_by(Noticia.fecha_publicacion.desc())
+            .limit(TITULARES_POR_FUENTE)
+            .all()
+        )
 
-    noticias = sorted(yahoo + resto, key=lambda n: n.fecha_publicacion, reverse=True)
+    noticias.sort(key=lambda n: n.fecha_publicacion, reverse=True)
     return [{"fuente": n.fuente, "titulo": n.titulo} for n in noticias]
 
 
