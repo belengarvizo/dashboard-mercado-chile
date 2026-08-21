@@ -27,6 +27,13 @@ HORAS_VENTANA_TITULARES = 48
 # ruido no económico; se limita a los más recientes para que el prompt no se
 # diluya ni crezca sin control.
 MAX_TITULARES_PROMPT = 60
+# Yahoo Finance es la única fuente en inglés/internacional, pero tiene mucho
+# menos volumen que las tres chilenas juntas (~45 vs. ~220 titulares en 48h)
+# — con un solo corte por fecha más reciente, las chilenas se quedan con las
+# 60 posiciones y Yahoo queda en cero (pasó en la práctica: se verificó que
+# ninguno de sus titulares llegaba al prompt real). Por eso se le reserva un
+# cupo propio en vez de competir por fecha con las demás.
+MAX_TITULARES_YAHOO = 15
 
 PROMPT_TEMPLATE = """You are a financial analyst preparing a morning brief for \
 investors in Chile, before the Santiago Stock Exchange opens.
@@ -78,14 +85,29 @@ def construir_prompt(titulares: list[dict], indicadores: list[dict]) -> str:
 
 
 def obtener_titulares_recientes(session) -> list[dict]:
+    """Trae los titulares recientes para el prompt, con un cupo reservado
+    para Yahoo Finance (ver MAX_TITULARES_YAHOO) — sin eso, las fuentes
+    chilenas (mucho mayor volumen) desplazan a Yahoo por completo del corte
+    por fecha, y la sección "Global Overview" termina sin ningún insumo
+    internacional en inglés pese a que la fuente sí se descargó."""
     limite = datetime.now() - timedelta(hours=HORAS_VENTANA_TITULARES)
-    noticias = (
+
+    yahoo = (
         session.query(Noticia)
-        .filter(Noticia.fecha_publicacion >= limite)
+        .filter(Noticia.fecha_publicacion >= limite, Noticia.fuente == "Yahoo Finance")
         .order_by(Noticia.fecha_publicacion.desc())
-        .limit(MAX_TITULARES_PROMPT)
+        .limit(MAX_TITULARES_YAHOO)
         .all()
     )
+    resto = (
+        session.query(Noticia)
+        .filter(Noticia.fecha_publicacion >= limite, Noticia.fuente != "Yahoo Finance")
+        .order_by(Noticia.fecha_publicacion.desc())
+        .limit(MAX_TITULARES_PROMPT - len(yahoo))
+        .all()
+    )
+
+    noticias = sorted(yahoo + resto, key=lambda n: n.fecha_publicacion, reverse=True)
     return [{"fuente": n.fuente, "titulo": n.titulo} for n in noticias]
 
 
