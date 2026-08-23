@@ -189,3 +189,69 @@ def calcular_resumen_mercado(df_macro: pd.DataFrame, df_acciones: pd.DataFrame) 
             "resultado": calcular_cambio_reciente(serie),
         })
     return resultados
+
+
+def detectar_apagon_mercado(
+    df_precios: pd.DataFrame,
+    tickers: list,
+    umbral_pct: float = 0.8,
+    ventana_dias: int = 3,
+    dias_habiles_min_atraso: int = 5,
+) -> dict | None:
+    """Detecta un corte de la fuente de datos a nivel de mercado completo
+    (ej. Yahoo Finance dejó de refrescar toda la Bolsa de Santiago), a
+    diferencia del "Atraso" por fila que ya existe en el heatmap para cada
+    ticker individual.
+
+    El criterio NO es simplemente "muchos tickers comparten la misma
+    última fecha con cambio real" — en un mercado sano eso es lo normal
+    (casi todas las acciones cambian de precio todos los días, así que casi
+    todas comparten "hoy" como última fecha real). La señal real de apagón
+    es que una fracción amplia de los tickers está, además, ATRASADA (más
+    de `dias_habiles_min_atraso` días hábiles sin cambio real — mismo
+    umbral que ya usa el heatmap) Y esas fechas de atraso se agrupan dentro
+    de una ventana de `ventana_dias` entre sí: eso es lo que distingue "la
+    fuente cortó el mercado completo el mismo día" de "varias acciones no
+    relacionadas tienen atrasos idiosincráticos en fechas distintas".
+
+    Se recalcula cada vez contra `pd.Timestamp.now()` — nunca hardcodea una
+    fecha de apagón — así que se activa solo mientras el apagón esté
+    vigente y se apaga solo cuando la fuente vuelva a refrescar datos, o
+    detecta un apagón nuevo en el futuro sin cambios de código.
+
+    Devuelve None si no se detecta apagón, o un dict con
+    {pct_afectado, n_afectados, n_total, fecha_apagon} si sí — fecha_apagon
+    es la fecha más antigua entre los tickers atrasados agrupados (el día
+    en que la fuente dejó de refrescar)."""
+    df_precios = df_precios.assign(fecha=pd.to_datetime(df_precios["fecha"]))
+    hoy = pd.Timestamp.now().normalize()
+
+    fechas_atraso = []
+    for ticker in tickers:
+        serie = df_precios[df_precios["ticker"] == ticker].sort_values("fecha").set_index("fecha")["precio_cierre"]
+        if len(serie) < 2:
+            continue
+        cambia = serie.ne(serie.shift(1))
+        cambia.iloc[0] = True
+        ultima_fecha_real = serie.index[cambia][-1]
+        dias_atraso = int(np.busday_count(ultima_fecha_real.date(), hoy.date()))
+        if dias_atraso > dias_habiles_min_atraso:
+            fechas_atraso.append(ultima_fecha_real)
+
+    n_total = len(tickers)
+    if not fechas_atraso or n_total == 0:
+        return None
+
+    fecha_min = min(fechas_atraso)
+    agrupadas = [f for f in fechas_atraso if (f - fecha_min).days <= ventana_dias]
+    pct_afectado = len(agrupadas) / n_total
+
+    if pct_afectado < umbral_pct:
+        return None
+
+    return {
+        "pct_afectado": pct_afectado,
+        "n_afectados": len(agrupadas),
+        "n_total": n_total,
+        "fecha_apagon": fecha_min.date(),
+    }

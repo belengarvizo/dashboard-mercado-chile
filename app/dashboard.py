@@ -45,6 +45,7 @@ from market_data import (
     calcular_retornos_reales,
     calcular_capm_regresion,
     matriz_retornos_alineados,
+    detectar_apagon_mercado,
     INDICADORES_PREMERCADO,
 )
 from calendario_economico import proximos_eventos, NOTA_VIGENCIA, INDICADOR_POR_TIPO, CALENDARIO_VERIFICADO_AL
@@ -361,6 +362,26 @@ def calcular_crp_y_prima_mercado(df_macro: pd.DataFrame, df_acciones: pd.DataFra
         "crp": crp,
         "prima_mercado_local": prima_mercado_local,
     }
+
+
+def _mostrar_banner_apagon(df_precios: pd.DataFrame, tickers: list, nombre_universo: str) -> None:
+    """Banner a nivel de pestaña (visualmente distinto del "Atraso" por
+    fila del heatmap) que avisa cuando la fuente dejó de refrescar un tramo
+    amplio del universo de acciones usado en esa pestaña — ver
+    detectar_apagon_mercado para el criterio exacto. No hace nada si no
+    detecta apagón, así que desaparece solo apenas la fuente se ponga al
+    día, y se activaría solo ante un apagón futuro sin tocar código."""
+    apagon = detectar_apagon_mercado(df_precios, tickers)
+    if apagon is None:
+        return
+    st.error(
+        f"⚠️ **Apagón de datos detectado**: el {apagon['pct_afectado'] * 100:.0f}% de "
+        f"{nombre_universo} no ha recibido precios nuevos de Yahoo Finance desde el "
+        f"{apagon['fecha_apagon'].strftime('%Y-%m-%d')}. Esto afecta a un tramo amplio "
+        "del mercado en esta fuente, no a acciones específicas — los cálculos de esta "
+        "pestaña (retorno, volatilidad, Beta, correlación, optimización, etc.) usan el "
+        "último dato real disponible antes del apagón."
+    )
 
 
 def _texto_atraso(atrasado: bool, dias_habiles_atraso: int) -> str:
@@ -1589,6 +1610,7 @@ with tab_macro:
 with tab_acciones:
     try:
         df_acciones = cargar_precios_acciones()
+        _mostrar_banner_apagon(df_acciones, TICKERS_IPSA, "las acciones del IPSA")
 
         # Gráfico principal: las 30 acciones del IPSA están disponibles para elegir,
         # pero por defecto se muestran las mismas 5 destacadas de siempre.
@@ -1791,6 +1813,7 @@ with tab_acciones_dow:
 with tab_riesgo:
     try:
         df_acciones = cargar_precios_acciones()
+        _mostrar_banner_apagon(df_acciones, TICKERS_IPSA, "las acciones del IPSA")
 
         st.subheader("Value at Risk (VaR)")
         st.caption(
@@ -2078,6 +2101,7 @@ with tab_momentum:
         )
 
         df_acciones = cargar_precios_acciones()
+        _mostrar_banner_apagon(df_acciones, TICKERS_IPSA, "las acciones del IPSA")
         resultado_momentum = calcular_momentum_ipsa(df_acciones)
 
         if resultado_momentum["n_meses"] < 2:
@@ -2353,6 +2377,7 @@ with tab_portafolios:
 
         df_acciones = cargar_precios_acciones()
         df_macro = cargar_series_macro()
+        _mostrar_banner_apagon(df_acciones, TICKERS_IPSA, "las acciones del IPSA")
         resultado_opt = calcular_optimizacion_portafolios(df_acciones, df_macro)
 
         fig_mc = go.Figure()
@@ -3087,6 +3112,9 @@ with tab_laboratorio:
     try:
         df_acciones_lab = cargar_precios_acciones()
         df_macro_lab = cargar_series_macro()
+        _mostrar_banner_apagon(
+            df_acciones_lab, TICKERS_LABORATORIO_AMPLIADO, "las acciones del universo del Laboratorio Financiero",
+        )
 
         # ============================================================
         # 1-2. Universo de acciones
