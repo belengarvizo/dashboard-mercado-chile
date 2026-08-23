@@ -8,7 +8,7 @@ actualizado diariamente.
 
 ## Qué muestra
 
-El dashboard tiene 10 pestañas:
+El dashboard tiene 7 pestañas:
 
 1. **Brief Premercado** — para revisar antes de que abra la Bolsa de Santiago.
    Sección "Importante": % de cambio de la última sesión de S&P 500, Dow
@@ -142,111 +142,7 @@ El dashboard tiene 10 pestañas:
    TSLA normalizadas a base 100 (gráfico sin cambios), más una tabla simple
    de % de cambio 1D/1W/1M/YTD (coloreada verde/rojo, mismo estilo que el
    heatmap del IPSA pero sin Beta/VaR/CAPM).
-7. **Momentum IPSA** — estrategia momentum "12-1" de Jegadeesh & Titman
-   (1993) sobre las 30 acciones del IPSA: cada fin de mes rankea por retorno
-   compuesto de los meses [t-12, t-2] (saltando el mes t-1 más reciente),
-   forma portafolios equiponderados "Ganadoras" y "Perdedoras" (10 acciones
-   cada uno), los mantiene 1 mes con rebalanceo mensual y 15 puntos base de
-   costo de transacción por posición. Muestra la curva de equity del spread
-   WML (Ganadoras − Perdedoras), un t-test simple contra cero, la tabla de
-   retornos mensuales, y un **test de permutación**: mezcla al azar qué
-   10+10 acciones son "ganadoras/perdedoras" cada mes (preservando fechas y
-   retornos reales), 1.000 veces. Nota metodológica visible: distingue este
-   diseño (momentum de corto/mediano plazo) de De Bondt & Thaler (1985), que
-   documentan el efecto contrario — reversión a **largo plazo** (3-5 años) —
-   dejando claro que ambos coexisten en la literatura porque operan en
-   horizontes distintos. Debajo del resultado del test de permutación, una
-   etiqueta explícita conecta el resultado con la jerga de mesa de dinero:
-   **"timba"** (apostar sin ventaja estadística real) si cae en la zona
-   central, o **"evidencia de una ventaja real, no timba"** si cae en el 5%
-   extremo.
-
-   **Hallazgo:** sobre 49 meses de datos, el WML acumulado es +42,9% (t =
-   1,03, p = 0,31 — no significativo al 5%), y el resultado real cae en el
-   **percentil 88,5 de 1.000 mezclas aleatorias** — elevado, pero sin cruzar
-   el umbral de 95% para considerarse distinguible del azar (timba, con este
-   criterio).
-8. **Calculadora Financiera** — tres modelos interactivos donde el usuario
-    ingresa sus propios valores, sin depender de datos fundamentales de la
-    base:
-    - **CAPM interactivo**: sliders para Rf, Beta y prima de mercado, con el
-      costo de capital resultante en tiempo real. Un selector opcional
-      precarga la Rf (PDBC) y el Beta real de cualquiera de las 30 acciones
-      del IPSA como punto de partida, que el usuario puede seguir ajustando
-      libremente.
-    - **Dodd-Graham Value Screener**: los 10 criterios clásicos (adaptados de
-      *Security Analysis*, Dodd & Graham 1934, y *The Intelligent Investor*,
-      cap. 14) — liquidez corriente, deuda vs. capital de trabajo,
-      estabilidad y crecimiento de utilidades, P/E y P/B moderados, el atajo
-      P/E×P/B ≤ 22,5, rendimiento de utilidades vs. bonos AAA, y dividendo
-      sostenible — cada uno mostrado como cumple/no cumple con su fórmula y
-      una explicación breve. Nota visible: estos criterios se diseñaron para
-      el mercado de EEUU de mediados del siglo XX; aplicarlos sin ajuste a un
-      mercado emergente como Chile es una simplificación.
-    - **Modelo de Descuento de Dividendos (Gordon Growth)**: precio implícito
-      = D₁ / (r − g), con advertencia visible si g ≥ r (el modelo no es
-      matemáticamente válido en ese caso).
-9. **Optimización de Portafolios** — Markowitz (1952) vía simulación de Monte
-   Carlo sobre las 30 acciones del IPSA:
-   - **5.000 portafolios simulados** con pesos aleatorios long-only (vía
-     distribución de Dirichlet, suman 100%), graficados como nube
-     volatilidad (X) vs. retorno esperado (Y), ambos anualizados, usando
-     retorno promedio y matriz de covarianza históricos (excluyendo días de
-     precio congelado). Se marcan el portafolio de **mínima varianza** y el
-     de **máximo Sharpe** (con la tasa libre de riesgo PDBC) dentro de esa
-     nube, con sus 10 posiciones más grandes en una tabla.
-   - **Constructor interactivo**: elige entre 3 y 8 acciones, asigna pesos
-     con sliders (deben sumar 100%, con validación visible), y el
-     portafolio se ubica en tiempo real en la misma nube, con su
-     volatilidad, retorno esperado, Sharpe y VaR histórico 95%.
-   - **Validación out-of-sample** (la pieza central): los pesos de mínima
-     varianza y máximo Sharpe se calculan usando solo la primera mitad
-     cronológica de los datos (in-sample), se congelan sin recalcular, y se
-     aplican sobre la segunda mitad (out-of-sample) — comparados contra un
-     portafolio ingenuo de peso igual (1/30) en el mismo período.
-
-   **Hallazgo:** en el período out-of-sample, el portafolio **ingenuo
-   (1/N)** tuvo el mejor Sharpe ratio real (2,30) — superando tanto al de
-   mínima varianza (2,11) como al de máximo Sharpe (2,26) calculados con
-   datos in-sample. Consistente con hallazgos documentados en la literatura
-   (DeMiguel, Garlappi & Uppal, 2009): la optimización de Markowitz no
-   siempre le gana a la diversificación ingenua fuera de muestra.
-
-   Nota metodológica visible: crítica clásica de **Michaud (1989)** sobre la
-   sensibilidad del modelo a la estimación del retorno esperado, con la
-   validación out-of-sample como demostración directa del problema.
-   Soluciones más robustas de la industria (Black-Litterman, matrices de
-   covarianza por régimen de mercado) quedan fuera del alcance del
-   proyecto — los pesos "óptimos" son ilustrativos del framework, no una
-   recomendación de inversión.
-10. **Práctica: Riesgo Bancario** — cinco calculadoras educativas
-    interactivas, **sin datos hardcodeados ni ligados a ninguna institución
-    real** (etiquetado explícito en la propia pestaña); todos los valores
-    los ingresa el usuario:
-    - **LCR** (Coeficiente de Cobertura de Liquidez): HQLA / salidas netas
-      de efectivo a 30 días, contra el mínimo regulatorio de Basilea III
-      (100%).
-    - **ΔEVE y ΔNII**: impacto de un shock de tasas (slider en puntos base)
-      sobre el valor económico del patrimonio (largo plazo) y sobre el
-      margen de interés neto a 12 meses (corto plazo), a partir de gaps de
-      repreciación ingresados por el usuario — con una nota explícita de
-      que un banco puede tener ΔNII saludable y ΔEVE muy negativo al mismo
-      tiempo (el patrón general detrás del colapso de Silicon Valley Bank
-      en 2023).
-    - **CVA**: Exposición esperada × PD × LGD (LGD = 1 − tasa de
-      recuperación).
-    - **ROIC vs. ROE**: NOPAT/Capital invertido vs. Utilidad neta/Patrimonio,
-      con la diferencia explicada como efecto del apalancamiento.
-    - **Days to Cover** (short squeeze): Interés corto / volumen diario
-      promedio — con una nota visible de que **no es calculable con datos
-      reales del mercado chileno**, porque no existe información pública de
-      posiciones cortas en la Bolsa de Santiago (a diferencia de EEUU, donde
-      FINRA publica el short interest quincenalmente); ese vacío de
-      transparencia es parte de lo que motivó este proyecto desde el
-      inicio.
-
-11. **Laboratorio Financiero** — pestaña independiente (no modifica la de
-    "Optimización de Portafolios") pensada como herramienta interactiva de
+7. **Laboratorio Financiero** — pestaña pensada como herramienta interactiva de
     estudio para la tarea de Frontera Media-Varianza + LMC + Desempeño,
     sobre un universo de hasta 50 acciones del S&P 500 (con al menos 2 de
     cada uno de los sectores Energy, Financials, Health Care, Industrials,

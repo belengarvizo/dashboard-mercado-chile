@@ -56,11 +56,11 @@ def test_banner_apagon_aparece_en_la_app_con_datos_reales():
     assert banners_apagon, (
         f"No aparecio ningun banner de apagon. Errores renderizados: {textos_error}"
     )
-    # Debe aparecer en las 5 pestañas que agregan el universo del IPSA
-    # (Acciones IPSA, Riesgo, Momentum IPSA, Optimización de Portafolios) —
-    # la de Laboratorio Financiero usa un universo distinto (US) y no debe
-    # dispararse hoy.
-    assert len(banners_apagon) >= 4, f"Se esperaban >=4 banners, aparecieron {len(banners_apagon)}"
+    # Debe aparecer en las 2 pestañas que agregan el universo del IPSA
+    # (Acciones IPSA, Riesgo — Momentum IPSA y Optimización de Portafolios
+    # se eliminaron) — la de Laboratorio Financiero usa un universo
+    # distinto (US) y no debe dispararse hoy.
+    assert len(banners_apagon) >= 2, f"Se esperaban >=2 banners, aparecieron {len(banners_apagon)}"
 
     banner = banners_apagon[0]
     print(f"Banner renderizado: {banner!r}")
