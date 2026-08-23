@@ -43,6 +43,7 @@ from market_data import (
     calcular_resumen_mercado,
     calcular_retornos_reales,
     calcular_capm_regresion,
+    matriz_retornos_alineados,
     INDICADORES_PREMERCADO,
 )
 from calendario_economico import proximos_eventos, NOTA_VIGENCIA, INDICADOR_POR_TIPO, CALENDARIO_VERIFICADO_AL
@@ -337,12 +338,12 @@ def calcular_crp_y_prima_mercado(df_macro: pd.DataFrame, df_acciones: pd.DataFra
     crp = (rf_cl_10y - rf_ust) if rf_cl_10y is not None and rf_ust is not None else None
 
     df_acciones = df_acciones.assign(fecha=pd.to_datetime(df_acciones["fecha"]))
-    proxy = (
+    datos_proxy = (
         df_acciones[df_acciones["ticker"] == TICKER_PROXY_IPSA]
         .sort_values("fecha")
-        .set_index("fecha")["precio_cierre"]
+        .set_index("fecha")
     )
-    retornos_proxy_reales = calcular_retornos_reales(proxy).dropna()
+    retornos_proxy_reales = calcular_retornos_reales(datos_proxy["precio_cierre"], datos_proxy["volumen"]).dropna()
     retorno_anual_mercado = (
         retornos_proxy_reales.mean() * 252 * 100 if len(retornos_proxy_reales) >= 30 else None
     )
@@ -477,11 +478,12 @@ def calcular_resumen_dow_jones(df_todas: pd.DataFrame, df_macro: pd.DataFrame) -
     "local" vs. "+ CRP" del IPSA)."""
     df_todas = df_todas.assign(fecha=pd.to_datetime(df_todas["fecha"]))
 
-    proxy = (
+    datos_proxy = (
         df_todas[df_todas["ticker"] == TICKER_DOW_JONES]
         .sort_values("fecha")
-        .set_index("fecha")["precio_cierre"]
+        .set_index("fecha")
     )
+    proxy = datos_proxy["precio_cierre"]
     retornos_proxy = proxy.pct_change()
 
     # Rf de corto plazo para EEUU: Effective Federal Funds Rate — el
@@ -493,7 +495,7 @@ def calcular_resumen_dow_jones(df_todas: pd.DataFrame, df_macro: pd.DataFrame) -
     )
     rf_eeuu = float(tpm_eeuu.iloc[-1]) if len(tpm_eeuu) else None
 
-    retornos_proxy_reales = calcular_retornos_reales(proxy).dropna()
+    retornos_proxy_reales = calcular_retornos_reales(datos_proxy["precio_cierre"], datos_proxy["volumen"]).dropna()
     retorno_anual_mercado = (
         retornos_proxy_reales.mean() * 252 * 100 if len(retornos_proxy_reales) >= 30 else None
     )
@@ -660,13 +662,13 @@ def calcular_var(df_todas: pd.DataFrame) -> pd.DataFrame:
 
     retornos_por_ticker = {}
     for ticker in TICKERS_IPSA_PRINCIPALES:
-        serie = (
+        datos = (
             df_todas[df_todas["ticker"] == ticker]
             .sort_values("fecha")
-            .set_index("fecha")["precio_cierre"]
+            .set_index("fecha")
         )
-        serie = serie[serie.index >= fecha_corte]
-        retornos_por_ticker[ticker.replace(".SN", "")] = calcular_retornos_reales(serie)
+        datos = datos[datos.index >= fecha_corte]
+        retornos_por_ticker[ticker.replace(".SN", "")] = calcular_retornos_reales(datos["precio_cierre"], datos["volumen"])
 
     df_retornos = pd.DataFrame(retornos_por_ticker)
     # Portafolio equiponderado: promedio simple de los 5 retornos, solo en fechas
@@ -713,13 +715,13 @@ def calcular_distribucion_retornos(df_todas: pd.DataFrame) -> dict:
 
     resultado = {}
     for ticker in TICKERS_IPSA_PRINCIPALES:
-        serie = (
+        datos = (
             df_todas[df_todas["ticker"] == ticker]
             .sort_values("fecha")
-            .set_index("fecha")["precio_cierre"]
+            .set_index("fecha")
         )
-        serie = serie[serie.index >= fecha_corte]
-        r = calcular_retornos_reales(serie).dropna()
+        datos = datos[datos.index >= fecha_corte]
+        r = calcular_retornos_reales(datos["precio_cierre"], datos["volumen"]).dropna()
         if len(r) < 30:
             continue
         resultado[ticker.replace(".SN", "")] = {
@@ -736,12 +738,12 @@ def calcular_peor_escenario_historico(df_todas: pd.DataFrame) -> dict:
     DENTRO de los datos disponibles — no es el peor caso históricamente
     posible, solo el peor observado en esta muestra."""
     df_todas = df_todas.assign(fecha=pd.to_datetime(df_todas["fecha"]))
-    serie_ech = (
+    datos_ech = (
         df_todas[df_todas["ticker"] == TICKER_PROXY_IPSA]
         .sort_values("fecha")
-        .set_index("fecha")["precio_cierre"]
+        .set_index("fecha")
     )
-    retornos_reales = calcular_retornos_reales(serie_ech).dropna()
+    retornos_reales = calcular_retornos_reales(datos_ech["precio_cierre"], datos_ech["volumen"]).dropna()
 
     peor_5d = None
     peor_10d = None
@@ -763,12 +765,12 @@ def calcular_matriz_correlacion_ipsa(df_todas: pd.DataFrame) -> pd.DataFrame:
 
     retornos_por_ticker = {}
     for ticker in TICKERS_IPSA:
-        serie = (
+        datos = (
             df_todas[df_todas["ticker"] == ticker]
             .sort_values("fecha")
-            .set_index("fecha")["precio_cierre"]
+            .set_index("fecha")
         )
-        retornos_por_ticker[ticker.replace(".SN", "")] = calcular_retornos_reales(serie)
+        retornos_por_ticker[ticker.replace(".SN", "")] = calcular_retornos_reales(datos["precio_cierre"], datos["volumen"])
 
     # .corr() usa observaciones pairwise-completas: cada par de acciones se
     # correlaciona solo con las fechas donde ambas tienen un retorno real,
@@ -807,12 +809,12 @@ def calcular_retornos_mensuales_ipsa(df_todas: pd.DataFrame) -> pd.DataFrame:
 
     retornos_por_ticker = {}
     for ticker in TICKERS_IPSA:
-        serie = (
+        datos = (
             df_todas[df_todas["ticker"] == ticker]
             .sort_values("fecha")
-            .set_index("fecha")["precio_cierre"]
+            .set_index("fecha")
         )
-        retornos_reales = calcular_retornos_reales(serie).dropna()
+        retornos_reales = calcular_retornos_reales(datos["precio_cierre"], datos["volumen"]).dropna()
         if retornos_reales.empty:
             continue
         mensual = retornos_reales.groupby(retornos_reales.index.to_period("M")).apply(
@@ -921,23 +923,6 @@ def calcular_momentum_ipsa(df_todas: pd.DataFrame) -> dict:
     }
 
 
-def _matriz_retornos_alineados(df_todas: pd.DataFrame, tickers: list) -> pd.DataFrame:
-    """DataFrame de retornos diarios "reales" (excluyendo días de precio
-    congelado) para los tickers dados, alineados por fecha: solo se
-    conservan los días donde TODOS tienen un retorno real ese día
-    (complete-case), para garantizar una matriz de covarianza válida."""
-    df_todas = df_todas.assign(fecha=pd.to_datetime(df_todas["fecha"]))
-    retornos = {}
-    for ticker in tickers:
-        serie = (
-            df_todas[df_todas["ticker"] == ticker]
-            .sort_values("fecha")
-            .set_index("fecha")["precio_cierre"]
-        )
-        retornos[ticker.replace(".SN", "")] = calcular_retornos_reales(serie)
-    return pd.DataFrame(retornos).dropna()
-
-
 def _simular_portafolios_mc(mu_anual: pd.Series, cov_anual: pd.DataFrame, rf: float, rng: np.random.Generator) -> dict:
     """N_PORTAFOLIOS_MC portafolios long-only (pesos vía Dirichlet, suman 1)
     sobre los activos de mu_anual/cov_anual. Devuelve arrays de pesos,
@@ -973,7 +958,7 @@ def calcular_optimizacion_portafolios(df_todas: pd.DataFrame, df_macro: pd.DataF
     datos (in-sample), se congelan, y se aplican sobre la segunda mitad
     (out-of-sample) para medir el desempeño real — comparado contra un
     portafolio ingenuo de peso igual (1/30) en el mismo período."""
-    df_retornos = _matriz_retornos_alineados(df_todas, TICKERS_IPSA)
+    df_retornos = matriz_retornos_alineados(df_todas, TICKERS_IPSA, quitar_sufijo_sn=True)
     tickers_cols = list(df_retornos.columns)
     n_activos = len(tickers_cols)
 
@@ -1175,8 +1160,8 @@ def calcular_portafolio_exacto(
 
     tickers_excluidos = []
     for ticker in tickers_elegidos:
-        serie = df_todas[df_todas["ticker"] == ticker].sort_values("fecha").set_index("fecha")["precio_cierre"]
-        n_obs = len(calcular_retornos_reales(serie).dropna())
+        datos = df_todas[df_todas["ticker"] == ticker].sort_values("fecha").set_index("fecha")
+        n_obs = len(calcular_retornos_reales(datos["precio_cierre"], datos["volumen"]).dropna())
         if n_obs < N_MIN_OBS_FRONTERA:
             tickers_excluidos.append((ticker, n_obs))
     tickers_validos = [t for t in tickers_elegidos if t not in {e[0] for e in tickers_excluidos}]
@@ -1184,7 +1169,7 @@ def calcular_portafolio_exacto(
     if len(tickers_validos) < 2:
         return {"error": "Se necesitan al menos 2 activos con historia suficiente.", "excluidos": tickers_excluidos}
 
-    df_retornos = _matriz_retornos_alineados(df_todas, tickers_validos)
+    df_retornos = matriz_retornos_alineados(df_todas, tickers_validos, quitar_sufijo_sn=True)
     if len(df_retornos) < N_MIN_OBS_FRONTERA or len(df_retornos.columns) < 2:
         return {
             "error": "No hay suficientes fechas en común entre los activos elegidos.",
@@ -1214,8 +1199,8 @@ def calcular_portafolio_exacto(
         df_retornos.to_numpy() @ frontera["w_tangencia"].reindex(df_retornos.columns).to_numpy(),
         index=df_retornos.index,
     )
-    sp500_precio = df_todas[df_todas["ticker"] == "^GSPC"].sort_values("fecha").set_index("fecha")["precio_cierre"]
-    retornos_sp500 = calcular_retornos_reales(sp500_precio)
+    datos_sp500 = df_todas[df_todas["ticker"] == "^GSPC"].sort_values("fecha").set_index("fecha")
+    retornos_sp500 = calcular_retornos_reales(datos_sp500["precio_cierre"], datos_sp500["volumen"])
 
     conjunto = pd.concat([retornos_M, retornos_sp500], axis=1, join="inner", keys=["M", "mercado"]).dropna()
     rf_diaria_alineada = tpm_eeuu.reindex(conjunto.index, method="ffill") / 252
@@ -3176,13 +3161,19 @@ with tab_laboratorio:
         with st.expander("¿Por qué se perdieron observaciones?"):
             st.caption(
                 "\"Sesiones teóricas\" son los días con retorno real del S&P 500 (`^GSPC`) dentro de "
-                "la ventana — no tiene precio congelado, así que coincide con el calendario bursátil "
-                "real. Una fecha se pierde de la matriz final si **al menos una** de las acciones "
-                "elegidas no tiene un precio real ese día (dato faltante o precio congelado — mismo "
-                "criterio que \"Atraso\" en el resto del dashboard). Alinear las fechas exactamente "
-                "así entre todas las acciones es necesario para que la matriz de covarianzas conjunta "
-                "sea válida; no es un error, pero significa que basta con que una sola acción tenga un "
-                "día problemático para que ese día se pierda también para las demás."
+                "la ventana, que coincide con el calendario bursátil real. Una fecha se pierde de la "
+                "matriz final si **al menos una** de las acciones elegidas no tiene un retorno real ese "
+                "día, lo cual ocurre por dos motivos distintos: (1) no hay **ninguna fila de precio** en "
+                "la base para esa fecha (dato genuinamente ausente en la fuente), o (2) el precio de "
+                "cierre es idéntico al del día anterior **y** el volumen de ese día es 0 o repite "
+                "exactamente el volumen del día anterior (evidencia de que la fuente dejó de refrescar "
+                "el dato, no de un empate real de mercado). Un precio repetido con volumen propio y "
+                "distinto de cero **sí se conserva** como retorno de 0% real — una auditoría cruzada "
+                "contra una fuente independiente (Nasdaq.com) confirmó que ese tipo de empate suele ser "
+                "un movimiento real de mercado. Alinear las fechas exactamente así entre todas las "
+                "acciones sigue siendo necesario para que la matriz de covarianzas conjunta sea válida — "
+                "basta que una sola acción tenga un día problemático para que ese día se pierda también "
+                "para las demás."
             )
             if diagnostico_cobertura["tabla"].empty:
                 st.caption("Ninguna acción de la selección actual perdió observaciones dentro de la ventana.")
@@ -3190,8 +3181,9 @@ with tab_laboratorio:
                 n_con_perdidas = len(diagnostico_cobertura["tabla"])
                 n_total = len(datos_lab["tickers_validos"])
                 st.caption(
-                    f"{n_con_perdidas} de {n_total} acciones perdieron al menos un día — la tabla lista "
-                    "todas ellas (no es un top parcial), ordenadas de mayor a menor pérdida; las "
+                    f"{n_con_perdidas} de {n_total} acciones perdieron al menos un día (dato ausente o "
+                    "precio congelado sin evidencia de trading) — la tabla lista todas ellas (no es un "
+                    "top parcial), ordenadas de mayor a menor pérdida; las "
                     f"{n_total - n_con_perdidas} restantes tuvieron cobertura completa."
                 )
                 st.dataframe(diagnostico_cobertura["tabla"], use_container_width=True, hide_index=True)
@@ -3661,14 +3653,16 @@ with tab_laboratorio:
             # ============================================================
             st.subheader("10. CAPM: M vs. S&P 500")
 
-            sp500_precio_lab = (
+            datos_sp500_lab = (
                 df_acciones_lab[df_acciones_lab["ticker"] == "^GSPC"]
                 .assign(fecha=lambda d: pd.to_datetime(d["fecha"]))
                 .sort_values("fecha")
-                .set_index("fecha")["precio_cierre"]
+                .set_index("fecha")
             )
             retornos_M = lab.retornos_portafolio(df_retornos_lab, w_M)
-            df_capm_lab = lab.preparar_regresion_capm(retornos_M, sp500_precio_lab, rf_serie_para_capm)
+            df_capm_lab = lab.preparar_regresion_capm(
+                retornos_M, datos_sp500_lab["precio_cierre"], datos_sp500_lab["volumen"], rf_serie_para_capm,
+            )
 
             if len(df_capm_lab) < 30:
                 st.error("No hay suficientes observaciones comunes entre M, el S&P 500 y Rf para el CAPM.")
@@ -3909,7 +3903,10 @@ with tab_laboratorio:
 
         st.divider()
         st.info(
-            "**Nota metodológica.** Retornos diarios reales (excluyendo precio congelado), "
+            "**Nota metodológica.** Retornos diarios reales (un precio idéntico al día anterior "
+            "se conserva como retorno de 0% válido solo si tiene volumen propio y distinto de "
+            "cero ese día; si el volumen es 0 o repite el del día anterior, se excluye por "
+            "tratarse de un corte de la fuente de datos, no de un empate real de mercado), "
             "covarianza y frontera anualizadas × 252 ruedas — sin mezclar frecuencias. La "
             "frontera \"base\" (venta corta libre, sin límites) se resuelve con la solución "
             "matricial cerrada de Markowitz/Merton; cualquier restricción de desigualdad "

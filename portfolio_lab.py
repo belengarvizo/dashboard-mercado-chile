@@ -13,7 +13,7 @@ import numpy as np
 import pandas as pd
 from scipy.optimize import minimize
 
-from market_data import calcular_retornos_reales, calcular_capm_regresion
+from market_data import calcular_retornos_reales, calcular_capm_regresion, matriz_retornos_alineados
 
 N_RUEDAS_ANIO = 252
 
@@ -21,26 +21,6 @@ N_RUEDAS_ANIO = 252
 # ============================================================
 # Preparación de datos
 # ============================================================
-
-def matriz_retornos_alineados(df_precios: pd.DataFrame, tickers: list, fecha_inicio, fecha_fin) -> pd.DataFrame:
-    """Retornos diarios reales (excluyendo precio congelado) de cada ticker,
-    recortados a [fecha_inicio, fecha_fin] y alineados por fecha
-    (complete-case: solo fechas donde TODOS los tickers pedidos tienen un
-    dato real ese día, para garantizar una matriz de covarianza válida)."""
-    df_precios = df_precios.assign(fecha=pd.to_datetime(df_precios["fecha"]))
-    fecha_inicio = pd.Timestamp(fecha_inicio)
-    fecha_fin = pd.Timestamp(fecha_fin)
-
-    retornos = {}
-    for ticker in tickers:
-        serie = (
-            df_precios[df_precios["ticker"] == ticker]
-            .sort_values("fecha")
-            .set_index("fecha")["precio_cierre"]
-        )
-        serie = serie[(serie.index >= fecha_inicio) & (serie.index <= fecha_fin)]
-        retornos[ticker] = calcular_retornos_reales(serie)
-    return pd.DataFrame(retornos).dropna()
 
 
 def preparar_datos_laboratorio(
@@ -55,9 +35,9 @@ def preparar_datos_laboratorio(
 
     tickers_validos, tickers_excluidos = [], []
     for ticker in tickers:
-        serie = df_precios[df_precios["ticker"] == ticker].sort_values("fecha").set_index("fecha")["precio_cierre"]
-        serie = serie[(serie.index >= fecha_inicio_ts) & (serie.index <= fecha_fin_ts)]
-        n_obs = len(calcular_retornos_reales(serie).dropna())
+        datos = df_precios[df_precios["ticker"] == ticker].sort_values("fecha").set_index("fecha")
+        datos = datos[(datos.index >= fecha_inicio_ts) & (datos.index <= fecha_fin_ts)]
+        n_obs = len(calcular_retornos_reales(datos["precio_cierre"], datos["volumen"]).dropna())
         if n_obs >= min_obs:
             tickers_validos.append(ticker)
         else:
@@ -89,15 +69,15 @@ def diagnosticar_cobertura(df_precios: pd.DataFrame, tickers: list, fecha_inicio
     fecha_inicio = pd.Timestamp(fecha_inicio)
     fecha_fin = pd.Timestamp(fecha_fin)
 
-    sp500 = df_precios[df_precios["ticker"] == "^GSPC"].sort_values("fecha").set_index("fecha")["precio_cierre"]
+    sp500 = df_precios[df_precios["ticker"] == "^GSPC"].sort_values("fecha").set_index("fecha")
     sp500 = sp500[(sp500.index >= fecha_inicio) & (sp500.index <= fecha_fin)]
-    sesiones_teoricas = set(calcular_retornos_reales(sp500).dropna().index)
+    sesiones_teoricas = set(calcular_retornos_reales(sp500["precio_cierre"], sp500["volumen"]).dropna().index)
 
     filas = []
     for ticker in tickers:
-        serie = df_precios[df_precios["ticker"] == ticker].sort_values("fecha").set_index("fecha")["precio_cierre"]
-        serie = serie[(serie.index >= fecha_inicio) & (serie.index <= fecha_fin)]
-        retornos_ticker = set(calcular_retornos_reales(serie).dropna().index)
+        datos = df_precios[df_precios["ticker"] == ticker].sort_values("fecha").set_index("fecha")
+        datos = datos[(datos.index >= fecha_inicio) & (datos.index <= fecha_fin)]
+        retornos_ticker = set(calcular_retornos_reales(datos["precio_cierre"], datos["volumen"]).dropna().index)
         faltantes = sesiones_teoricas - retornos_ticker
         if faltantes:
             filas.append({"Ticker": ticker, "Días perdidos": len(faltantes)})
@@ -394,11 +374,13 @@ def retornos_portafolio(df_retornos: pd.DataFrame, pesos: pd.Series) -> pd.Serie
     return pd.Series(df_retornos.to_numpy() @ pesos_alineados, index=df_retornos.index)
 
 
-def preparar_regresion_capm(retornos_p: pd.Series, precio_mercado: pd.Series, rf_anual_serie: pd.Series) -> pd.DataFrame:
+def preparar_regresion_capm(
+    retornos_p: pd.Series, precio_mercado: pd.Series, volumen_mercado: pd.Series, rf_anual_serie: pd.Series,
+) -> pd.DataFrame:
     """Alinea el portafolio, el mercado (ej. ^GSPC) y la Rf (reindexada por
     fecha con forward-fill, ya que la Rf no cambia todos los días) en un
     único DataFrame de retornos diarios, listo para la regresión CAPM."""
-    retornos_mercado = calcular_retornos_reales(precio_mercado)
+    retornos_mercado = calcular_retornos_reales(precio_mercado, volumen_mercado)
     conjunto = pd.concat(
         [retornos_p, retornos_mercado], axis=1, join="inner", keys=["portafolio", "mercado"],
     ).dropna()

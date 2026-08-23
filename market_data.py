@@ -51,14 +51,75 @@ def calcular_cambio_reciente(serie: pd.Series) -> tuple[float, float, object, fl
     return float(valor_actual), float(cambio_pct), serie.index[-1], float(cambio_absoluto)
 
 
-def calcular_retornos_reales(serie: pd.Series) -> pd.Series:
-    """Retornos diarios de una serie de precios, excluyendo los días donde el
-    precio no cambió respecto al anterior (dato congelado — no es volatilidad
-    real cero, es ausencia de dato). Mismo criterio que la detección de
-    "Atraso" del heatmap del dashboard: comparar cada valor con el del día
-    anterior."""
-    cambia = serie.ne(serie.shift(1))
-    return serie.pct_change()[cambia]
+def calcular_retornos_reales(serie_precio: pd.Series, serie_volumen: pd.Series) -> pd.Series:
+    """Retornos diarios de una serie de precios, usando el volumen para
+    distinguir un empate real de mercado (precio idéntico al día anterior,
+    pero con volumen propio y distinto de cero — un movimiento real, no un
+    error de datos) de un corte de la fuente (la fuente deja de refrescar y
+    repite la misma fila día tras día, con volumen=0 o con el mismo volumen
+    exacto del día anterior). Antes esta función excluía TODO precio
+    repetido a ciegas; una auditoría cruzada contra Nasdaq.com (metodología
+    de precio distinta) mostró que la mayoría de esos empates eran reales,
+    pero excluir la comparación de volumen por completo (ver commit
+    revertido) también dejaba pasar apagones reales de la fuente sin
+    detectarlos — el caso de AGUAS-A.SN (37 ruedas seguidas con precio Y
+    volumen idénticos) es justo lo que ese cambio dejaba de detectar.
+
+    Un día con precio empatado se excluye (se trata como dato congelado, no
+    como retorno real) si, además:
+      - el volumen de ese día es 0, o
+      - el volumen es idéntico al del día anterior (evidencia de que la
+        fuente repitió la fila completa, no solo el precio).
+    Si no hay volumen disponible para el ticker (NaN — algunos benchmarks
+    internacionales no lo traen), no hay forma de distinguir un empate real
+    de un corte de datos con este criterio, así que por seguridad se vuelve
+    al criterio conservador anterior a la auditoría: el empate se excluye.
+
+    Los días con precio genuinamente ausente (sin fila en la base para esa
+    fecha) no aparecen en absoluto en `serie_precio` — no hay nada que
+    filtrar para esos, pct_change() ya los salta solo. No confundir con la
+    detección de "Atraso" del heatmap (dato más reciente posiblemente
+    desactualizado): esa es una lógica separada, definida donde se usa, que
+    sigue igual."""
+    retornos = serie_precio.pct_change()
+    precio_empatado = serie_precio.eq(serie_precio.shift(1))
+    sin_evidencia_de_trading = (
+        serie_volumen.isna() | serie_volumen.eq(0) | serie_volumen.eq(serie_volumen.shift(1))
+    )
+    congelado = precio_empatado & sin_evidencia_de_trading
+    return retornos[~congelado]
+
+
+def matriz_retornos_alineados(
+    df_precios: pd.DataFrame,
+    tickers: list,
+    fecha_inicio=None,
+    fecha_fin=None,
+    quitar_sufijo_sn: bool = False,
+) -> pd.DataFrame:
+    """Retornos diarios reales (ver calcular_retornos_reales) de cada ticker
+    dado, opcionalmente recortados a [fecha_inicio, fecha_fin], alineados
+    por fecha (complete-case: solo se conservan los días donde TODOS los
+    tickers pedidos tienen un retorno real ese día, requisito para que la
+    matriz de covarianza resultante sea válida).
+
+    Punto único para esta operación: antes existían dos copias casi
+    idénticas (una en portfolio_lab.py, otra en app/dashboard.py como
+    _matriz_retornos_alineados) que armaban la misma matriz por separado."""
+    df_precios = df_precios.assign(fecha=pd.to_datetime(df_precios["fecha"]))
+    fecha_inicio = pd.Timestamp(fecha_inicio) if fecha_inicio is not None else None
+    fecha_fin = pd.Timestamp(fecha_fin) if fecha_fin is not None else None
+
+    retornos = {}
+    for ticker in tickers:
+        datos = df_precios[df_precios["ticker"] == ticker].sort_values("fecha").set_index("fecha")
+        if fecha_inicio is not None:
+            datos = datos[datos.index >= fecha_inicio]
+        if fecha_fin is not None:
+            datos = datos[datos.index <= fecha_fin]
+        nombre_columna = ticker.replace(".SN", "") if quitar_sufijo_sn else ticker
+        retornos[nombre_columna] = calcular_retornos_reales(datos["precio_cierre"], datos["volumen"])
+    return pd.DataFrame(retornos).dropna()
 
 
 def calcular_capm_regresion(exceso_portafolio: pd.Series, exceso_mercado: pd.Series) -> dict | None:
