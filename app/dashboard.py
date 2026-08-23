@@ -363,6 +363,16 @@ def calcular_crp_y_prima_mercado(df_macro: pd.DataFrame, df_acciones: pd.DataFra
     }
 
 
+def _texto_atraso(atrasado: bool, dias_habiles_atraso: int) -> str:
+    """Texto de la columna "Atraso" del heatmap: explícito sobre cuántos días
+    hábiles lleva sin refrescarse el precio, en vez de un ícono booleano que
+    no dice cuánto atraso hay. "Al día" (no "0 días") cuando no hay atraso,
+    para no insinuar una cuenta que no se está mostrando."""
+    if atrasado:
+        return f"Precio congelado — {dias_habiles_atraso} días hábiles"
+    return "Al día"
+
+
 @st.cache_data(ttl=3600)
 def calcular_resumen_ipsa(df_todas: pd.DataFrame, df_macro: pd.DataFrame) -> pd.DataFrame:
     """% de cambio 1D/1W/1M/YTD, Beta (vs el proxy del IPSA), volatilidad y
@@ -460,10 +470,9 @@ def calcular_resumen_ipsa(df_todas: pd.DataFrame, df_macro: pd.DataFrame) -> pd.
             "Volatilidad anualizada (%)": volatilidad_anualizada,
             "CAPM local (%)": capm_local,
             "CAPM + CRP (%)": capm_crp,
-            "Última actualización": (
-                ("⚠️ " if atrasado else "") + ultima_fecha_real.strftime("%Y-%m-%d")
-            ),
-            "Atraso": atrasado,
+            "Última actualización": ultima_fecha_real.strftime("%Y-%m-%d"),
+            "Atraso": _texto_atraso(atrasado, dias_habiles_atraso),
+            "_atrasado_bool": atrasado,
         })
 
     return pd.DataFrame(filas).set_index("Ticker")
@@ -569,10 +578,9 @@ def calcular_resumen_dow_jones(df_todas: pd.DataFrame, df_macro: pd.DataFrame) -
             "Beta ajustada": beta_ajustada,
             "Volatilidad anualizada (%)": volatilidad_anualizada,
             "CAPM (%)": capm,
-            "Última actualización": (
-                ("⚠️ " if atrasado else "") + ultima_fecha_real.strftime("%Y-%m-%d")
-            ),
-            "Atraso": atrasado,
+            "Última actualización": ultima_fecha_real.strftime("%Y-%m-%d"),
+            "Atraso": _texto_atraso(atrasado, dias_habiles_atraso),
+            "_atrasado_bool": atrasado,
         })
 
     return pd.DataFrame(filas).set_index("Ticker")
@@ -1637,7 +1645,7 @@ with tab_acciones:
             # Si el último dato "real" del ticker tiene más de 5 días hábiles de
             # atraso, se grisa toda la fila (y se anula el color del heatmap) para
             # no dar una falsa sensación de precisión en un % que no se actualizó.
-            if fila["Atraso"]:
+            if fila["_atrasado_bool"]:
                 return ["color: #898781; background-color: transparent"] * len(fila)
             return [""] * len(fila)
 
@@ -1647,7 +1655,7 @@ with tab_acciones:
             .background_gradient(cmap=CMAP_SECUENCIAL, subset=["Volatilidad anualizada (%)"] + columnas_capm)
             .apply(marcar_datos_atrasados, axis=1)
             .format(formato, na_rep="—")
-            .hide(["Atraso"], axis="columns")
+            .hide(["_atrasado_bool"], axis="columns")
         )
         st.dataframe(estilo, use_container_width=True)
         st.caption(
@@ -1659,8 +1667,10 @@ with tab_acciones:
             "cruda hacia 1, el valor \"promedio de mercado\" de largo plazo, para corregir "
             "el sesgo de que betas históricas muy altas o muy bajas tienden a acercarse a 1 "
             "en períodos futuros. "
-            "⚠️ en \"Última actualización\" indica que Yahoo Finance no refrescó el precio "
-            "de ese ticker hace más de 5 días hábiles — el % de cambio mostrado no es confiable."
+            "La columna \"Atraso\" muestra \"Precio congelado — N días hábiles\" cuando Yahoo "
+            "Finance no refrescó el precio de ese ticker hace más de 5 días hábiles (contados "
+            "desde la última fecha con cambio real de precio) — el % de cambio mostrado no es "
+            "confiable en ese caso."
         )
 
         if capm_insumos["rf_cl"] is not None:
@@ -1745,7 +1755,7 @@ with tab_acciones_dow:
         formato_dow["CAPM (%)"] = "{:.2f}%"
 
         def marcar_datos_atrasados_dow(fila):
-            if fila["Atraso"]:
+            if fila["_atrasado_bool"]:
                 return ["color: #898781; background-color: transparent"] * len(fila)
             return [""] * len(fila)
 
@@ -1755,7 +1765,7 @@ with tab_acciones_dow:
             .background_gradient(cmap=CMAP_SECUENCIAL, subset=["Volatilidad anualizada (%)", "CAPM (%)"])
             .apply(marcar_datos_atrasados_dow, axis=1)
             .format(formato_dow, na_rep="—")
-            .hide(["Atraso"], axis="columns")
+            .hide(["_atrasado_bool"], axis="columns")
         )
         st.dataframe(estilo_dow, use_container_width=True)
         st.caption(
@@ -1768,8 +1778,10 @@ with tab_acciones_dow:
             "mercado (retorno histórico anualizado del Dow Jones menos esa misma Rf) — a "
             "diferencia del IPSA, no se suma una prima de riesgo país: no aplica un CRP de "
             "EEUU respecto a sí mismo. "
-            "⚠️ en \"Última actualización\" indica que Yahoo Finance no refrescó el precio "
-            "de ese ticker hace más de 5 días hábiles — el % de cambio mostrado no es confiable."
+            "La columna \"Atraso\" muestra \"Precio congelado — N días hábiles\" cuando Yahoo "
+            "Finance no refrescó el precio de ese ticker hace más de 5 días hábiles (contados "
+            "desde la última fecha con cambio real de precio) — el % de cambio mostrado no es "
+            "confiable en ese caso."
         )
 
     except Exception as e:
