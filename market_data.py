@@ -255,3 +255,192 @@ def detectar_apagon_mercado(
         "n_total": n_total,
         "fecha_apagon": fecha_min.date(),
     }
+
+
+# ============================================================
+# Atribución multi-factor del IPSA (proxy ECH)
+# ============================================================
+
+VENTANA_ATRIBUCION_IPSA = 120
+
+# (nombre del factor, columna de retorno, tipo de tabla de origen, nombre/ticker en la fuente)
+FACTORES_ATRIBUCION_IPSA = [
+    ("Cobre", "cobre", "macro", "Precio del cobre (USD/oz troy)"),
+    ("S&P 500", "sp500", "accion", "^GSPC"),
+    ("USD/CLP", "usdclp", "macro", "Tipo de cambio observado"),
+]
+
+
+def _retornos_atribucion_ipsa(df_acciones: pd.DataFrame, df_macro: pd.DataFrame) -> pd.DataFrame:
+    """Retornos diarios alineados de ECH (proxy del IPSA) y los 3 factores
+    (complete-case: solo fechas donde los 4 tienen un retorno ese día).
+    ECH y S&P 500 usan calcular_retornos_reales (precio + volumen, distingue
+    empate real de corte de datos); cobre y USD/CLP son series del BCCh sin
+    concepto de volumen, así que usan pct_change() directo — no tienen el
+    mismo riesgo de "fuente que dejó de refrescar" que Yahoo Finance."""
+    df_acciones = df_acciones.assign(fecha=pd.to_datetime(df_acciones["fecha"]))
+    df_macro = df_macro.assign(fecha=pd.to_datetime(df_macro["fecha"]))
+
+    ech = df_acciones[df_acciones["ticker"] == "ECH"].sort_values("fecha").set_index("fecha")
+    sp500 = df_acciones[df_acciones["ticker"] == "^GSPC"].sort_values("fecha").set_index("fecha")
+    cobre = (
+        df_macro[df_macro["nombre"] == "Precio del cobre (USD/oz troy)"]
+        .sort_values("fecha").set_index("fecha")["valor"]
+    )
+    usdclp = (
+        df_macro[df_macro["nombre"] == "Tipo de cambio observado"]
+        .sort_values("fecha").set_index("fecha")["valor"]
+    )
+
+    retornos = {
+        "ech": calcular_retornos_reales(ech["precio_cierre"], ech["volumen"]),
+        "cobre": cobre.pct_change(),
+        "sp500": calcular_retornos_reales(sp500["precio_cierre"], sp500["volumen"]),
+        "usdclp": usdclp.pct_change(),
+    }
+    return pd.DataFrame(retornos).dropna()
+
+
+def _ols(X: np.ndarray, y: np.ndarray) -> np.ndarray:
+    """OLS vía mínimos cuadrados (np.linalg.lstsq, no requiere invertir
+    X'X a mano). X ya debe incluir la columna de unos para el intercepto.
+    Devuelve [alfa, beta_1, beta_2, ...]."""
+    coeficientes, *_ = np.linalg.lstsq(X, y, rcond=None)
+    return coeficientes
+
+
+def calcular_atribucion_ipsa(
+    df_acciones: pd.DataFrame, df_macro: pd.DataFrame, ventana: int = VENTANA_ATRIBUCION_IPSA,
+) -> pd.DataFrame:
+    """Atribución del retorno diario de ECH (proxy del IPSA) a 3 factores
+    globales (cobre, S&P 500, USD/CLP), vía regresión OLS de VENTANA
+    móvil re-estimada cada día:
+
+        R_ECH = α + β_cobre·R_cobre + β_SP500·R_SP500 + β_USDCLP·R_USDCLP + ε
+
+    Para el día t, α y los β se estiman SOLO con los `ventana` días hábiles
+    ANTERIORES a t (t-ventana .. t-1) — nunca con el día t mismo ni con
+    datos futuros, así que el retorno predicho de t es walk-forward, no
+    look-ahead. Ese α/β se aplica luego a los retornos REALES observados de
+    los factores en t para obtener la contribución de cada uno; el residual
+    es lo que sobra. Por construcción, para cada fila:
+
+        α + contrib_cobre + contrib_sp500 + contrib_usdclp + residual == retorno_ech
+
+    siempre, exactamente (no es una propiedad que haya que validar aparte,
+    es cómo se define el residual).
+
+    También agrega z-scores de cada retorno de factor y del residual,
+    calculados contra la distribución de los `ventana` días hábiles
+    anteriores a cada fecha (mismo criterio walk-forward que los β) — un
+    |z_residual| > 2 es la señal de "movimiento local inusual, no explicado
+    por estos 3 factores globales"."""
+    df = _retornos_atribucion_ipsa(df_acciones, df_macro)
+    fechas = df.index
+    n = len(df)
+
+    X_todo = np.column_stack([np.ones(n), df["cobre"].to_numpy(), df["sp500"].to_numpy(), df["usdclp"].to_numpy()])
+    y_todo = df["ech"].to_numpy()
+
+    filas = []
+    for i in range(ventana, n):
+        X_ventana = X_todo[i - ventana:i]
+        y_ventana = y_todo[i - ventana:i]
+        alfa, b_cobre, b_sp500, b_usdclp = _ols(X_ventana, y_ventana)
+
+        _, r_cobre, r_sp500, r_usdclp = X_todo[i]
+        contrib_cobre = b_cobre * r_cobre
+        contrib_sp500 = b_sp500 * r_sp500
+        contrib_usdclp = b_usdclp * r_usdclp
+        predicho = alfa + contrib_cobre + contrib_sp500 + contrib_usdclp
+        real = y_todo[i]
+
+        filas.append({
+            "fecha": fechas[i],
+            "retorno_ech": real,
+            "retorno_cobre": r_cobre,
+            "retorno_sp500": r_sp500,
+            "retorno_usdclp": r_usdclp,
+            "alfa": alfa,
+            "beta_cobre": b_cobre,
+            "beta_sp500": b_sp500,
+            "beta_usdclp": b_usdclp,
+            "contrib_cobre": contrib_cobre,
+            "contrib_sp500": contrib_sp500,
+            "contrib_usdclp": contrib_usdclp,
+            "retorno_predicho": predicho,
+            "residual": real - predicho,
+        })
+
+    resultado = pd.DataFrame(filas).set_index("fecha")
+
+    # Z-scores walk-forward: contra la media/desv. estándar de los `ventana`
+    # valores anteriores a cada fecha (shift(1) antes del rolling, para que
+    # el valor de hoy nunca entre en su propia distribución de referencia).
+    for columna, z_columna in [
+        ("retorno_cobre", "z_cobre"), ("retorno_sp500", "z_sp500"),
+        ("retorno_usdclp", "z_usdclp"), ("residual", "z_residual"),
+    ]:
+        previos = resultado[columna].shift(1)
+        media = previos.rolling(ventana).mean()
+        desv = previos.rolling(ventana).std()
+        resultado[z_columna] = (resultado[columna] - media) / desv
+
+    return resultado
+
+
+def validar_atribucion_out_of_sample(
+    df_acciones: pd.DataFrame, df_macro: pd.DataFrame, frac_in_sample: float = 0.7,
+) -> dict:
+    """Validación out-of-sample del modelo de 3 factores: separa el
+    histórico disponible en el primer `frac_in_sample` (in-sample) y el
+    resto (out-of-sample) EN ORDEN CRONOLÓGICO (no al azar, para no filtrar
+    información futura al in-sample). Estima α/β UNA SOLA VEZ con los datos
+    in-sample, los aplica a los retornos de los factores en el período
+    out-of-sample, y compara el retorno predicho contra el real de ese
+    período — reporta R² y correlación de Pearson tal cual salgan, sin
+    ocultar un resultado bajo (que sería, en sí mismo, información válida
+    sobre qué tan bien generaliza el modelo)."""
+    df = _retornos_atribucion_ipsa(df_acciones, df_macro)
+    n = len(df)
+    corte = int(n * frac_in_sample)
+
+    in_sample = df.iloc[:corte]
+    out_of_sample = df.iloc[corte:]
+    if len(in_sample) < 30 or len(out_of_sample) < 30:
+        return {"suficientes_datos": False}
+
+    X_in = np.column_stack([
+        np.ones(len(in_sample)), in_sample["cobre"].to_numpy(),
+        in_sample["sp500"].to_numpy(), in_sample["usdclp"].to_numpy(),
+    ])
+    y_in = in_sample["ech"].to_numpy()
+    alfa, b_cobre, b_sp500, b_usdclp = _ols(X_in, y_in)
+
+    y_real_oos = out_of_sample["ech"].to_numpy()
+    y_pred_oos = (
+        alfa
+        + b_cobre * out_of_sample["cobre"].to_numpy()
+        + b_sp500 * out_of_sample["sp500"].to_numpy()
+        + b_usdclp * out_of_sample["usdclp"].to_numpy()
+    )
+
+    residuos_oos = y_real_oos - y_pred_oos
+    ss_res = float(np.sum(residuos_oos ** 2))
+    ss_tot = float(np.sum((y_real_oos - y_real_oos.mean()) ** 2))
+    r2_oos = 1 - ss_res / ss_tot if ss_tot > 0 else None
+    correlacion_oos = float(np.corrcoef(y_pred_oos, y_real_oos)[0, 1]) if np.std(y_pred_oos) > 0 else None
+
+    return {
+        "suficientes_datos": True,
+        "n_in_sample": len(in_sample),
+        "n_out_of_sample": len(out_of_sample),
+        "fecha_inicio_oos": out_of_sample.index[0].date(),
+        "fecha_fin_oos": out_of_sample.index[-1].date(),
+        "coeficientes_in_sample": {
+            "alfa": float(alfa), "beta_cobre": float(b_cobre),
+            "beta_sp500": float(b_sp500), "beta_usdclp": float(b_usdclp),
+        },
+        "r2_oos": r2_oos,
+        "correlacion_oos": correlacion_oos,
+    }

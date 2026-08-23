@@ -43,6 +43,8 @@ from market_data import (
     calcular_retornos_reales,
     calcular_capm_regresion,
     detectar_apagon_mercado,
+    calcular_atribucion_ipsa,
+    validar_atribucion_out_of_sample,
     INDICADORES_PREMERCADO,
 )
 from calendario_economico import proximos_eventos, NOTA_VIGENCIA, INDICADOR_POR_TIPO, CALENDARIO_VERIFICADO_AL
@@ -716,10 +718,10 @@ except Exception:
     st.caption("Aún no hay datos cargados. Corre los scripts de actualización primero.")
 
 (
-    tab_premercado, tab_macro, tab_acciones, tab_acciones_dow, tab_riesgo,
+    tab_premercado, tab_macro, tab_acciones, tab_atribucion, tab_acciones_dow, tab_riesgo,
     tab_benchmark, tab_laboratorio,
 ) = st.tabs([
-    "Brief Premercado", "Indicadores macro", "Acciones IPSA", "Acciones Dow Jones",
+    "Brief Premercado", "Indicadores macro", "Acciones IPSA", "Atribución IPSA", "Acciones Dow Jones",
     "Riesgo", "Benchmark", "Laboratorio Financiero",
 ])
 
@@ -1118,6 +1120,172 @@ with tab_acciones:
 
     except Exception as e:
         st.error(f"No se pudieron cargar los precios de acciones: {e}")
+
+# --- Tab 2a: Atribución multi-factor del IPSA (proxy ECH) ---
+COLOR_POR_COMPONENTE_ATRIBUCION = {
+    "Alfa (intercepto)": "#8a8a8a",
+    "Cobre": "#eda100",
+    "S&P 500": "#2a78d6",
+    "USD/CLP": "#1baf7a",
+    "Residual": "#eb6834",
+}
+
+
+@st.cache_data(ttl=3600)
+def calcular_atribucion_ipsa_cacheada(df_acciones: pd.DataFrame, df_macro: pd.DataFrame) -> pd.DataFrame:
+    return calcular_atribucion_ipsa(df_acciones, df_macro)
+
+
+@st.cache_data(ttl=3600)
+def validar_atribucion_out_of_sample_cacheada(df_acciones: pd.DataFrame, df_macro: pd.DataFrame) -> dict:
+    return validar_atribucion_out_of_sample(df_acciones, df_macro)
+
+
+with tab_atribucion:
+    st.subheader("Atribución del Movimiento de Hoy")
+    st.caption(
+        "Modelo de 3 factores: R_ECH = α + β_cobre·R_cobre + β_SP500·R_SP500 + "
+        "β_USDCLP·R_USDCLP + ε, sobre el proxy ECH del IPSA (no un ticker `.SN`, "
+        "así que no le afecta el apagón de Yahoo Finance documentado para el "
+        "mercado chileno — verificado con datos reales antes de construir esto: "
+        "ECH tiene precio y volumen frescos y distintos cada rueda). Los β se "
+        "re-estiman cada día con los 120 días hábiles ANTERIORES (sin el día "
+        "actual) — walk-forward, sin mirar el futuro."
+    )
+
+    try:
+        df_acciones_atrib = cargar_precios_acciones()
+        df_macro_atrib = cargar_series_macro()
+
+        df_atribucion = calcular_atribucion_ipsa_cacheada(df_acciones_atrib, df_macro_atrib)
+
+        if len(df_atribucion) == 0:
+            st.warning("No hay suficiente historia común entre ECH, cobre, S&P 500 y USD/CLP todavía.")
+        else:
+            fila_hoy = df_atribucion.iloc[-1]
+            fecha_hoy = df_atribucion.index[-1]
+
+            col_m1, col_m2, col_m3 = st.columns(3)
+            col_m1.metric("Retorno real de ECH", f"{fila_hoy['retorno_ech']:+.2%}")
+            col_m2.metric("Retorno predicho (3 factores)", f"{fila_hoy['retorno_predicho']:+.2%}")
+            col_m3.metric("Residual", f"{fila_hoy['residual']:+.2%}")
+            st.caption(f"Última sesión con datos: {fecha_hoy.strftime('%Y-%m-%d')}.")
+
+            componentes = {
+                "Alfa (intercepto)": fila_hoy["alfa"],
+                "Cobre": fila_hoy["contrib_cobre"],
+                "S&P 500": fila_hoy["contrib_sp500"],
+                "USD/CLP": fila_hoy["contrib_usdclp"],
+                "Residual": fila_hoy["residual"],
+            }
+            fig_atrib = go.Figure()
+            for nombre, valor in componentes.items():
+                fig_atrib.add_trace(go.Bar(
+                    x=["Retorno de hoy"], y=[valor * 100], name=nombre,
+                    marker_color=COLOR_POR_COMPONENTE_ATRIBUCION[nombre],
+                ))
+            fig_atrib.add_hline(
+                y=fila_hoy["retorno_ech"] * 100, line_dash="dash", line_color="#2b2b2b",
+                annotation_text=f"Retorno real total: {fila_hoy['retorno_ech']:+.2%}",
+            )
+            fig_atrib.update_layout(
+                barmode="relative", title="Descomposición del retorno de hoy (%)",
+                yaxis_title="Contribución (%)",
+            )
+            st.plotly_chart(fig_atrib, use_container_width=True)
+            st.caption(
+                "Las barras apiladas suman exactamente el retorno real de ECH (línea "
+                "punteada) — el residual no es un error de cálculo, es la definición "
+                "de \"lo que estos 3 factores no explican\"."
+            )
+
+            if pd.notna(fila_hoy["z_residual"]) and abs(fila_hoy["z_residual"]) > 2:
+                st.error(
+                    "⚠️ **Movimiento local inusual, no explicado por factores globales.** "
+                    f"El residual de hoy tiene z = {fila_hoy['z_residual']:+.2f} contra la "
+                    "distribución de los últimos 120 días hábiles — algo más allá de cobre, "
+                    "S&P 500 o el tipo de cambio está moviendo el mercado chileno hoy."
+                )
+
+            st.subheader("Z-scores (vs. últimos 120 días hábiles)")
+            df_z = pd.DataFrame({
+                "Factor": ["Cobre", "S&P 500", "USD/CLP", "Residual"],
+                "Retorno de hoy": [
+                    fila_hoy["retorno_cobre"], fila_hoy["retorno_sp500"],
+                    fila_hoy["retorno_usdclp"], fila_hoy["residual"],
+                ],
+                "Z-score": [
+                    fila_hoy["z_cobre"], fila_hoy["z_sp500"],
+                    fila_hoy["z_usdclp"], fila_hoy["z_residual"],
+                ],
+            }).set_index("Factor")
+            st.dataframe(
+                df_z.style.format({"Retorno de hoy": "{:+.2%}", "Z-score": "{:+.2f}"}),
+                use_container_width=True,
+            )
+            st.caption(
+                "Z-score = (valor de hoy − media de los 120 días hábiles anteriores) / "
+                "desviación estándar de esos mismos 120 días — mismo criterio walk-forward "
+                "que los β: la distribución de referencia nunca incluye el día que se está "
+                "evaluando."
+            )
+
+            st.subheader("Historial del residual")
+            fig_residual = px.line(
+                df_atribucion.reset_index(), x="fecha", y="residual",
+                title="Residual diario de la atribución (todo el histórico disponible)",
+            )
+            fig_residual.add_hline(y=0, line_color="#898781")
+            fig_residual.update_yaxes(tickformat=".1%", title="Residual")
+            st.plotly_chart(fig_residual, use_container_width=True)
+            st.caption(
+                "Picos hacia arriba o abajo son ruedas donde ECH se movió más de lo que "
+                "cobre, S&P 500 y USD/CLP explican — no necesariamente \"solo lo local\", "
+                "ver nota metodológica más abajo."
+            )
+
+            st.subheader("Validación out-of-sample")
+            validacion = validar_atribucion_out_of_sample_cacheada(df_acciones_atrib, df_macro_atrib)
+            if not validacion["suficientes_datos"]:
+                st.warning("No hay suficiente historia para dividir en in-sample / out-of-sample todavía.")
+            else:
+                col_v1, col_v2, col_v3, col_v4 = st.columns(4)
+                col_v1.metric("R² (out-of-sample)", f"{validacion['r2_oos']:.3f}" if validacion["r2_oos"] is not None else "—")
+                col_v2.metric(
+                    "Correlación predicho vs. real",
+                    f"{validacion['correlacion_oos']:.3f}" if validacion["correlacion_oos"] is not None else "—",
+                )
+                col_v3.metric("Días in-sample", f"{validacion['n_in_sample']:,}")
+                col_v4.metric("Días out-of-sample", f"{validacion['n_out_of_sample']:,}")
+                st.caption(
+                    f"Período out-of-sample: {validacion['fecha_inicio_oos']} a "
+                    f"{validacion['fecha_fin_oos']}. Los β se estiman **una sola vez** con "
+                    "el primer ~70% cronológico de los datos (in-sample) y se aplican sin "
+                    "volver a ajustar sobre el 30% restante — el resultado se reporta tal "
+                    "cual sale, sea alto o bajo: un R² o correlación bajos también son una "
+                    "conclusión válida sobre qué tan bien generaliza este modelo de 3 "
+                    "factores, no un motivo para ocultarlo."
+                )
+
+            st.info(
+                "**Nota metodológica.** Modelo de 3 factores (cobre, S&P 500, USD/CLP) — "
+                "no captura todo lo que mueve al IPSA, solo estos tres canales globales "
+                "específicos. **Multicolinealidad posible:** cobre y S&P 500 suelen moverse "
+                "juntos en episodios de apetito por riesgo global, lo que puede inflar el "
+                "error estándar de sus β individuales y hacer inestable la atribución entre "
+                "ambos en algunos períodos (la suma total sigue siendo válida aunque el "
+                "reparto entre los dos sea ruidoso). **Ventana de 120 días hábiles:** es una "
+                "elección con trade-off — una ventana más corta reacciona más rápido a "
+                "cambios de régimen pero con β más ruidosos (menos observaciones); una más "
+                "larga da β más estables pero más lentos para adaptarse. **El residual "
+                "captura TODO lo que estos 3 factores específicos no explican** — no es "
+                "necesariamente \"solo noticias locales\": incluye cualquier otro factor "
+                "global no incluido en el modelo (ej. tasas de interés, otros commodities, "
+                "flujos de fondos EM) además de eventos genuinamente locales."
+            )
+
+    except Exception as e:
+        st.error(f"No se pudo calcular la atribución del IPSA: {e}")
 
 # --- Tab 2b: Precios de acciones del Dow Jones ---
 with tab_acciones_dow:

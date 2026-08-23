@@ -8,7 +8,7 @@ actualizado diariamente.
 
 ## Qué muestra
 
-El dashboard tiene 7 pestañas:
+El dashboard tiene 8 pestañas:
 
 1. **Brief Premercado** — para revisar antes de que abra la Bolsa de Santiago.
    Sección "Importante": % de cambio de la última sesión de S&P 500, Dow
@@ -90,7 +90,28 @@ El dashboard tiene 7 pestañas:
    puede implicar doble conteo del riesgo país (el Beta y la Rf locales ya
    lo capturan en parte implícitamente). Es una aproximación al estilo
    Damodaran, no el EMBI+ oficial (que requiere una fuente de pago).
-4. **Acciones Dow Jones** — la misma estructura que "Acciones IPSA", aplicada
+4. **Atribución IPSA** — atribución multi-factor del retorno diario de ECH
+   (proxy del IPSA — no un ticker `.SN`, así que no le afecta el apagón de
+   Yahoo Finance para el mercado chileno, verificado con datos reales):
+   `R_ECH = α + β_cobre·R_cobre + β_SP500·R_SP500 + β_USDCLP·R_USDCLP + ε`,
+   con regresión de ventana móvil de 120 días hábiles re-estimada cada día
+   (los β solo usan los 120 días ANTERIORES al día evaluado, walk-forward,
+   sin mirar el futuro). Sección "Atribución del Movimiento de Hoy": barras
+   apiladas con la contribución de cada factor + el residual, que suman
+   exactamente el retorno real del día; z-scores de cada factor y del
+   residual contra los últimos 120 días, con una alerta visible si
+   |z_residual| > 2 ("movimiento local inusual, no explicado por factores
+   globales"; cuando esto ocurre, el brief diario generado por IA recibe
+   una instrucción extra para buscar una causa local específica en los
+   titulares). Gráfico de línea con el historial completo del residual, y
+   una **validación out-of-sample** (primeros ~70% del histórico para
+   estimar los β una sola vez, últimos ~30% para medir R² y correlación
+   entre retorno predicho y real) — el resultado se reporta tal cual sale,
+   sea alto o bajo. Nota metodológica visible: posible multicolinealidad
+   entre cobre y S&P 500, el trade-off responsividad/estabilidad de la
+   ventana de 120 días, y que el residual captura todo lo no explicado por
+   estos 3 factores específicos, no necesariamente solo eventos locales.
+5. **Acciones Dow Jones** — la misma estructura que "Acciones IPSA", aplicada
    a **las 30 acciones que componen el Dow Jones Industrial Average**
    (verificadas contra Wikipedia, stockanalysis.com y Yahoo Finance antes de
    agregarlas), con AAPL, MSFT, JPM, CAT y KO preseleccionadas por defecto.
@@ -101,7 +122,7 @@ El dashboard tiene 7 pestañas:
    como Rf la Effective Federal Funds Rate (TPM EEUU) y una sola versión (sin
    la distinción "local" vs. "+ CRP" del IPSA): no aplica una prima de riesgo
    país de EEUU respecto a sí mismo.
-5. **Riesgo** — Value at Risk (VaR) histórico y paramétrico, a 95% y 99%, para
+6. **Riesgo** — Value at Risk (VaR) histórico y paramétrico, a 95% y 99%, para
    las 5 acciones principales y un portafolio hipotético equiponderado, sobre
    los últimos ~2 años (mismo filtro de días congelados); y una matriz de
    correlación de retornos diarios entre las 30 acciones del IPSA. Nota
@@ -136,13 +157,13 @@ El dashboard tiene 7 pestañas:
    proxy ECH (no una cifra externa de una crisis pasada), lo aplica vía Beta
    a cada acción y al portafolio, y lo etiqueta explícitamente como el peor
    caso observado en la muestra — no el peor caso históricamente posible.
-6. **Benchmark** — el IPSA (vía el ETF ECH, ver nota abajo) comparado con el
+7. **Benchmark** — el IPSA (vía el ETF ECH, ver nota abajo) comparado con el
    S&P 500, MSCI Emerging Markets (EEM) y el Bovespa, normalizado a base 100.
    Debajo, la sección **7 Magníficas**: AAPL, MSFT, GOOGL, AMZN, NVDA, META y
    TSLA normalizadas a base 100 (gráfico sin cambios), más una tabla simple
    de % de cambio 1D/1W/1M/YTD (coloreada verde/rojo, mismo estilo que el
    heatmap del IPSA pero sin Beta/VaR/CAPM).
-7. **Laboratorio Financiero** — pestaña pensada como herramienta interactiva de
+8. **Laboratorio Financiero** — pestaña pensada como herramienta interactiva de
     estudio para la tarea de Frontera Media-Varianza + LMC + Desempeño,
     sobre un universo de hasta 50 acciones del S&P 500 (con al menos 2 de
     cada uno de los sectores Energy, Financials, Health Care, Industrials,

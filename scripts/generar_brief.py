@@ -21,7 +21,7 @@ sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
 import pandas as pd
 from google import genai
 from models import get_session, get_engine, Noticia, BriefDiario
-from market_data import calcular_resumen_mercado
+from market_data import calcular_resumen_mercado, calcular_atribucion_ipsa, VENTANA_ATRIBUCION_IPSA
 from scripts.actualizar_noticias import FUENTES_RSS
 
 MODELO_GEMINI = "gemini-3.6-flash"
@@ -88,8 +88,26 @@ copper, the exchange rate (USD/CLP), or the local market (IPSA). Always use \
 cautious language ("could", "it's possible that", "eventually") — never \
 categorical causal claims or guarantees about future price movements."""
 
+# Se agrega al prompt SOLO cuando el residual de la atribución multi-factor
+# de hoy (ver market_data.calcular_atribucion_ipsa) tiene |z| > 2 — un
+# movimiento del IPSA que copper/S&P 500/USDCLP no explican, y que podría
+# tener una causa local específica visible en los titulares del día.
+INSTRUCCION_RESIDUAL_INUSUAL = """
 
-def construir_prompt(titulares: list[dict], indicadores: list[dict]) -> str:
+IMPORTANT — unusual unexplained local move detected: today's IPSA (ECH) return \
+has a residual not explained by copper, the S&P 500, or the USD/CLP exchange \
+rate — the three global factors that normally drive most of its daily movement \
+— with a z-score of {z:+.2f} against the last {ventana} trading days of \
+residuals (|z| > 2 is considered unusual). In the "Possible Effects for Chile" \
+section, actively look through the headlines above for a Chile-specific news \
+item (company-level news, local political event, regulatory decision, etc.) \
+that could plausibly explain this unusual local move, and mention it if you \
+find a plausible candidate. If nothing in the headlines explains it, say \
+explicitly that the cause is unclear from the available headlines — don't \
+speculate or invent a cause."""
+
+
+def construir_prompt(titulares: list[dict], indicadores: list[dict], instruccion_extra: str = "") -> str:
     lineas_indicadores = []
     for ind in indicadores:
         if ind["resultado"] is None:
@@ -108,10 +126,11 @@ def construir_prompt(titulares: list[dict], indicadores: list[dict]) -> str:
 
     lineas_titulares = [f"- [{t['fuente']}] {t['titulo']}" for t in titulares]
 
-    return PROMPT_TEMPLATE.format(
+    prompt = PROMPT_TEMPLATE.format(
         indicadores="\n".join(lineas_indicadores) if lineas_indicadores else "(sin datos disponibles)",
         titulares="\n".join(lineas_titulares) if lineas_titulares else "(sin titulares disponibles)",
     )
+    return prompt + instruccion_extra
 
 
 def obtener_titulares_recientes(session) -> list[dict]:
@@ -149,10 +168,28 @@ def generar_brief_diario():
 
         engine = get_engine()
         df_macro = pd.read_sql("SELECT nombre, fecha, valor FROM series_macro ORDER BY fecha", engine)
-        df_acciones = pd.read_sql("SELECT ticker, fecha, precio_cierre FROM precios_acciones ORDER BY fecha", engine)
+        df_acciones = pd.read_sql("SELECT ticker, fecha, precio_cierre, volumen FROM precios_acciones ORDER BY fecha", engine)
         indicadores = calcular_resumen_mercado(df_macro, df_acciones)
 
-        prompt = construir_prompt(titulares, indicadores)
+        # Si el residual de HOY de la atribución multi-factor del IPSA (ver
+        # market_data.calcular_atribucion_ipsa) es inusual (|z| > 2), se le
+        # pide a Gemini que busque una causa local específica en los
+        # titulares — un solo intento con try/except: si la atribución falla
+        # por lo que sea (historia insuficiente, etc.), el brief se genera
+        # igual sin esa instrucción extra, en vez de no generarse.
+        instruccion_extra = ""
+        try:
+            df_atribucion = calcular_atribucion_ipsa(df_acciones, df_macro)
+            if not df_atribucion.empty:
+                z_residual_hoy = df_atribucion["z_residual"].iloc[-1]
+                if pd.notna(z_residual_hoy) and abs(z_residual_hoy) > 2:
+                    instruccion_extra = INSTRUCCION_RESIDUAL_INUSUAL.format(
+                        z=z_residual_hoy, ventana=VENTANA_ATRIBUCION_IPSA,
+                    )
+        except Exception as e:
+            print(f"No se pudo calcular la atribución del IPSA para el prompt (se sigue sin ella): {e}")
+
+        prompt = construir_prompt(titulares, indicadores, instruccion_extra)
 
         print(f"Llamando a Gemini ({MODELO_GEMINI}) con {len(titulares)} titulares y {len(indicadores)} indicadores...")
         cliente = genai.Client(api_key=api_key)
