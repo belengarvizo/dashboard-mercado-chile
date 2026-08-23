@@ -215,8 +215,102 @@ UNIVERSO_LABORATORIO_50 = [
 ]
 
 TICKERS_LABORATORIO_50 = [t for t, _, _ in UNIVERSO_LABORATORIO_50]
-SECTOR_POR_TICKER_LABORATORIO = {t: sector for t, _, sector in UNIVERSO_LABORATORIO_50}
-EMPRESA_POR_TICKER_LABORATORIO = {t: nombre for t, nombre, _ in UNIVERSO_LABORATORIO_50}
+
+# Universo AMPLIADO: acciones adicionales del S&P 500 (fuera de las 50 de
+# arriba) para dar margen real de elección dentro de cada sector al armar
+# la selección final de la tarea — no son "las 50 recomendadas", son
+# opciones extra en el selector. Se evitaron deliberadamente spin-offs
+# recientes (ej. GE Vernova/GEV, Kenvue/KVUE, Veralto/VLTO, Solventum/SOLV
+# — todos posteriores a jul-2023) porque no tendrían los 3 años completos
+# de historia que exige la ventana fija de la tarea. Pertenencia al S&P
+# 500, sector y disponibilidad de datos en la ventana 31-07-2023 a
+# 31-07-2026 verificados contra la API de Yahoo Finance antes de
+# agregarlas (0 problemas de cobertura en las 76).
+UNIVERSO_LABORATORIO_ADICIONAL = [
+    ("EOG", "EOG Resources", "Energy"),
+    ("WMB", "Williams Companies", "Energy"),
+    ("KMI", "Kinder Morgan", "Energy"),
+    ("OXY", "Occidental Petroleum", "Energy"),
+    ("PSX", "Phillips 66", "Energy"),
+    ("VLO", "Valero Energy", "Energy"),
+    ("C", "Citigroup", "Financials"),
+    ("AXP", "American Express", "Financials"),
+    ("SCHW", "Charles Schwab", "Financials"),
+    ("SPGI", "S&P Global", "Financials"),
+    ("ICE", "Intercontinental Exchange", "Financials"),
+    ("CME", "CME Group", "Financials"),
+    ("PGR", "Progressive Corp.", "Financials"),
+    ("USB", "U.S. Bancorp", "Financials"),
+    ("DHR", "Danaher", "Health Care"),
+    ("BMY", "Bristol-Myers Squibb", "Health Care"),
+    ("AMGN", "Amgen", "Health Care"),
+    ("GILD", "Gilead Sciences", "Health Care"),
+    ("CVS", "CVS Health", "Health Care"),
+    ("ELV", "Elevance Health", "Health Care"),
+    ("ISRG", "Intuitive Surgical", "Health Care"),
+    ("VRTX", "Vertex Pharmaceuticals", "Health Care"),
+    ("RTX", "RTX Corporation", "Industrials"),
+    ("NOC", "Northrop Grumman", "Industrials"),
+    ("GD", "General Dynamics", "Industrials"),
+    ("MMM", "3M", "Industrials"),
+    ("ETN", "Eaton Corporation", "Industrials"),
+    ("EMR", "Emerson Electric", "Industrials"),
+    ("ITW", "Illinois Tool Works", "Industrials"),
+    ("CSX", "CSX Corporation", "Industrials"),
+    ("AMD", "Advanced Micro Devices", "Information Technology"),
+    ("QCOM", "Qualcomm", "Information Technology"),
+    ("TXN", "Texas Instruments", "Information Technology"),
+    ("INTC", "Intel", "Information Technology"),
+    ("IBM", "IBM", "Information Technology"),
+    ("NOW", "ServiceNow", "Information Technology"),
+    ("INTU", "Intuit", "Information Technology"),
+    ("MU", "Micron Technology", "Information Technology"),
+    ("EXC", "Exelon", "Utilities"),
+    ("XEL", "Xcel Energy", "Utilities"),
+    ("SRE", "Sempra", "Utilities"),
+    ("D", "Dominion Energy", "Utilities"),
+    ("PEG", "Public Service Enterprise Group", "Utilities"),
+    ("ED", "Consolidated Edison", "Utilities"),
+    ("TSLA", "Tesla", "Consumer Discretionary"),
+    ("LOW", "Lowe's", "Consumer Discretionary"),
+    ("SBUX", "Starbucks", "Consumer Discretionary"),
+    ("BKNG", "Booking Holdings", "Consumer Discretionary"),
+    ("TJX", "TJX Companies", "Consumer Discretionary"),
+    ("MAR", "Marriott International", "Consumer Discretionary"),
+    ("GM", "General Motors", "Consumer Discretionary"),
+    ("YUM", "Yum! Brands", "Consumer Discretionary"),
+    ("PEP", "PepsiCo", "Consumer Staples"),
+    ("PM", "Philip Morris International", "Consumer Staples"),
+    ("MO", "Altria Group", "Consumer Staples"),
+    ("MDLZ", "Mondelez International", "Consumer Staples"),
+    ("CL", "Colgate-Palmolive", "Consumer Staples"),
+    ("TGT", "Target Corporation", "Consumer Staples"),
+    ("NFLX", "Netflix", "Communication Services"),
+    ("DIS", "Walt Disney", "Communication Services"),
+    ("CMCSA", "Comcast", "Communication Services"),
+    ("TMUS", "T-Mobile US", "Communication Services"),
+    ("VZ", "Verizon Communications", "Communication Services"),
+    ("T", "AT&T", "Communication Services"),
+    ("LIN", "Linde plc", "Materials"),
+    ("APD", "Air Products and Chemicals", "Materials"),
+    ("SHW", "Sherwin-Williams", "Materials"),
+    ("ECL", "Ecolab", "Materials"),
+    ("NEM", "Newmont Corporation", "Materials"),
+    ("FCX", "Freeport-McMoRan", "Materials"),
+    ("PLD", "Prologis", "Real Estate"),
+    ("AMT", "American Tower", "Real Estate"),
+    ("EQIX", "Equinix", "Real Estate"),
+    ("PSA", "Public Storage", "Real Estate"),
+    ("O", "Realty Income", "Real Estate"),
+    ("WELL", "Welltower", "Real Estate"),
+]
+
+UNIVERSO_LABORATORIO_AMPLIADO = UNIVERSO_LABORATORIO_50 + UNIVERSO_LABORATORIO_ADICIONAL
+TICKERS_LABORATORIO_AMPLIADO = [t for t, _, _ in UNIVERSO_LABORATORIO_AMPLIADO]
+TICKERS_LABORATORIO_ADICIONAL_DESCARGA = [t for t, _, _ in UNIVERSO_LABORATORIO_ADICIONAL]
+
+SECTOR_POR_TICKER_LABORATORIO = {t: sector for t, _, sector in UNIVERSO_LABORATORIO_AMPLIADO}
+EMPRESA_POR_TICKER_LABORATORIO = {t: nombre for t, nombre, _ in UNIVERSO_LABORATORIO_AMPLIADO}
 
 # Sectores en los que la tarea exige al menos 2 acciones en la selección.
 SECTORES_OBLIGATORIOS_LABORATORIO = [
