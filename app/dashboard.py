@@ -48,6 +48,7 @@ from market_data import (
     INDICADORES_PREMERCADO,
 )
 from calendario_economico import proximos_eventos, NOTA_VIGENCIA, INDICADOR_POR_TIPO, CALENDARIO_VERIFICADO_AL
+from glosario import NOMBRE_COMPLETO_POR_TICKER, explicacion_beta, explicacion_capm, tooltip_html, TOOLTIP_CSS
 
 st.set_page_config(page_title="Mercado Económico Chileno", layout="wide")
 
@@ -1091,6 +1092,62 @@ with tab_acciones:
             "desde la última fecha con cambio real de precio) — el % de cambio mostrado no es "
             "confiable en ese caso."
         )
+
+        st.divider()
+        st.subheader("🧪 Prueba de concepto: tooltips educativos")
+        st.caption(
+            "Antes de escalar esto a las 63 acciones/tickers del dashboard (30 IPSA + 30 Dow "
+            "Jones + Momentum/otros), esta es una prueba de concepto sobre solo 5 tickers: "
+            "pasa el mouse sobre el nombre de cada ticker para ver el nombre completo de la "
+            "empresa y una explicación de Beta/CAPM con los números reales de esa fila — "
+            "tooltip CSS puro (sin JavaScript), vía HTML insertado con st.markdown."
+        )
+
+        def _fmt(valor, formato: str) -> str:
+            return formato.format(valor) if pd.notna(valor) else "—"
+
+        tickers_poc = ["LTM", "SQM-B", "CHILE", "FALABELLA", "COPEC"]
+        filas_html_poc = []
+        for ticker in tickers_poc:
+            if ticker not in df_resumen.index:
+                continue
+            fila = df_resumen.loc[ticker]
+            beta = fila["Beta"] if pd.notna(fila["Beta"]) else None
+            beta_ajustada = fila["Beta ajustada"] if pd.notna(fila["Beta ajustada"]) else None
+            capm_local_valor = fila["CAPM local (%)"] if pd.notna(fila["CAPM local (%)"]) else None
+            capm_crp_valor = fila["CAPM + CRP (%)"] if pd.notna(fila["CAPM + CRP (%)"]) else None
+
+            nombre_completo = NOMBRE_COMPLETO_POR_TICKER.get(f"{ticker}.SN", ticker)
+            contenido_tooltip = (
+                f"<b>{nombre_completo}</b><br><br>"
+                + explicacion_beta(beta, beta_ajustada)
+                + "<br><br>"
+                + explicacion_capm(capm_local_valor, capm_crp_valor)
+            )
+            ticker_con_tooltip = tooltip_html(ticker, contenido_tooltip)
+
+            filas_html_poc.append(
+                "<tr>"
+                f"<td style='padding:6px;'>{ticker_con_tooltip}</td>"
+                f"<td style='padding:6px;'>{_fmt(fila['1D %'], '{:+.2f}%')}</td>"
+                f"<td style='padding:6px;'>{_fmt(beta, '{:.2f}')}</td>"
+                f"<td style='padding:6px;'>{_fmt(capm_local_valor, '{:.2f}%')}</td>"
+                "</tr>"
+            )
+
+        tabla_html_poc = (
+            TOOLTIP_CSS
+            + "<table style='width:100%; border-collapse: collapse; font-size: 0.9rem;'>"
+            + "<tr>"
+            + "<th style='text-align:left; padding:6px; border-bottom: 1px solid #4a4a4a;'>Ticker</th>"
+            + "<th style='text-align:left; padding:6px; border-bottom: 1px solid #4a4a4a;'>1D %</th>"
+            + "<th style='text-align:left; padding:6px; border-bottom: 1px solid #4a4a4a;'>Beta</th>"
+            + "<th style='text-align:left; padding:6px; border-bottom: 1px solid #4a4a4a;'>CAPM local</th>"
+            + "</tr>"
+            + "".join(filas_html_poc)
+            + "</table>"
+        )
+        st.markdown(tabla_html_poc, unsafe_allow_html=True)
 
         if capm_insumos["rf_cl"] is not None:
             spread_texto = (
