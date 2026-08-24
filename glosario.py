@@ -1,31 +1,117 @@
 """
 Glosario de tickers y plantillas de explicación educativa para los
-tooltips (hover) de los heatmaps de "Acciones IPSA" y "Acciones Dow
-Jones". Vive fuera de app/dashboard.py para no mezclar datos/plantillas
-con lógica de Streamlit, mismo criterio que market_data.py.
+tooltips (hover) integrados en los heatmaps de "Acciones IPSA" y
+"Acciones Dow Jones". Vive fuera de app/dashboard.py para no mezclar
+datos/plantillas con lógica de Streamlit, mismo criterio que
+market_data.py.
 
-FASE 1 (prueba de concepto): solo 5 tickers del IPSA (incluye LTM, a
-pedido explícito). Antes de escalar a los 63 restantes (25 del IPSA +
-30 del Dow Jones + Momentum/otros) hay que confirmar visualmente que el
-tooltip CSS puro (sin JavaScript) se ve bien dentro del render real de
-Streamlit — no todos los trucos de CSS (position: absolute, overflow)
-funcionan igual dentro de los contenedores propios de Streamlit.
+Los nombres completos son datos verificados (no inventados): los 30 del
+IPSA se cruzaron contra topforeignstocks.com/indices/components-of-the-
+chile-ipsa-index/ y una búsqueda específica para el caso ambiguo
+(ITAUCL: "Itaú Corpbanca" hasta 2023, renombrado a "Banco Itaú Chile" en
+marzo 2023 — se usa el nombre vigente). Los 30 del Dow Jones son
+empresas globales sin ambigüedad de nombre.
 
-Los nombres completos son datos verificables de empresas públicas
-chilenas, no inventados: LATAM Airlines, SQM, Banco de Chile, Falabella
-y Empresas Copec son emisores del IPSA ampliamente conocidos. Para los
-25 tickers restantes del IPSA (varios menos obvios, ej. ENELAM = Enel
-Américas, IAM = Inversiones Aguas Metropolitanas) habrá que verificar
-cada nombre antes de escalar — no se completan acá todavía.
+Deliberadamente NO incluye (fuera de alcance, a pedido explícito):
+- Expectativas de mercado / consenso de analistas: no hay una fuente
+  confiable de eso para acciones chilenas en este proyecto.
+- Atribución de shocks de noticias específica por acción individual:
+  requeriría una regresión por acción (30 modelos), no una frase.
+  explicacion_atribucion() conecta con el modelo ya construido
+  (market_data.calcular_atribucion_ipsa) solo a través de la Beta de la
+  fila — la relación general "Beta alta → se mueve más que el promedio
+  del mercado ante shocks globales", nunca una atribución inventada
+  para ESA acción puntual.
 """
 
 NOMBRE_COMPLETO_POR_TICKER: dict[str, str] = {
-    "LTM.SN": "LATAM Airlines Group S.A.",
-    "SQM-B.SN": "Sociedad Química y Minera de Chile S.A. (SQM), Serie B",
+    # --- IPSA (30) ---
+    "AGUAS-A.SN": "Aguas Andinas S.A.",
+    "ANDINA-B.SN": "Embotelladora Andina S.A. (Serie B)",
+    "BCI.SN": "Banco de Crédito e Inversiones (BCI)",
+    "BSANTANDER.SN": "Banco Santander Chile",
+    "CAP.SN": "CAP S.A.",
+    "CCU.SN": "Compañía Cervecerías Unidas S.A. (CCU)",
+    "CENCOMALLS.SN": "Cencosud Shopping Centers S.A.",
+    "CENCOSUD.SN": "Cencosud S.A.",
     "CHILE.SN": "Banco de Chile",
-    "FALABELLA.SN": "S.A.C.I. Falabella",
+    "CMPC.SN": "Empresas CMPC S.A.",
+    "COLBUN.SN": "Colbún S.A.",
+    "CONCHATORO.SN": "Viña Concha y Toro S.A.",
     "COPEC.SN": "Empresas Copec S.A.",
+    "ECL.SN": "Engie Energía Chile S.A.",
+    "ENELAM.SN": "Enel Américas S.A.",
+    "ENELCHILE.SN": "Enel Chile S.A.",
+    "ENTEL.SN": "Empresa Nacional de Telecomunicaciones S.A. (Entel)",
+    "FALABELLA.SN": "S.A.C.I. Falabella",
+    "IAM.SN": "IAM S.A. (Inversiones Aguas Metropolitanas)",
+    "ILC.SN": "Inversiones La Construcción S.A.",
+    "ITAUCL.SN": "Banco Itaú Chile",
+    "LTM.SN": "LATAM Airlines Group S.A.",
+    "MALLPLAZA.SN": "Plaza S.A. (Mallplaza)",
+    "PARAUCO.SN": "Parque Arauco S.A.",
+    "QUINENCO.SN": "Quiñenco S.A.",
+    "RIPLEY.SN": "Ripley Corp S.A.",
+    "SALFACORP.SN": "SalfaCorp S.A.",
+    "SMU.SN": "SMU S.A.",
+    "SQM-B.SN": "Sociedad Química y Minera de Chile S.A. (SQM), Serie B",
+    "VAPORES.SN": "Compañía Sud Americana de Vapores S.A. (CSAV)",
+    # --- Dow Jones (30) ---
+    "AAPL": "Apple Inc.",
+    "AMGN": "Amgen Inc.",
+    "AMZN": "Amazon.com, Inc.",
+    "AXP": "American Express Company",
+    "BA": "The Boeing Company",
+    "CAT": "Caterpillar Inc.",
+    "CRM": "Salesforce, Inc.",
+    "CSCO": "Cisco Systems, Inc.",
+    "CVX": "Chevron Corporation",
+    "DIS": "The Walt Disney Company",
+    "GOOGL": "Alphabet Inc. (Google)",
+    "GS": "The Goldman Sachs Group, Inc.",
+    "HD": "The Home Depot, Inc.",
+    "HON": "Honeywell International Inc.",
+    "IBM": "International Business Machines Corporation",
+    "JNJ": "Johnson & Johnson",
+    "JPM": "JPMorgan Chase & Co.",
+    "KO": "The Coca-Cola Company",
+    "MCD": "McDonald's Corporation",
+    "MMM": "3M Company",
+    "MRK": "Merck & Co., Inc.",
+    "MSFT": "Microsoft Corporation",
+    "NKE": "NIKE, Inc.",
+    "NVDA": "NVIDIA Corporation",
+    "PG": "The Procter & Gamble Company",
+    "SHW": "The Sherwin-Williams Company",
+    "TRV": "The Travelers Companies, Inc.",
+    "UNH": "UnitedHealth Group Incorporated",
+    "V": "Visa Inc.",
+    "WMT": "Walmart Inc.",
 }
+
+
+def nombre_completo(ticker_sn_o_plano: str) -> str:
+    """Busca el nombre completo probando primero el ticker tal cual (Dow
+    Jones, sin sufijo) y luego con sufijo ".SN" (IPSA, cuyo índice de
+    fila ya viene sin el sufijo). Si no está en el diccionario, devuelve
+    el ticker mismo — nunca inventa un nombre."""
+    if ticker_sn_o_plano in NOMBRE_COMPLETO_POR_TICKER:
+        return NOMBRE_COMPLETO_POR_TICKER[ticker_sn_o_plano]
+    return NOMBRE_COMPLETO_POR_TICKER.get(f"{ticker_sn_o_plano}.SN", ticker_sn_o_plano)
+
+
+def explicacion_rendimiento(cambio_1m: float | None) -> str:
+    """Rendimiento reciente en texto simple (requisito 2): una sola
+    línea, sin jerga — "esta acción subió/bajó X% en el último mes"."""
+    if cambio_1m is None:
+        return "Rendimiento del último mes no disponible todavía."
+    if cambio_1m > 0.05:
+        verbo = "subió"
+    elif cambio_1m < -0.05:
+        verbo = "bajó"
+    else:
+        verbo = "se mantuvo prácticamente igual"
+    return f"<b>Último mes:</b> esta acción {verbo} {abs(cambio_1m):.1f}% en el último mes."
 
 
 def explicacion_beta(beta: float | None, beta_ajustada: float | None = None) -> str:
@@ -50,7 +136,7 @@ def explicacion_beta(beta: float | None, beta_ajustada: float | None = None) -> 
         comparacion = "casi tan volátil como el mercado"
     return (
         f"<b>Beta = {beta:.2f}</b><br>"
-        f"Si el IPSA sube o baja 1%, esta acción tiende a moverse {beta:.2f}% — es "
+        f"Si el mercado sube o baja 1%, esta acción tiende a moverse {beta:.2f}% — es "
         f"{comparacion}. Mide el riesgo que no se elimina diversificando."
     )
 
@@ -66,6 +152,52 @@ def explicacion_capm(capm_local: float | None, capm_crp: float | None = None) ->
         f"Retorno anual mínimo que, según este modelo, debería exigir un inversionista "
         f"por el riesgo de esta acción. Si no rinde al menos {capm_local:.2f}% al año en "
         "el largo plazo, no compensa ese riesgo."
+    )
+
+
+def explicacion_volatilidad(volatilidad_anualizada: float | None) -> str:
+    """Volatilidad explicada como "propensión a sorpresas" (requisito
+    4), con el número real de la fila. Los umbrales alta/moderada/baja
+    son una referencia cualitativa simple para el nivel "recién
+    aprendiendo el concepto", no una clasificación estadística formal."""
+    if volatilidad_anualizada is None:
+        return "Volatilidad no disponible todavía."
+    if volatilidad_anualizada > 35:
+        nivel = "alta"
+    elif volatilidad_anualizada > 20:
+        nivel = "moderada"
+    else:
+        nivel = "baja"
+    return (
+        f"<b>Volatilidad = {volatilidad_anualizada:.1f}%</b><br>"
+        f"Qué tan propensa es esta acción a movimientos inesperados o sorpresivos en el "
+        f"precio — acá es {nivel}. No dice si va a subir o bajar, solo cuánto puede saltar."
+    )
+
+
+def explicacion_atribucion(beta: float | None) -> str:
+    """Conecta con el modelo de atribución multi-factor del IPSA
+    (market_data.calcular_atribucion_ipsa) SOLO a través de la relación
+    general que da la Beta de esta fila — nunca una atribución
+    específica para esta acción puntual (eso requeriría una regresión
+    por acción, fuera de alcance). Pensada solo para el heatmap de
+    Acciones IPSA: el modelo de atribución existente es específico del
+    mercado chileno (cobre, S&P 500, USD/CLP explicando a ECH), así que
+    no aplica de la misma forma a una acción del Dow Jones — el
+    llamador simplemente no incluye este bloque para esa tabla."""
+    if beta is None:
+        return ""
+    if beta > 1.05:
+        relacion = "MÁS que el promedio del mercado"
+    elif beta < 0.95:
+        relacion = "MENOS que el promedio del mercado"
+    else:
+        relacion = "aproximadamente igual al promedio del mercado"
+    return (
+        "<b>Relación con factores globales</b><br>"
+        "Cuando el mercado chileno se mueve por factores globales (cobre, S&P 500 — ver "
+        f"pestaña \"Atribución IPSA\"), una acción con Beta {beta:.2f} como esta tiende a "
+        f"moverse {relacion} en esos mismos movimientos."
     )
 
 
@@ -90,23 +222,61 @@ def tooltip_html(texto_visible: str, contenido_html: str) -> str:
 # principal, no en un iframe aislado — pero los contenedores propios de
 # Streamlit (stMain, stAppViewContainer) SÍ tienen overflow: auto/hidden,
 # así que un tooltip demasiado alto puede salirse del viewport hacia
-# arriba en filas cercanas al borde superior (visto en la primera versión,
-# con Beta+Beta ajustada+CAPM+CRP juntos: ~650px de alto). max-height +
-# overflow-y:auto acá es el resguardo para eso; el contenido real (nombre +
-# Beta + CAPM, ya acortados) mide ~286px con este ancho de 260px, medido
-# con Playwright (scrollHeight) contra la app corriendo — max-height:300px
-# le da margen sin necesitar scroll dentro del tooltip (que sería
-# inutilizable: el tooltip desaparece apenas el mouse deja de estar
-# encima, así que pedirle al usuario que además haga scroll ahí adentro
-# no funciona en la práctica).
+# arriba en filas cercanas al borde superior (visto en la primera versión
+# de la prueba de concepto, con Beta+Beta ajustada+CAPM+CRP juntos: ~650px
+# de alto). max-height + overflow-y:auto acá es el resguardo para eso.
+#
+# La versión integrada en la tabla real (5-6 bloques: nombre, rendimiento,
+# Beta, CAPM, volatilidad, y para IPSA también atribución) tiene más
+# contenido que la prueba de concepto de 5 tickers. Se remidió con
+# Playwright contra la app corriendo, LAS 60 ACCIONES UNA POR UNA (30
+# IPSA + 30 Dow Jones, no una muestra) comparando scrollHeight contra
+# clientHeight de cada tooltip: el máximo real observado fue 528px
+# (BCI, IPSA) con este ancho de 340px — max-height:560px le da margen
+# sin necesitar scroll dentro del tooltip (que sería inutilizable: el
+# tooltip desaparece apenas el mouse deja de estar encima). Se subió el
+# ancho de 280 a 340px a propósito para achicar la altura total (menos
+# líneas por bloque), no solo por estética.
+#
+# Límite conocido, no resuelto (inherente a CSS puro sin JS): el tooltip
+# se centra verticalmente sobre la fila (top:50% + translateY(-50%)), así
+# que en una fila muy cerca del borde superior o inferior de la ventana
+# visible, una porción del tooltip (hasta ~530px de alto) puede quedar
+# fuera de esa ventana. No es lo mismo que los dos bugs de recorte de
+# arriba (ese contenido SIGUE en el DOM, no lo tapa un overflow:hidden
+# ajeno) — pero en la práctica el usuario no puede "scrollear para verlo"
+# sin perder el :hover, porque mover la rueda del mouse mueve el
+# contenido bajo un cursor que se queda fijo en pantalla (confirmado
+# programáticamente: tras un scroll, el tooltip pasa a visibility:hidden
+# porque el mouse deja de estar sobre el ticker). Arreglarlo bien
+# (reposicionar el tooltip según el espacio disponible) requeriría
+# JavaScript, explícitamente descartado. Mitigación aplicada: se acortó
+# el contenido y se ensanchó el tooltip para reducir su alto lo más
+# posible; el resto queda como limitación conocida y documentada, no
+# como algo que se dio por resuelto sin serlo.
 #
 # Anclado a la DERECHA del ticker (no centrado arriba): la columna de
 # Ticker es la más a la izquierda de la tabla, pegada al sidebar — un
 # tooltip centrado (left:50% + translateX(-50%)) se corta contra el borde
 # del sidebar y deja el principio del texto ilegible (confirmado con
-# screenshot real: "LATAM Airlines..." se veía cortado como "AM
-# Airlines..."). Abrir hacia la derecha usa el espacio ancho de la propia
-# tabla en vez de chocar con el sidebar.
+# screenshot real en la prueba de concepto: "LATAM Airlines..." se veía
+# cortado como "AM Airlines..."). Abrir hacia la derecha usa el espacio
+# ancho de la propia tabla en vez de chocar con el sidebar.
+#
+# white-space: normal es obligatorio acá: las celdas <td> de la tabla
+# (ver app/dashboard.py) usan white-space:nowrap para que el nombre del
+# ticker nunca se corte a mitad de palabra, y white-space se HEREDA por
+# defecto — sin este reset, el tooltip (que vive DENTRO de un <td>)
+# heredaba nowrap y el texto de cada bloque salía como una sola línea
+# larga cortada en el borde del box en vez de hacer word-wrap. Encontrado
+# con un screenshot real después de escalar a 5-6 bloques de contenido
+# (con el tooltip corto de la prueba de concepto no se notaba tanto,
+# porque una sola línea de texto cabía igual sin wrap visible).
+#
+# Tampoco se envuelve la tabla en un <div overflow-x:auto> (ver
+# _renderizar_heatmap_con_tooltips en app/dashboard.py) — esa combinación
+# recortaba el tooltip verticalmente, otro bug real que solo apareció al
+# escalar de 5 tickers en una mini-tabla a la tabla completa de 30.
 TOOLTIP_CSS = """
 <style>
 .glosario-tooltip {
@@ -117,12 +287,13 @@ TOOLTIP_CSS = """
 .glosario-tooltip .glosario-tooltip-texto {
     visibility: hidden;
     opacity: 0;
-    width: 260px;
-    max-height: 320px;
+    width: 340px;
+    max-height: 560px;
     overflow-y: auto;
     background-color: #262730;
     color: #fafafa;
     text-align: left;
+    white-space: normal;
     border-radius: 6px;
     padding: 10px 12px;
     position: absolute;
@@ -134,8 +305,13 @@ TOOLTIP_CSS = """
     transition: opacity 0.15s ease-in-out;
     font-size: 0.82rem;
     font-weight: 400;
-    line-height: 1.45;
+    line-height: 1.4;
     box-shadow: 0 2px 10px rgba(0, 0, 0, 0.35);
+}
+.glosario-tooltip .glosario-tooltip-texto hr {
+    border: none;
+    border-top: 1px solid #3d3e47;
+    margin: 8px 0;
 }
 .glosario-tooltip:hover .glosario-tooltip-texto {
     visibility: visible;

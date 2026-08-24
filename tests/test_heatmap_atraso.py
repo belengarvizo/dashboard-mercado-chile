@@ -5,6 +5,13 @@ numero de dias coincida con un calculo independiente hecho directo contra
 la base de datos (no reutiliza ninguna funcion de app/dashboard.py, para
 que la comparacion sea real y no circular).
 
+El heatmap ahora se renderiza como una tabla HTML propia (st.markdown),
+no un st.dataframe, para poder integrar los tooltips educativos en el
+nombre de cada ticker -- este test parsea esa tabla con
+tests._html_table_utils.parsear_tabla_heatmap (BeautifulSoup) en vez de
+buscarla en at.dataframe o usar pd.read_html directo (que concatena el
+texto oculto del tooltip con el del ticker, ver ese módulo).
+
 Corre la app COMPLETA vía streamlit.testing.v1.AppTest porque el pedido
 original fue validar lo que la UI realmente renderiza, no solo la funcion
 de calculo por separado.
@@ -19,6 +26,7 @@ import pandas as pd
 from streamlit.testing.v1 import AppTest
 
 from models import get_session, PrecioAccion
+from tests._html_table_utils import parsear_tabla_heatmap
 
 DASHBOARD_PATH = os.path.join(os.path.dirname(__file__), "..", "app", "dashboard.py")
 
@@ -47,21 +55,31 @@ def _atraso_manual(ticker: str) -> tuple[str, int, bool]:
     return texto, dias, atrasado
 
 
+def _tablas_heatmap_html():
+    """Corre la app y devuelve todas las tablas HTML de heatmap (las que
+    tienen tooltips + columna 'Atraso'), ya parseadas a DataFrame."""
+    at = AppTest.from_file(DASHBOARD_PATH, default_timeout=300).run(timeout=300)
+    assert not at.exception, f"La app lanzo una excepcion al correr: {at.exception}"
+
+    tablas = []
+    for elem in at.markdown:
+        html = elem.value
+        if "glosario-tooltip" in html and ">Atraso<" in html:
+            tablas.append(parsear_tabla_heatmap(html))
+    assert tablas, "No se encontro ningun heatmap con tooltips y columna 'Atraso' en la app"
+    return tablas
+
+
 def test_columna_atraso_ipsa_falabella_coincide_con_calculo_manual():
     texto_esperado, dias_esperados, atrasado_esperado = _atraso_manual("FALABELLA.SN")
     assert atrasado_esperado, "Esta prueba asume que FALABELLA sigue con el apagon de Yahoo activo"
 
-    at = AppTest.from_file(DASHBOARD_PATH, default_timeout=300).run(timeout=300)
-    assert not at.exception, f"La app lanzo una excepcion al correr: {at.exception}"
-
     df_heatmap = None
-    for elem in at.dataframe:
-        valor = elem.value
-        datos = valor.data if hasattr(valor, "data") else valor
-        if isinstance(datos, pd.DataFrame) and "Atraso" in datos.columns and "FALABELLA" in datos.index:
-            df_heatmap = datos
+    for df in _tablas_heatmap_html():
+        if "FALABELLA" in df.index:
+            df_heatmap = df
             break
-    assert df_heatmap is not None, "No se encontro el heatmap de Acciones IPSA con columna 'Atraso' en la app"
+    assert df_heatmap is not None, "No se encontro el heatmap de Acciones IPSA (con FALABELLA) en la app"
 
     texto_app = df_heatmap.loc["FALABELLA", "Atraso"]
     print(f"FALABELLA -> app: {texto_app!r} | manual (BD directa): {texto_esperado!r}")
@@ -71,14 +89,8 @@ def test_columna_atraso_ipsa_falabella_coincide_con_calculo_manual():
 
 def test_columna_atraso_no_usa_cero_dias_confuso():
     """Un ticker sin atraso debe decir "Al día", nunca "0 días"."""
-    at = AppTest.from_file(DASHBOARD_PATH, default_timeout=300).run(timeout=300)
-    assert not at.exception, f"La app lanzo una excepcion al correr: {at.exception}"
-
-    for elem in at.dataframe:
-        valor = elem.value
-        datos = valor.data if hasattr(valor, "data") else valor
-        if isinstance(datos, pd.DataFrame) and "Atraso" in datos.columns:
-            assert not datos["Atraso"].astype(str).str.contains("0 días").any()
+    for df in _tablas_heatmap_html():
+        assert not df["Atraso"].astype(str).str.contains("0 días").any()
 
 
 if __name__ == "__main__":

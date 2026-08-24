@@ -90,6 +90,17 @@ El dashboard tiene 8 pestañas:
    puede implicar doble conteo del riesgo país (el Beta y la Rf locales ya
    lo capturan en parte implícitamente). Es una aproximación al estilo
    Damodaran, no el EMBI+ oficial (que requiere una fuente de pago).
+
+   **Tooltips educativos:** pasando el mouse sobre el nombre de cada ticker
+   del heatmap aparece un tooltip (`glosario.py`) con el nombre completo de
+   la empresa, su rendimiento del último mes en texto simple, y Beta/CAPM/
+   volatilidad explicados en 2-3 líneas cada uno con los números reales de
+   esa fila — más una frase que conecta la Beta de la fila con el modelo de
+   "Atribución IPSA" (punto 4), sin inventar una atribución específica para
+   esa acción puntual. Es CSS puro (`:hover`, sin JavaScript) insertado vía
+   `st.markdown`, porque `st.dataframe` no soporta HTML dentro de las
+   celdas — el heatmap completo se arma como tabla HTML propia en vez de un
+   `Styler` de pandas, reproduciendo a mano el color de fondo por gradiente.
 4. **Atribución IPSA** — atribución multi-factor del retorno diario de ECH
    (proxy del IPSA — no un ticker `.SN`, así que no le afecta el apagón de
    Yahoo Finance para el mercado chileno, verificado con datos reales):
@@ -121,7 +132,9 @@ El dashboard tiene 8 pestañas:
    diferencia del IPSA sí tiene ticker propio en Yahoo Finance. El CAPM usa
    como Rf la Effective Federal Funds Rate (TPM EEUU) y una sola versión (sin
    la distinción "local" vs. "+ CRP" del IPSA): no aplica una prima de riesgo
-   país de EEUU respecto a sí mismo.
+   país de EEUU respecto a sí mismo. También tiene los tooltips educativos
+   por ticker (ver punto 3) — sin la frase de atribución multi-factor, que
+   es específica del mercado chileno.
 6. **Riesgo** — Value at Risk (VaR) histórico y paramétrico, a 95% y 99%, para
    las 5 acciones principales y un portafolio hipotético equiponderado, sobre
    los últimos ~2 años (mismo filtro de días congelados); y una matriz de

@@ -48,7 +48,16 @@ from market_data import (
     INDICADORES_PREMERCADO,
 )
 from calendario_economico import proximos_eventos, NOTA_VIGENCIA, INDICADOR_POR_TIPO, CALENDARIO_VERIFICADO_AL
-from glosario import NOMBRE_COMPLETO_POR_TICKER, explicacion_beta, explicacion_capm, tooltip_html, TOOLTIP_CSS
+from glosario import (
+    nombre_completo,
+    explicacion_rendimiento,
+    explicacion_beta,
+    explicacion_capm,
+    explicacion_volatilidad,
+    explicacion_atribucion,
+    tooltip_html,
+    TOOLTIP_CSS,
+)
 
 st.set_page_config(page_title="Mercado Económico Chileno", layout="wide")
 
@@ -265,6 +274,114 @@ def _texto_atraso(atrasado: bool, dias_habiles_atraso: int) -> str:
     if atrasado:
         return f"Precio congelado — {dias_habiles_atraso} días hábiles"
     return "Al día"
+
+
+def _color_gradiente_hex(cmap, valor, vmin, vmax) -> str | None:
+    """Replica a mano el color que Styler.background_gradient() calcularía
+    para `valor` dentro de [vmin, vmax] con el colormap `cmap` — necesario
+    porque st.dataframe() (el renderer real de la tabla) no soporta HTML
+    dentro de las celdas, así que el heatmap con tooltips se arma como HTML
+    propio en vez de con un Styler, y hay que reproducir el color a mano."""
+    if pd.isna(valor) or vmax == vmin:
+        return None
+    fraccion = (valor - vmin) / (vmax - vmin)
+    fraccion = min(max(fraccion, 0.0), 1.0)
+    r, g, b, _a = cmap(fraccion)
+    return f"rgb({int(r * 255)}, {int(g * 255)}, {int(b * 255)})"
+
+
+def _armar_tooltip(bloques: list) -> str:
+    """Une los bloques de un tooltip (nombre + explicaciones) con un
+    separador visual, saltándose los que vinieron vacíos (ej.
+    explicacion_atribucion() cuando no hay Beta disponible)."""
+    return "<hr>".join(bloque for bloque in bloques if bloque)
+
+
+def _renderizar_heatmap_con_tooltips(
+    df_resumen: pd.DataFrame,
+    columnas_pct: list,
+    columnas_secuenciales: list,
+    formato: dict,
+    construir_tooltip,
+) -> str:
+    """Arma el heatmap de desempeño completo como una tabla HTML propia
+    (en vez de un Styler + st.dataframe), para poder poner un tooltip con
+    :hover en el nombre de cada ticker DENTRO de la misma tabla —
+    st.dataframe no permite HTML arbitrario en las celdas, es justo lo que
+    forzó a la versión anterior a mostrar los tooltips en una tabla aparte.
+
+    Reproduce a mano el color de fondo que antes hacía
+    Styler.background_gradient(): divergente compartido (-max_abs,
+    +max_abs, calculado sobre TODAS las columnas de columnas_pct juntas)
+    para columnas_pct, y secuencial POR COLUMNA (su propio min/max — mismo
+    comportamiento por defecto de Styler cuando no se le pasa vmin/vmax)
+    para columnas_secuenciales. Las filas atrasadas (`_atrasado_bool`)
+    grisan texto y anulan el color de fondo, igual que antes.
+
+    `construir_tooltip(ticker, fila)` arma el contenido HTML del tooltip
+    para esa fila — lo decide quien llama, porque el IPSA y el Dow Jones
+    quieren contenido distinto (el Dow Jones no conecta con el modelo de
+    atribución del IPSA, que no le aplica)."""
+    max_abs = df_resumen[columnas_pct].abs().max().max()
+    max_abs = max_abs if pd.notna(max_abs) and max_abs > 0 else 1
+    minmax_secuencial = {
+        col: (df_resumen[col].min(), df_resumen[col].max()) for col in columnas_secuenciales
+    }
+    columnas_mostradas = [c for c in df_resumen.columns if c != "_atrasado_bool"]
+
+    filas_html = []
+    for ticker, fila in df_resumen.iterrows():
+        atrasado = bool(fila["_atrasado_bool"])
+        estilo_texto = "color:#898781;" if atrasado else ""
+
+        tooltip_contenido = construir_tooltip(ticker, fila)
+        celda_ticker = tooltip_html(ticker, tooltip_contenido) if tooltip_contenido else ticker
+        celdas = [f"<td style='padding:6px 10px; white-space:nowrap; {estilo_texto}'>{celda_ticker}</td>"]
+
+        for columna in columnas_mostradas:
+            valor = fila[columna]
+            fondo = ""
+            if not atrasado:
+                color = None
+                if columna in columnas_pct:
+                    color = _color_gradiente_hex(CMAP_DIVERGENTE, valor, -max_abs, max_abs)
+                elif columna in columnas_secuenciales:
+                    vmin, vmax = minmax_secuencial[columna]
+                    color = _color_gradiente_hex(CMAP_SECUENCIAL, valor, vmin, vmax)
+                if color:
+                    fondo = f"background-color:{color};"
+            if columna in formato and pd.notna(valor):
+                texto = formato[columna].format(valor)
+            elif pd.isna(valor):
+                texto = "—"
+            else:
+                texto = str(valor)
+            celdas.append(f"<td style='padding:6px 10px; white-space:nowrap; {estilo_texto}{fondo}'>{texto}</td>")
+
+        filas_html.append(f"<tr>{''.join(celdas)}</tr>")
+
+    encabezado = "".join(
+        f"<th style='text-align:left; padding:6px 10px; border-bottom:1px solid #4a4a4a; white-space:nowrap;'>{c}</th>"
+        for c in ["Ticker"] + columnas_mostradas
+    )
+
+    # Nota deliberada: NO se envuelve la tabla en un <div style="overflow-x:
+    # auto"> (el patrón habitual para tablas anchas). Un div con overflow-x
+    # distinto de "visible" fuerza a overflow-y a pasar a "auto" también
+    # (regla del spec CSS: si un eje es "visible" y el otro no, el eje
+    # "visible" se fuerza a "auto") — eso recorta verticalmente cualquier
+    # tooltip position:absolute que intente sobresalir de esa fila,
+    # confirmado con un screenshot real (el tooltip de AGUAS-A aparecía con
+    # las primeras líneas cortadas). Sin el wrapper, la tabla puede empujar
+    # el ancho de la página en vez de scrollear horizontalmente sola — un
+    # trade-off aceptado a propósito para que los tooltips no se corten.
+    return (
+        TOOLTIP_CSS
+        + "<table style='width:100%; border-collapse:collapse; font-size:0.88rem;'>"
+        + f"<tr>{encabezado}</tr>"
+        + "".join(filas_html)
+        + "</table>"
+    )
 
 
 @st.cache_data(ttl=3600)
@@ -1051,8 +1168,6 @@ with tab_acciones:
 
         columnas_pct = ["1D %", "1W %", "1M %", "YTD %"]
         columnas_capm = ["CAPM local (%)", "CAPM + CRP (%)"]
-        max_abs = df_resumen[columnas_pct].abs().max().max()
-        max_abs = max_abs if pd.notna(max_abs) and max_abs > 0 else 1
 
         formato = {col: "{:+.2f}%" for col in columnas_pct}
         formato["Beta"] = "{:.2f}"
@@ -1061,23 +1176,29 @@ with tab_acciones:
         formato["CAPM local (%)"] = "{:.2f}%"
         formato["CAPM + CRP (%)"] = "{:.2f}%"
 
-        def marcar_datos_atrasados(fila):
-            # Si el último dato "real" del ticker tiene más de 5 días hábiles de
-            # atraso, se grisa toda la fila (y se anula el color del heatmap) para
-            # no dar una falsa sensación de precisión en un % que no se actualizó.
-            if fila["_atrasado_bool"]:
-                return ["color: #898781; background-color: transparent"] * len(fila)
-            return [""] * len(fila)
+        def _tooltip_ipsa(ticker: str, fila: pd.Series) -> str:
+            beta = fila["Beta"] if pd.notna(fila["Beta"]) else None
+            beta_ajustada = fila["Beta ajustada"] if pd.notna(fila["Beta ajustada"]) else None
+            return _armar_tooltip([
+                f"<b>{nombre_completo(ticker)}</b>",
+                explicacion_rendimiento(fila["1M %"] if pd.notna(fila["1M %"]) else None),
+                explicacion_beta(beta, beta_ajustada),
+                explicacion_capm(
+                    fila["CAPM local (%)"] if pd.notna(fila["CAPM local (%)"]) else None,
+                    fila["CAPM + CRP (%)"] if pd.notna(fila["CAPM + CRP (%)"]) else None,
+                ),
+                explicacion_volatilidad(
+                    fila["Volatilidad anualizada (%)"] if pd.notna(fila["Volatilidad anualizada (%)"]) else None
+                ),
+                explicacion_atribucion(beta),
+            ])
 
-        estilo = (
-            df_resumen.style
-            .background_gradient(cmap=CMAP_DIVERGENTE, subset=columnas_pct, vmin=-max_abs, vmax=max_abs)
-            .background_gradient(cmap=CMAP_SECUENCIAL, subset=["Volatilidad anualizada (%)"] + columnas_capm)
-            .apply(marcar_datos_atrasados, axis=1)
-            .format(formato, na_rep="—")
-            .hide(["_atrasado_bool"], axis="columns")
+        st.markdown(
+            _renderizar_heatmap_con_tooltips(
+                df_resumen, columnas_pct, ["Volatilidad anualizada (%)"] + columnas_capm, formato, _tooltip_ipsa,
+            ),
+            unsafe_allow_html=True,
         )
-        st.dataframe(estilo, use_container_width=True)
         st.caption(
             "Volatilidad anualizada: rolling 21 días hábiles de retornos diarios × √252, "
             "excluyendo días de precio congelado (mismo criterio que \"Atraso\"). "
@@ -1090,64 +1211,11 @@ with tab_acciones:
             "La columna \"Atraso\" muestra \"Precio congelado — N días hábiles\" cuando Yahoo "
             "Finance no refrescó el precio de ese ticker hace más de 5 días hábiles (contados "
             "desde la última fecha con cambio real de precio) — el % de cambio mostrado no es "
-            "confiable en ese caso."
+            "confiable en ese caso. Pasa el mouse sobre el nombre de cada ticker para ver el "
+            "nombre completo de la empresa y una explicación en simple de su rendimiento "
+            "reciente, Beta, CAPM, volatilidad, y su relación con el modelo de atribución "
+            "multi-factor (pestaña \"Atribución IPSA\") — con los números reales de esa fila."
         )
-
-        st.divider()
-        st.subheader("🧪 Prueba de concepto: tooltips educativos")
-        st.caption(
-            "Antes de escalar esto a las 63 acciones/tickers del dashboard (30 IPSA + 30 Dow "
-            "Jones + Momentum/otros), esta es una prueba de concepto sobre solo 5 tickers: "
-            "pasa el mouse sobre el nombre de cada ticker para ver el nombre completo de la "
-            "empresa y una explicación de Beta/CAPM con los números reales de esa fila — "
-            "tooltip CSS puro (sin JavaScript), vía HTML insertado con st.markdown."
-        )
-
-        def _fmt(valor, formato: str) -> str:
-            return formato.format(valor) if pd.notna(valor) else "—"
-
-        tickers_poc = ["LTM", "SQM-B", "CHILE", "FALABELLA", "COPEC"]
-        filas_html_poc = []
-        for ticker in tickers_poc:
-            if ticker not in df_resumen.index:
-                continue
-            fila = df_resumen.loc[ticker]
-            beta = fila["Beta"] if pd.notna(fila["Beta"]) else None
-            beta_ajustada = fila["Beta ajustada"] if pd.notna(fila["Beta ajustada"]) else None
-            capm_local_valor = fila["CAPM local (%)"] if pd.notna(fila["CAPM local (%)"]) else None
-            capm_crp_valor = fila["CAPM + CRP (%)"] if pd.notna(fila["CAPM + CRP (%)"]) else None
-
-            nombre_completo = NOMBRE_COMPLETO_POR_TICKER.get(f"{ticker}.SN", ticker)
-            contenido_tooltip = (
-                f"<b>{nombre_completo}</b><br><br>"
-                + explicacion_beta(beta, beta_ajustada)
-                + "<br><br>"
-                + explicacion_capm(capm_local_valor, capm_crp_valor)
-            )
-            ticker_con_tooltip = tooltip_html(ticker, contenido_tooltip)
-
-            filas_html_poc.append(
-                "<tr>"
-                f"<td style='padding:6px;'>{ticker_con_tooltip}</td>"
-                f"<td style='padding:6px;'>{_fmt(fila['1D %'], '{:+.2f}%')}</td>"
-                f"<td style='padding:6px;'>{_fmt(beta, '{:.2f}')}</td>"
-                f"<td style='padding:6px;'>{_fmt(capm_local_valor, '{:.2f}%')}</td>"
-                "</tr>"
-            )
-
-        tabla_html_poc = (
-            TOOLTIP_CSS
-            + "<table style='width:100%; border-collapse: collapse; font-size: 0.9rem;'>"
-            + "<tr>"
-            + "<th style='text-align:left; padding:6px; border-bottom: 1px solid #4a4a4a;'>Ticker</th>"
-            + "<th style='text-align:left; padding:6px; border-bottom: 1px solid #4a4a4a;'>1D %</th>"
-            + "<th style='text-align:left; padding:6px; border-bottom: 1px solid #4a4a4a;'>Beta</th>"
-            + "<th style='text-align:left; padding:6px; border-bottom: 1px solid #4a4a4a;'>CAPM local</th>"
-            + "</tr>"
-            + "".join(filas_html_poc)
-            + "</table>"
-        )
-        st.markdown(tabla_html_poc, unsafe_allow_html=True)
 
         if capm_insumos["rf_cl"] is not None:
             spread_texto = (
@@ -1387,8 +1455,6 @@ with tab_acciones_dow:
         df_resumen_dow = calcular_resumen_dow_jones(df_acciones, df_macro)
 
         columnas_pct_dow = ["1D %", "1W %", "1M %", "YTD %"]
-        max_abs_dow = df_resumen_dow[columnas_pct_dow].abs().max().max()
-        max_abs_dow = max_abs_dow if pd.notna(max_abs_dow) and max_abs_dow > 0 else 1
 
         formato_dow = {col: "{:+.2f}%" for col in columnas_pct_dow}
         formato_dow["Beta"] = "{:.2f}"
@@ -1396,20 +1462,30 @@ with tab_acciones_dow:
         formato_dow["Volatilidad anualizada (%)"] = "{:.2f}%"
         formato_dow["CAPM (%)"] = "{:.2f}%"
 
-        def marcar_datos_atrasados_dow(fila):
-            if fila["_atrasado_bool"]:
-                return ["color: #898781; background-color: transparent"] * len(fila)
-            return [""] * len(fila)
+        def _tooltip_dow(ticker: str, fila: pd.Series) -> str:
+            # Sin bloque de atribución: el modelo de atribución multi-factor
+            # (market_data.calcular_atribucion_ipsa) es específico del mercado
+            # chileno (cobre, S&P 500, USD/CLP explicando a ECH) y no le
+            # aplica a una acción del Dow Jones de la misma forma.
+            return _armar_tooltip([
+                f"<b>{nombre_completo(ticker)}</b>",
+                explicacion_rendimiento(fila["1M %"] if pd.notna(fila["1M %"]) else None),
+                explicacion_beta(
+                    fila["Beta"] if pd.notna(fila["Beta"]) else None,
+                    fila["Beta ajustada"] if pd.notna(fila["Beta ajustada"]) else None,
+                ),
+                explicacion_capm(fila["CAPM (%)"] if pd.notna(fila["CAPM (%)"]) else None),
+                explicacion_volatilidad(
+                    fila["Volatilidad anualizada (%)"] if pd.notna(fila["Volatilidad anualizada (%)"]) else None
+                ),
+            ])
 
-        estilo_dow = (
-            df_resumen_dow.style
-            .background_gradient(cmap=CMAP_DIVERGENTE, subset=columnas_pct_dow, vmin=-max_abs_dow, vmax=max_abs_dow)
-            .background_gradient(cmap=CMAP_SECUENCIAL, subset=["Volatilidad anualizada (%)", "CAPM (%)"])
-            .apply(marcar_datos_atrasados_dow, axis=1)
-            .format(formato_dow, na_rep="—")
-            .hide(["_atrasado_bool"], axis="columns")
+        st.markdown(
+            _renderizar_heatmap_con_tooltips(
+                df_resumen_dow, columnas_pct_dow, ["Volatilidad anualizada (%)", "CAPM (%)"], formato_dow, _tooltip_dow,
+            ),
+            unsafe_allow_html=True,
         )
-        st.dataframe(estilo_dow, use_container_width=True)
         st.caption(
             "Volatilidad anualizada: rolling 21 días hábiles de retornos diarios × √252, "
             "excluyendo días de precio congelado (mismo criterio que \"Atraso\"). "
@@ -1423,7 +1499,9 @@ with tab_acciones_dow:
             "La columna \"Atraso\" muestra \"Precio congelado — N días hábiles\" cuando Yahoo "
             "Finance no refrescó el precio de ese ticker hace más de 5 días hábiles (contados "
             "desde la última fecha con cambio real de precio) — el % de cambio mostrado no es "
-            "confiable en ese caso."
+            "confiable en ese caso. Pasa el mouse sobre el nombre de cada ticker para ver el "
+            "nombre completo de la empresa y una explicación en simple de su rendimiento "
+            "reciente, Beta, CAPM y volatilidad, con los números reales de esa fila."
         )
 
     except Exception as e:
