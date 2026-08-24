@@ -5,7 +5,7 @@ Usamos SQLAlchemy para no escribir SQL a mano.
 
 import os
 from dotenv import load_dotenv
-from sqlalchemy import create_engine, Column, Integer, String, Date, Numeric, BigInteger, DateTime, Text
+from sqlalchemy import create_engine, Column, Integer, String, Date, Numeric, BigInteger, DateTime, Text, Index
 from sqlalchemy.orm import declarative_base, sessionmaker
 
 load_dotenv()
@@ -28,6 +28,16 @@ class SerieMacro(Base):
 class PrecioAccion(Base):
     """Precios históricos de acciones del IPSA vía Yahoo Finance."""
     __tablename__ = "precios_acciones"
+    # Índice compuesto (ticker, fecha): es el filtro que usa CASI toda
+    # consulta a esta tabla (dashboard.py, market_data.py,
+    # guardar_historico en actualizar_acciones.py). Sin él, cada consulta
+    # por ticker hace un Seq Scan sobre toda la tabla (ya 205.874 filas y
+    # creciendo ~164 filas/día) — confirmado con EXPLAIN ANALYZE antes de
+    # agregar esto, no asumido: filtraba 204.625 de 205.874 filas por
+    # consulta. Es la causa más probable de que guardar_historico() tarde
+    # segundos por ticker en vez de milisegundos durante la actualización
+    # diaria de precios.
+    __table_args__ = (Index("ix_precios_acciones_ticker_fecha", "ticker", "fecha"),)
 
     id = Column(Integer, primary_key=True)
     ticker = Column(String, nullable=False)

@@ -25,6 +25,7 @@ import numpy as np
 import pandas as pd
 from streamlit.testing.v1 import AppTest
 
+from constants import TICKERS_IPSA
 from models import get_session, PrecioAccion
 from tests._html_table_utils import parsear_tabla_heatmap
 
@@ -70,21 +71,33 @@ def _tablas_heatmap_html():
     return tablas
 
 
-def test_columna_atraso_ipsa_falabella_coincide_con_calculo_manual():
-    texto_esperado, dias_esperados, atrasado_esperado = _atraso_manual("FALABELLA.SN")
-    assert atrasado_esperado, "Esta prueba asume que FALABELLA sigue con el apagon de Yahoo activo"
-
+def test_columna_atraso_ipsa_coincide_con_calculo_manual_para_todos_los_tickers():
+    """Antes esta prueba asumía que FALABELLA específicamente estaba
+    atrasada (cierto mientras duró el apagón de Yahoo Finance documentado
+    en esta conversación). Esa suposición dejó de ser cierta apenas se
+    resolvió el apagón — lo cual es exactamente el comportamiento
+    correcto, no una falla — así que en vez de fijar un ticker
+    específico, se compara CADA una de las 30 acciones del IPSA contra el
+    cálculo manual: la prueba es válida sin importar cuántas (o ninguna)
+    estén atrasadas en el momento de correrla."""
     df_heatmap = None
     for df in _tablas_heatmap_html():
-        if "FALABELLA" in df.index:
+        if all(t.replace(".SN", "") in df.index for t in TICKERS_IPSA):
             df_heatmap = df
             break
-    assert df_heatmap is not None, "No se encontro el heatmap de Acciones IPSA (con FALABELLA) en la app"
+    assert df_heatmap is not None, "No se encontro el heatmap de Acciones IPSA (con las 30 acciones) en la app"
 
-    texto_app = df_heatmap.loc["FALABELLA", "Atraso"]
-    print(f"FALABELLA -> app: {texto_app!r} | manual (BD directa): {texto_esperado!r}")
-    assert texto_app == texto_esperado
-    assert f"{dias_esperados} días hábiles" in texto_app
+    n_atrasados = 0
+    for ticker_sn in TICKERS_IPSA:
+        ticker = ticker_sn.replace(".SN", "")
+        texto_esperado, dias_esperados, atrasado_esperado = _atraso_manual(ticker_sn)
+        texto_app = df_heatmap.loc[ticker, "Atraso"]
+        assert texto_app == texto_esperado, f"{ticker}: app={texto_app!r} vs manual={texto_esperado!r}"
+        if atrasado_esperado:
+            n_atrasados += 1
+            assert f"{dias_esperados} días hábiles" in texto_app
+
+    print(f"Las 30 acciones del IPSA coinciden con el cálculo manual ({n_atrasados} atrasadas ahora mismo).")
 
 
 def test_columna_atraso_no_usa_cero_dias_confuso():
@@ -94,6 +107,6 @@ def test_columna_atraso_no_usa_cero_dias_confuso():
 
 
 if __name__ == "__main__":
-    test_columna_atraso_ipsa_falabella_coincide_con_calculo_manual()
+    test_columna_atraso_ipsa_coincide_con_calculo_manual_para_todos_los_tickers()
     test_columna_atraso_no_usa_cero_dias_confuso()
     print("OK: ambas pruebas pasaron.")

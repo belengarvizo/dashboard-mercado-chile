@@ -6,6 +6,7 @@ benchmarks internacionales y las "7 Magníficas". Corre junto al script
 del BCCh en el cron job diario de Railway.
 """
 
+import math
 import os
 import sys
 from datetime import datetime
@@ -60,15 +61,30 @@ def descargar_ticker(ticker: str, periodo: str = "5y"):
     return historico
 
 
+TOLERANCIA_RELATIVA_PRECIO = 1e-4  # 0.01%: ver docstring de guardar_historico
+
+
 def guardar_historico(session, ticker: str, historico):
     """Inserta o actualiza (por ticker+fecha) el histórico de un ticker en la BD.
 
     Trae fecha+precio+volumen ya guardados para ese ticker en una sola consulta
     (en vez de una consulta por día), inserta en bloque las fechas nuevas, y
-    solo emite un UPDATE cuando el precio o el volumen realmente cambiaron (los
-    precios de cierre históricos casi nunca se revisan, así que en una
-    re-corrida normal esto evita miles de idas y vueltas innecesarias a la BD).
-    """
+    solo emite un UPDATE cuando el precio cambió MÁS que un ruido de punto
+    flotante (ver TOLERANCIA_RELATIVA_PRECIO) o cambió el volumen.
+
+    Antes comparaba el precio con IGUALDAD EXACTA, asumiendo que "los precios
+    de cierre históricos casi nunca se revisan". Eso resultó falso: yfinance
+    devuelve precios ajustados por dividendos/splits (auto_adjust), y ese
+    ajuste se recalcula de forma continua — cada recálculo mueve TODOS los
+    cierres históricos por una fracción minúscula (ej. 269.1323 -> 269.1324,
+    diferencia relativa ~0.00004%). Con igualdad exacta, eso se contaba como
+    "cambió" y disparaba un UPDATE individual (una ida y vuelta a la BD) por
+    cada fila así — medido en producción: 644 de 1249 filas de un solo
+    ticker (AGUAS-A.SN), NINGUNA con una diferencia real (todas <0.1%,
+    la inmensa mayoría <0.001%). Eso multiplicado por ~164 tickers es la
+    causa real de que la actualización diaria tardara horas en vez de
+    minutos — confirmado con un benchmark real antes/después de este fix,
+    no asumido (ver el historial de commits)."""
     existentes = {
         fecha: (float(precio), volumen)
         for fecha, precio, volumen in session.query(
@@ -91,11 +107,14 @@ def guardar_historico(session, ticker: str, historico):
 
         if fecha not in existentes:
             nuevas.append(PrecioAccion(ticker=ticker, fecha=fecha, precio_cierre=precio, volumen=volumen))
-        elif existentes[fecha] != (precio, volumen):
-            session.query(PrecioAccion).filter_by(ticker=ticker, fecha=fecha).update({
-                "precio_cierre": precio,
-                "volumen": volumen,
-            })
+        else:
+            precio_guardado, volumen_guardado = existentes[fecha]
+            precio_cambio = not math.isclose(precio_guardado, precio, rel_tol=TOLERANCIA_RELATIVA_PRECIO)
+            if precio_cambio or volumen_guardado != volumen:
+                session.query(PrecioAccion).filter_by(ticker=ticker, fecha=fecha).update({
+                    "precio_cierre": precio,
+                    "volumen": volumen,
+                })
         contador += 1
 
     if nuevas:
