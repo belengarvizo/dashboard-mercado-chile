@@ -2922,131 +2922,143 @@ with tab_laboratorio:
             "automatizar que la herramienta de descarga manual."
         )
 
-        try:
-            pivote_treasury = _cargar_curva_treasury(df_macro_lab)
-            tabla_modelos = _ajustar_modelos_por_anio(pivote_treasury, ANIOS_TAREA_ESTRUCTURA_TASAS)
+        # Detrás de un botón a propósito: ajustar 20 curvas (10 años × 2
+        # modelos, cada uno con múltiples reintentos del optimizador para
+        # encontrar el óptimo global) es la parte más pesada de todo el
+        # dashboard — no debería correr automáticamente cada vez que
+        # alguien abre la pestaña, solo cuando alguien realmente lo pide.
+        st.session_state.setdefault("calcular_estructura_tasas", False)
+        if st.button("📈 Calcular curvas de tasas (Nelson-Siegel + Svensson)"):
+            st.session_state["calcular_estructura_tasas"] = True
 
-            if tabla_modelos.empty:
-                st.warning("Todavía no hay suficientes datos de Treasury Constant Maturity para ajustar los modelos.")
-            else:
-                plazos_anios_lista = list(et.PLAZOS_ANIOS.values())
+        if not st.session_state["calcular_estructura_tasas"]:
+            st.info("Apretá el botón de arriba para correr el ajuste (tarda unos segundos).")
+        else:
+            try:
+                pivote_treasury = _cargar_curva_treasury(df_macro_lab)
+                tabla_modelos = _ajustar_modelos_por_anio(pivote_treasury, ANIOS_TAREA_ESTRUCTURA_TASAS)
 
-                st.subheader("1. Curva observada vs. ajustada, por año")
-                anio_elegido = st.selectbox(
-                    "Año (último día hábil de junio)", tabla_modelos["Año"].tolist(),
-                    index=len(tabla_modelos) - 1,
-                )
-                fila_elegida = tabla_modelos[tabla_modelos["Año"] == anio_elegido].iloc[0]
-
-                fig_curva = go.Figure()
-                fig_curva.add_trace(go.Scatter(
-                    x=plazos_anios_lista, y=fila_elegida["_tasas_obs"], mode="markers",
-                    name="Observado (FRED)", marker=dict(size=10, color="black"),
-                ))
-                fig_curva.add_trace(go.Scatter(
-                    x=plazos_anios_lista, y=fila_elegida["_ns_ajustado"], mode="lines", name="Nelson-Siegel",
-                ))
-                fig_curva.add_trace(go.Scatter(
-                    x=plazos_anios_lista, y=fila_elegida["_sv_ajustado"], mode="lines", name="Svensson",
-                    line=dict(dash="dash"),
-                ))
-                fig_curva.update_layout(
-                    title=f"Curva de tasas del Tesoro de EEUU — {fila_elegida['Fecha']}",
-                    xaxis_title="Plazo (años)", yaxis_title="Tasa (%)", height=450,
-                )
-                st.plotly_chart(fig_curva, use_container_width=True)
-                st.caption(
-                    f"RMSE Nelson-Siegel: **{fila_elegida['RMSE Nelson-Siegel']:.4f} pp** — "
-                    f"RMSE Svensson: **{fila_elegida['RMSE Svensson']:.4f} pp**."
-                )
-
-                st.subheader("2. Comparación de ajuste entre modelos (RMSE)")
-                tabla_rmse = tabla_modelos[
-                    ["Año", "Fecha", "RMSE Nelson-Siegel", "RMSE Svensson", "Mejora Svensson (%)"]
-                ]
-                st.dataframe(
-                    tabla_rmse.style.format({
-                        "RMSE Nelson-Siegel": "{:.4f}",
-                        "RMSE Svensson": "{:.4f}",
-                        "Mejora Svensson (%)": "{:+.1f}%",
-                    }),
-                    use_container_width=True, hide_index=True,
-                )
-                fila_mejor = tabla_rmse.loc[tabla_rmse["Mejora Svensson (%)"].idxmax()]
-                fila_peor = tabla_rmse.loc[tabla_rmse["Mejora Svensson (%)"].idxmin()]
-                st.caption(
-                    f"Svensson mejora MÁS el ajuste en **{int(fila_mejor['Año'])}** "
-                    f"({fila_mejor['Mejora Svensson (%)']:+.1f}%) y MENOS en "
-                    f"**{int(fila_peor['Año'])}** ({fila_peor['Mejora Svensson (%)']:+.1f}%). "
-                    "En general, el término extra de Svensson (un segundo parámetro de "
-                    "curvatura con su propio τ) ayuda más cuando la curva tiene una forma "
-                    "compleja — invertida o con más de una \"joroba\" — y menos cuando la "
-                    "curva es suave y sube monótonamente. Cambiá el año de la sección 1 para "
-                    "ver la forma real de la curva en cada caso y confirmarlo vos mismo."
-                )
-
-                st.subheader("3. Evolución de los parámetros de Nelson-Siegel")
-                fig_params = go.Figure()
-                for columna, nombre_serie in [
-                    ("β0 (nivel)", "β0 — nivel de largo plazo"),
-                    ("β1 (pendiente)", "β1 — pendiente (corto − largo)"),
-                    ("β2 (curvatura)", "β2 — curvatura"),
-                ]:
-                    fig_params.add_trace(go.Scatter(
-                        x=tabla_modelos["Año"], y=tabla_modelos[columna], mode="lines+markers", name=nombre_serie,
-                    ))
-                fig_params.add_hline(y=0, line_dash="dot", line_color="gray")
-                fig_params.update_layout(xaxis_title="Año", yaxis_title="Valor del parámetro (pp)", height=450)
-                st.plotly_chart(fig_params, use_container_width=True)
-                st.caption(
-                    "**β0 (nivel):** hacia dónde converge la tasa a plazos muy largos — el "
-                    "\"piso\" de largo plazo de toda la curva. **β1 (pendiente):** aproximadamente "
-                    "la tasa corta menos la larga — negativo cuando la curva sube (normal), "
-                    "positivo cuando está invertida. **β2 (curvatura):** qué tan pronunciada es "
-                    "la \"joroba\" en el tramo medio de la curva (plazos de 2-7 años)."
-                )
-
-                st.subheader("4. Datos objetivos para la Pregunta 3 (inversiones de la curva)")
-                st.caption(
-                    "Esto calcula HECHOS de los datos — fechas y duración de cada inversión — "
-                    "no es el análisis en sí. Conectalo vos con noticias y eventos económicos "
-                    "reales de cada período para responder la Pregunta 3."
-                )
-                spread_10y2y = (pivote_treasury["10 años"] - pivote_treasury["2 años"]).dropna()
-                if len(spread_10y2y) < 2:
-                    st.warning("Todavía no hay suficiente historia de 10 años y 2 años para calcular el spread.")
+                if tabla_modelos.empty:
+                    st.warning("Todavía no hay suficientes datos de Treasury Constant Maturity para ajustar los modelos.")
                 else:
-                    fig_spread = go.Figure()
-                    fig_spread.add_trace(go.Scatter(
-                        x=spread_10y2y.index, y=spread_10y2y.values, mode="lines",
-                        name="Spread 10 años − 2 años", line=dict(color="steelblue"),
-                    ))
-                    fig_spread.add_hline(y=0, line_dash="dash", line_color="red")
-                    fig_spread.update_layout(
-                        title="Spread 10Y-2Y del Tesoro de EEUU (negativo = curva invertida)",
-                        xaxis_title="Fecha", yaxis_title="Spread (pp)", height=400,
+                    plazos_anios_lista = list(et.PLAZOS_ANIOS.values())
+
+                    st.subheader("1. Curva observada vs. ajustada, por año")
+                    anio_elegido = st.selectbox(
+                        "Año (último día hábil de junio)", tabla_modelos["Año"].tolist(),
+                        index=len(tabla_modelos) - 1,
                     )
-                    st.plotly_chart(fig_spread, use_container_width=True)
+                    fila_elegida = tabla_modelos[tabla_modelos["Año"] == anio_elegido].iloc[0]
 
-                    invertida = spread_10y2y < 0
-                    cambios = invertida.astype(int).diff().fillna(0)
-                    inicios = spread_10y2y.index[cambios == 1].tolist()
-                    if invertida.iloc[0]:
-                        inicios = [spread_10y2y.index[0]] + inicios
-                    finales = spread_10y2y.index[cambios == -1].tolist()
-                    if invertida.iloc[-1]:
-                        finales = finales + [spread_10y2y.index[-1]]
-                    tramos_inversion = list(zip(inicios, finales))
+                    fig_curva = go.Figure()
+                    fig_curva.add_trace(go.Scatter(
+                        x=plazos_anios_lista, y=fila_elegida["_tasas_obs"], mode="markers",
+                        name="Observado (FRED)", marker=dict(size=10, color="black"),
+                    ))
+                    fig_curva.add_trace(go.Scatter(
+                        x=plazos_anios_lista, y=fila_elegida["_ns_ajustado"], mode="lines", name="Nelson-Siegel",
+                    ))
+                    fig_curva.add_trace(go.Scatter(
+                        x=plazos_anios_lista, y=fila_elegida["_sv_ajustado"], mode="lines", name="Svensson",
+                        line=dict(dash="dash"),
+                    ))
+                    fig_curva.update_layout(
+                        title=f"Curva de tasas del Tesoro de EEUU — {fila_elegida['Fecha']}",
+                        xaxis_title="Plazo (años)", yaxis_title="Tasa (%)", height=450,
+                    )
+                    st.plotly_chart(fig_curva, use_container_width=True)
+                    st.caption(
+                        f"RMSE Nelson-Siegel: **{fila_elegida['RMSE Nelson-Siegel']:.4f} pp** — "
+                        f"RMSE Svensson: **{fila_elegida['RMSE Svensson']:.4f} pp**."
+                    )
 
-                    if tramos_inversion:
-                        st.write("**Períodos con curva invertida (spread 10Y-2Y negativo):**")
-                        for inicio, fin in tramos_inversion:
-                            dias = (fin - inicio).days
-                            st.write(f"- {inicio.date()} a {fin.date()} ({dias} días corridos)")
+                    st.subheader("2. Comparación de ajuste entre modelos (RMSE)")
+                    tabla_rmse = tabla_modelos[
+                        ["Año", "Fecha", "RMSE Nelson-Siegel", "RMSE Svensson", "Mejora Svensson (%)"]
+                    ]
+                    st.dataframe(
+                        tabla_rmse.style.format({
+                            "RMSE Nelson-Siegel": "{:.4f}",
+                            "RMSE Svensson": "{:.4f}",
+                            "Mejora Svensson (%)": "{:+.1f}%",
+                        }),
+                        use_container_width=True, hide_index=True,
+                    )
+                    fila_mejor = tabla_rmse.loc[tabla_rmse["Mejora Svensson (%)"].idxmax()]
+                    fila_peor = tabla_rmse.loc[tabla_rmse["Mejora Svensson (%)"].idxmin()]
+                    st.caption(
+                        f"Svensson mejora MÁS el ajuste en **{int(fila_mejor['Año'])}** "
+                        f"({fila_mejor['Mejora Svensson (%)']:+.1f}%) y MENOS en "
+                        f"**{int(fila_peor['Año'])}** ({fila_peor['Mejora Svensson (%)']:+.1f}%). "
+                        "En general, el término extra de Svensson (un segundo parámetro de "
+                        "curvatura con su propio τ) ayuda más cuando la curva tiene una forma "
+                        "compleja — invertida o con más de una \"joroba\" — y menos cuando la "
+                        "curva es suave y sube monótonamente. Cambiá el año de la sección 1 para "
+                        "ver la forma real de la curva en cada caso y confirmarlo vos mismo."
+                    )
+
+                    st.subheader("3. Evolución de los parámetros de Nelson-Siegel")
+                    fig_params = go.Figure()
+                    for columna, nombre_serie in [
+                        ("β0 (nivel)", "β0 — nivel de largo plazo"),
+                        ("β1 (pendiente)", "β1 — pendiente (corto − largo)"),
+                        ("β2 (curvatura)", "β2 — curvatura"),
+                    ]:
+                        fig_params.add_trace(go.Scatter(
+                            x=tabla_modelos["Año"], y=tabla_modelos[columna], mode="lines+markers", name=nombre_serie,
+                        ))
+                    fig_params.add_hline(y=0, line_dash="dot", line_color="gray")
+                    fig_params.update_layout(xaxis_title="Año", yaxis_title="Valor del parámetro (pp)", height=450)
+                    st.plotly_chart(fig_params, use_container_width=True)
+                    st.caption(
+                        "**β0 (nivel):** hacia dónde converge la tasa a plazos muy largos — el "
+                        "\"piso\" de largo plazo de toda la curva. **β1 (pendiente):** aproximadamente "
+                        "la tasa corta menos la larga — negativo cuando la curva sube (normal), "
+                        "positivo cuando está invertida. **β2 (curvatura):** qué tan pronunciada es "
+                        "la \"joroba\" en el tramo medio de la curva (plazos de 2-7 años)."
+                    )
+
+                    st.subheader("4. Datos objetivos para la Pregunta 3 (inversiones de la curva)")
+                    st.caption(
+                        "Esto calcula HECHOS de los datos — fechas y duración de cada inversión — "
+                        "no es el análisis en sí. Conectalo vos con noticias y eventos económicos "
+                        "reales de cada período para responder la Pregunta 3."
+                    )
+                    spread_10y2y = (pivote_treasury["10 años"] - pivote_treasury["2 años"]).dropna()
+                    if len(spread_10y2y) < 2:
+                        st.warning("Todavía no hay suficiente historia de 10 años y 2 años para calcular el spread.")
                     else:
-                        st.write("El spread 10Y-2Y no estuvo negativo en el período con datos disponible.")
-        except Exception as e_estructura_tasas:
-            st.warning(f"No se pudo calcular la sección de estructura de tasas: {e_estructura_tasas}")
+                        fig_spread = go.Figure()
+                        fig_spread.add_trace(go.Scatter(
+                            x=spread_10y2y.index, y=spread_10y2y.values, mode="lines",
+                            name="Spread 10 años − 2 años", line=dict(color="steelblue"),
+                        ))
+                        fig_spread.add_hline(y=0, line_dash="dash", line_color="red")
+                        fig_spread.update_layout(
+                            title="Spread 10Y-2Y del Tesoro de EEUU (negativo = curva invertida)",
+                            xaxis_title="Fecha", yaxis_title="Spread (pp)", height=400,
+                        )
+                        st.plotly_chart(fig_spread, use_container_width=True)
+
+                        invertida = spread_10y2y < 0
+                        cambios = invertida.astype(int).diff().fillna(0)
+                        inicios = spread_10y2y.index[cambios == 1].tolist()
+                        if invertida.iloc[0]:
+                            inicios = [spread_10y2y.index[0]] + inicios
+                        finales = spread_10y2y.index[cambios == -1].tolist()
+                        if invertida.iloc[-1]:
+                            finales = finales + [spread_10y2y.index[-1]]
+                        tramos_inversion = list(zip(inicios, finales))
+
+                        if tramos_inversion:
+                            st.write("**Períodos con curva invertida (spread 10Y-2Y negativo):**")
+                            for inicio, fin in tramos_inversion:
+                                dias = (fin - inicio).days
+                                st.write(f"- {inicio.date()} a {fin.date()} ({dias} días corridos)")
+                        else:
+                            st.write("El spread 10Y-2Y no estuvo negativo en el período con datos disponible.")
+            except Exception as e_estructura_tasas:
+                st.warning(f"No se pudo calcular la sección de estructura de tasas: {e_estructura_tasas}")
 
     except Exception as e:
         st.error(f"No se pudo calcular el laboratorio financiero: {e}")
