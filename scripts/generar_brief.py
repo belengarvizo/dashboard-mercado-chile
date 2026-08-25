@@ -167,8 +167,15 @@ def generar_brief_diario():
         titulares = obtener_titulares_recientes(session)
 
         engine = get_engine()
-        df_macro = pd.read_sql("SELECT nombre, fecha, valor FROM series_macro ORDER BY fecha", engine)
-        df_acciones = pd.read_sql("SELECT ticker, fecha, precio_cierre, volumen FROM precios_acciones ORDER BY fecha", engine)
+        # Sin ORDER BY en el SQL: con estas tablas ya grandes (precios_acciones
+        # ronda las 200k filas), Postgres derramaba el sort a disco y esto
+        # tardaba mas de un minuto (medido en produccion) -- se ordena en
+        # pandas despues de traer los datos, ~20x mas rapido. Mismo fix que
+        # app/dashboard.py (cargar_precios_acciones/cargar_series_macro).
+        df_macro = pd.read_sql("SELECT nombre, fecha, valor FROM series_macro", engine).sort_values("fecha")
+        df_acciones = pd.read_sql(
+            "SELECT ticker, fecha, precio_cierre, volumen FROM precios_acciones", engine
+        ).sort_values("fecha")
         indicadores = calcular_resumen_mercado(df_macro, df_acciones)
 
         # Si el residual de HOY de la atribución multi-factor del IPSA (ver

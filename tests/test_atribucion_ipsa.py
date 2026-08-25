@@ -23,11 +23,15 @@ DASHBOARD_PATH = os.path.join(os.path.dirname(__file__), "..", "app", "dashboard
 
 
 def _cargar_datos_reales():
+    # Sin ORDER BY en el SQL -- mismo motivo que app/dashboard.py
+    # (cargar_precios_acciones/cargar_series_macro): con precios_acciones ya
+    # en ~200k filas, el sort de Postgres se derramaba a disco y esto solo
+    # tardaba mas de un minuto. Se ordena en pandas despues.
     engine = get_engine()
     df_acciones = pd.read_sql(
-        "SELECT ticker, fecha, precio_cierre, volumen FROM precios_acciones ORDER BY fecha", engine,
-    )
-    df_macro = pd.read_sql("SELECT nombre, fecha, valor FROM series_macro ORDER BY fecha", engine)
+        "SELECT ticker, fecha, precio_cierre, volumen FROM precios_acciones", engine,
+    ).sort_values("fecha")
+    df_macro = pd.read_sql("SELECT nombre, fecha, valor FROM series_macro", engine).sort_values("fecha")
     return df_acciones, df_macro
 
 
