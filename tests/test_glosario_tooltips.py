@@ -94,8 +94,14 @@ def test_heatmap_ipsa_completo_con_tooltips_y_atribucion():
         contenido = tooltip_html_de_ticker(html_ipsa, ticker)
         beta_valor = float(fila["Beta"])
         capm_valor = float(fila["CAPM local (%)"].rstrip("%"))
+        sharpe_valor = float(fila["Sharpe"])
+        treynor_valor = float(fila["Treynor (%)"].rstrip("%"))
+        alpha_valor = float(fila["Alpha (%)"].rstrip("%"))
         assert f"Beta = {beta_valor:.2f}" in contenido, f"{ticker}: Beta del tooltip no coincide con la fila"
         assert f"CAPM = {capm_valor:.2f}%" in contenido, f"{ticker}: CAPM del tooltip no coincide con la fila"
+        assert f"Sharpe = {sharpe_valor:.2f}" in contenido, f"{ticker}: Sharpe del tooltip no coincide con la fila"
+        assert f"Treynor = {treynor_valor:+.2f}%" in contenido, f"{ticker}: Treynor del tooltip no coincide con la fila"
+        assert f"Alpha = {alpha_valor:+.2f}%" in contenido, f"{ticker}: Alpha del tooltip no coincide con la fila"
 
     # El heatmap debe pintar CADA fila con exactamente uno de los dos
     # estilos: gradiente de color (fila al dia) o grisado de "Atraso"
@@ -130,6 +136,17 @@ def test_heatmap_dow_jones_completo_con_tooltips_sin_atribucion():
         )
 
     assert "background-color:rgb(" in html_dow, "El heatmap Dow Jones perdio el color de fondo del gradiente"
+
+    # Los numeros del tooltip coinciden con los de la fila real, para una muestra.
+    for ticker in ["AAPL", "JPM", "WMT"]:
+        fila = df_dow.loc[ticker]
+        contenido = tooltip_html_de_ticker(html_dow, ticker)
+        sharpe_valor = float(fila["Sharpe"])
+        treynor_valor = float(fila["Treynor (%)"].rstrip("%"))
+        alpha_valor = float(fila["Alpha (%)"].rstrip("%"))
+        assert f"Sharpe = {sharpe_valor:.2f}" in contenido, f"{ticker}: Sharpe del tooltip no coincide con la fila"
+        assert f"Treynor = {treynor_valor:+.2f}%" in contenido, f"{ticker}: Treynor del tooltip no coincide con la fila"
+        assert f"Alpha = {alpha_valor:+.2f}%" in contenido, f"{ticker}: Alpha del tooltip no coincide con la fila"
 
 
 def test_tooltips_no_mencionan_lo_explicitamente_excluido():

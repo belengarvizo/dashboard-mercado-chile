@@ -175,6 +175,73 @@ def explicacion_volatilidad(volatilidad_anualizada: float | None) -> str:
     )
 
 
+def explicacion_alfa(alpha: float | None, retorno_real_1y: float | None = None, capm: float | None = None) -> str:
+    """Alpha de Jensen simplificado (r_i - r_f = alpha + beta*(r_m - r_f)):
+    compara el retorno REALIZADO del último año contra el mínimo que el
+    CAPM exigía dado el riesgo (Beta) de esa fila — ver Parte 4 de
+    "Detrás del Dashboard". No es la versión académica completa (le
+    falta la segunda etapa cross-sectional que estima el precio de
+    riesgo de cada factor): acá se usa para DESCRIBIR lo que ya pasó,
+    no para predecir lo que debería pasar. Un alpha alto en un solo año
+    puede ser suerte, no habilidad — un año de datos no alcanza para
+    distinguir una cosa de la otra."""
+    if alpha is None:
+        return "Alpha no disponible todavía: falta Beta o CAPM para calcularlo."
+    if alpha > 2:
+        lectura = "rindió MÁS de lo que su riesgo exigía"
+    elif alpha < -2:
+        lectura = "rindió MENOS de lo que su riesgo exigía"
+    else:
+        lectura = "rindió aproximadamente lo que su riesgo exigía"
+    detalle = ""
+    if retorno_real_1y is not None and capm is not None:
+        detalle = f" ({retorno_real_1y:+.1f}% real vs. {capm:.1f}% exigido por CAPM)"
+    return (
+        f"<b>Alpha = {alpha:+.2f}%</b><br>"
+        f"En el último año, esta acción {lectura}{detalle}. Un alpha positivo suena bien, "
+        "pero en un solo año puede ser suerte tanto como habilidad — no alcanza para probar nada."
+    )
+
+
+def explicacion_sharpe(sharpe: float | None) -> str:
+    """Ratio de Sharpe = (retorno realizado del último año - Rf) /
+    volatilidad anualizada — ver Parte 2 de "Detrás del Dashboard".
+    Compara retorno extra contra RIESGO TOTAL (no solo el sistemático
+    que mide Beta), así que dos acciones con el mismo Beta pueden tener
+    Sharpe muy distinto si una es más volátil por razones propias de la
+    empresa."""
+    if sharpe is None:
+        return "Sharpe no disponible todavía: falta el retorno realizado o la volatilidad."
+    if sharpe > 1:
+        lectura = "buena — ganó bastante más de lo que arriesgó"
+    elif sharpe > 0:
+        lectura = "moderada — ganó algo más de lo que arriesgó"
+    else:
+        lectura = "mala — no compensó el riesgo total que tuvo"
+    return (
+        f"<b>Sharpe = {sharpe:.2f}</b><br>"
+        f"Cuánto retorno extra (por sobre la tasa libre de riesgo) ganó esta acción por cada "
+        f"unidad de volatilidad total que tuvo en el último año. Acá la relación es {lectura}. "
+        "Es el número que aparece en cualquier ficha técnica de un fondo mutuo."
+    )
+
+
+def explicacion_treynor(treynor: float | None) -> str:
+    """Ratio de Treynor = (retorno realizado del último año - Rf) / Beta
+    — ver Parte 3 de "Detrás del Dashboard". A diferencia de Sharpe,
+    divide solo por el riesgo SISTEMÁTICO (Beta), asumiendo que el
+    riesgo propio de la empresa ya está diversificado en un
+    portafolio -- útil para comparar acciones asumiendo que no las vas
+    a tener solas."""
+    if treynor is None:
+        return "Treynor no disponible todavía: falta el retorno realizado o la Beta."
+    return (
+        f"<b>Treynor = {treynor:+.2f}%</b><br>"
+        "Retorno extra ganado por cada unidad de riesgo NO diversificable (Beta), asumiendo "
+        "que el riesgo propio de la empresa ya lo eliminaste teniendo otras acciones también."
+    )
+
+
 def explicacion_atribucion(beta: float | None) -> str:
     """Conecta con el modelo de atribución multi-factor del IPSA
     (market_data.calcular_atribucion_ipsa) SOLO a través de la relación
@@ -226,17 +293,25 @@ def tooltip_html(texto_visible: str, contenido_html: str) -> str:
 # de la prueba de concepto, con Beta+Beta ajustada+CAPM+CRP juntos: ~650px
 # de alto). max-height + overflow-y:auto acá es el resguardo para eso.
 #
-# La versión integrada en la tabla real (5-6 bloques: nombre, rendimiento,
-# Beta, CAPM, volatilidad, y para IPSA también atribución) tiene más
-# contenido que la prueba de concepto de 5 tickers. Se remidió con
-# Playwright contra la app corriendo, LAS 60 ACCIONES UNA POR UNA (30
-# IPSA + 30 Dow Jones, no una muestra) comparando scrollHeight contra
-# clientHeight de cada tooltip: el máximo real observado fue 528px
-# (BCI, IPSA) con este ancho de 340px — max-height:560px le da margen
-# sin necesitar scroll dentro del tooltip (que sería inutilizable: el
-# tooltip desaparece apenas el mouse deja de estar encima). Se subió el
-# ancho de 280 a 340px a propósito para achicar la altura total (menos
-# líneas por bloque), no solo por estética.
+# La versión integrada en la tabla real (8-9 bloques: nombre, rendimiento,
+# Beta, CAPM, volatilidad, Sharpe, Treynor, Alpha, y para IPSA también
+# atribución) tiene mucho más contenido que la prueba de concepto de 5
+# tickers. Se remidió con Playwright contra la app corriendo, LAS 60
+# ACCIONES UNA POR UNA (30 IPSA + 30 Dow Jones, no una muestra) cada vez
+# que se agregó contenido nuevo, comparando scrollHeight contra
+# clientHeight: el máximo real observado, con Sharpe/Treynor/Alpha ya
+# incluidos, fue 873px (BSANTANDER, IPSA — el máximo se da siempre en
+# IPSA porque ahí se suma el bloque extra de atribución) con este ancho
+# de 340px — max-height:920px le da margen sin necesitar scroll dentro
+# del tooltip (que sería inutilizable: el tooltip desaparece apenas el
+# mouse deja de estar encima). Se subió el ancho de 280 a 340px a
+# propósito para achicar la altura total (menos líneas por bloque), no
+# solo por estética.
+#
+# A este alto (~850-870px), el "límite conocido" de abajo (fila cerca
+# del borde del viewport) se vuelve más frecuente, no solo un caso
+# extremo — vale la pena tenerlo presente si se sigue agregando
+# contenido al tooltip.
 #
 # Límite conocido, no resuelto (inherente a CSS puro sin JS): el tooltip
 # se centra verticalmente sobre la fila (top:50% + translateY(-50%)), así
@@ -288,7 +363,7 @@ TOOLTIP_CSS = """
     visibility: hidden;
     opacity: 0;
     width: 340px;
-    max-height: 560px;
+    max-height: 920px;
     overflow-y: auto;
     background-color: #262730;
     color: #fafafa;

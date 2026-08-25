@@ -54,6 +54,9 @@ from glosario import (
     explicacion_beta,
     explicacion_capm,
     explicacion_volatilidad,
+    explicacion_sharpe,
+    explicacion_treynor,
+    explicacion_alfa,
     explicacion_atribucion,
     tooltip_html,
     TOOLTIP_CSS,
@@ -481,6 +484,41 @@ def calcular_resumen_ipsa(df_todas: pd.DataFrame, df_macro: pd.DataFrame) -> pd.
             capm_local = None
             capm_crp = None
 
+        # Alpha de Jensen (simplificado, sin la segunda etapa cross-sectional
+        # del APT/CAPM académico): compara el retorno REALIZADO del último
+        # año contra el mínimo que el CAPM decía que debía rendir dado su
+        # riesgo. Usa la misma ventana de retornos diarios ("conjunto") que
+        # Beta, para que ambos números describan el mismo período.
+        retorno_real_1y = (
+            ((1 + conjunto["ticker"]).prod() - 1) * 100
+            if len(conjunto) >= 30
+            else None
+        )
+        alpha = (
+            retorno_real_1y - capm_local
+            if retorno_real_1y is not None and capm_local is not None
+            else None
+        )
+
+        # Sharpe y Treynor: mismos ingredientes ya calculados arriba
+        # (retorno realizado del último año, Rf, volatilidad, Beta), sin
+        # ninguna consulta ni cálculo nuevo.
+        exceso_retorno = (
+            retorno_real_1y - rf_cl
+            if retorno_real_1y is not None and rf_cl is not None
+            else None
+        )
+        sharpe = (
+            exceso_retorno / volatilidad_anualizada
+            if exceso_retorno is not None and volatilidad_anualizada not in (None, 0)
+            else None
+        )
+        treynor = (
+            exceso_retorno / beta
+            if exceso_retorno is not None and beta not in (None, 0)
+            else None
+        )
+
         # Beta ajustada (Blume): tira la beta cruda hacia 1 (el beta "promedio
         # de mercado" de largo plazo), un ajuste estándar y simple.
         beta_ajustada = (2 / 3) * beta + (1 / 3) * 1 if beta is not None else None
@@ -496,6 +534,9 @@ def calcular_resumen_ipsa(df_todas: pd.DataFrame, df_macro: pd.DataFrame) -> pd.
             "Volatilidad anualizada (%)": volatilidad_anualizada,
             "CAPM local (%)": capm_local,
             "CAPM + CRP (%)": capm_crp,
+            "Sharpe": sharpe,
+            "Treynor (%)": treynor,
+            "Alpha (%)": alpha,
             "Última actualización": ultima_fecha_real.strftime("%Y-%m-%d"),
             "Atraso": _texto_atraso(atrasado, dias_habiles_atraso),
             "_atrasado_bool": atrasado,
@@ -592,6 +633,37 @@ def calcular_resumen_dow_jones(df_todas: pd.DataFrame, df_macro: pd.DataFrame) -
             else None
         )
 
+        # Alpha de Jensen (ver misma nota en calcular_resumen_ipsa): retorno
+        # realizado del último año menos el mínimo que el CAPM exigía dado
+        # el riesgo (Beta) de esta acción.
+        retorno_real_1y = (
+            ((1 + conjunto["ticker"]).prod() - 1) * 100
+            if len(conjunto) >= 30
+            else None
+        )
+        alpha = (
+            retorno_real_1y - capm
+            if retorno_real_1y is not None and capm is not None
+            else None
+        )
+
+        # Sharpe y Treynor (ver misma nota en calcular_resumen_ipsa).
+        exceso_retorno = (
+            retorno_real_1y - rf_eeuu
+            if retorno_real_1y is not None and rf_eeuu is not None
+            else None
+        )
+        sharpe = (
+            exceso_retorno / volatilidad_anualizada
+            if exceso_retorno is not None and volatilidad_anualizada not in (None, 0)
+            else None
+        )
+        treynor = (
+            exceso_retorno / beta
+            if exceso_retorno is not None and beta not in (None, 0)
+            else None
+        )
+
         beta_ajustada = (2 / 3) * beta + (1 / 3) * 1 if beta is not None else None
 
         filas.append({
@@ -604,6 +676,9 @@ def calcular_resumen_dow_jones(df_todas: pd.DataFrame, df_macro: pd.DataFrame) -
             "Beta ajustada": beta_ajustada,
             "Volatilidad anualizada (%)": volatilidad_anualizada,
             "CAPM (%)": capm,
+            "Sharpe": sharpe,
+            "Treynor (%)": treynor,
+            "Alpha (%)": alpha,
             "Última actualización": ultima_fecha_real.strftime("%Y-%m-%d"),
             "Atraso": _texto_atraso(atrasado, dias_habiles_atraso),
             "_atrasado_bool": atrasado,
@@ -1190,27 +1265,40 @@ with tab_acciones:
         formato["Volatilidad anualizada (%)"] = "{:.2f}%"
         formato["CAPM local (%)"] = "{:.2f}%"
         formato["CAPM + CRP (%)"] = "{:.2f}%"
+        formato["Sharpe"] = "{:.2f}"
+        formato["Treynor (%)"] = "{:+.2f}%"
+        formato["Alpha (%)"] = "{:+.2f}%"
 
         def _tooltip_ipsa(ticker: str, fila: pd.Series) -> str:
             beta = fila["Beta"] if pd.notna(fila["Beta"]) else None
             beta_ajustada = fila["Beta ajustada"] if pd.notna(fila["Beta ajustada"]) else None
+            capm_local_valor = fila["CAPM local (%)"] if pd.notna(fila["CAPM local (%)"]) else None
             return _armar_tooltip([
                 f"<b>{nombre_completo(ticker)}</b>",
                 explicacion_rendimiento(fila["1M %"] if pd.notna(fila["1M %"]) else None),
                 explicacion_beta(beta, beta_ajustada),
                 explicacion_capm(
-                    fila["CAPM local (%)"] if pd.notna(fila["CAPM local (%)"]) else None,
+                    capm_local_valor,
                     fila["CAPM + CRP (%)"] if pd.notna(fila["CAPM + CRP (%)"]) else None,
                 ),
                 explicacion_volatilidad(
                     fila["Volatilidad anualizada (%)"] if pd.notna(fila["Volatilidad anualizada (%)"]) else None
+                ),
+                explicacion_sharpe(fila["Sharpe"] if pd.notna(fila["Sharpe"]) else None),
+                explicacion_treynor(fila["Treynor (%)"] if pd.notna(fila["Treynor (%)"]) else None),
+                explicacion_alfa(
+                    fila["Alpha (%)"] if pd.notna(fila["Alpha (%)"]) else None,
+                    (capm_local_valor + fila["Alpha (%)"]) if capm_local_valor is not None and pd.notna(fila["Alpha (%)"]) else None,
+                    capm_local_valor,
                 ),
                 explicacion_atribucion(beta),
             ])
 
         st.markdown(
             _renderizar_heatmap_con_tooltips(
-                df_resumen, columnas_pct, ["Volatilidad anualizada (%)"] + columnas_capm, formato, _tooltip_ipsa,
+                df_resumen, columnas_pct,
+                ["Volatilidad anualizada (%)", "Sharpe", "Treynor (%)", "Alpha (%)"] + columnas_capm,
+                formato, _tooltip_ipsa,
             ),
             unsafe_allow_html=True,
         )
@@ -1226,10 +1314,20 @@ with tab_acciones:
             "La columna \"Atraso\" muestra \"Precio congelado — N días hábiles\" cuando Yahoo "
             "Finance no refrescó el precio de ese ticker hace más de 5 días hábiles (contados "
             "desde la última fecha con cambio real de precio) — el % de cambio mostrado no es "
-            "confiable en ese caso. Pasa el mouse sobre el nombre de cada ticker para ver el "
+            "confiable en ese caso. "
+            "\"Sharpe\" = (retorno realizado del último año − Rf) / volatilidad: retorno extra "
+            "por unidad de riesgo TOTAL. \"Treynor\" = (retorno realizado − Rf) / Beta: retorno "
+            "extra por unidad de riesgo NO diversificable, asumiendo que el resto ya se "
+            "diversificó teniendo otras acciones. "
+            "\"Alpha\" (Jensen, simplificado): retorno realizado del último año menos el mínimo "
+            "que el CAPM exigía dado el riesgo de esa acción — no es la versión académica "
+            "completa (le falta la segunda etapa que estima el precio de riesgo de cada factor), "
+            "así que describe lo que ya pasó, no predice lo que va a pasar. "
+            "Pasa el mouse sobre el nombre de cada ticker para ver el "
             "nombre completo de la empresa y una explicación en simple de su rendimiento "
-            "reciente, Beta, CAPM, volatilidad, y su relación con el modelo de atribución "
-            "multi-factor (pestaña \"Atribución IPSA\") — con los números reales de esa fila."
+            "reciente, Beta, CAPM, volatilidad, Sharpe, Treynor, Alpha, y su relación con el "
+            "modelo de atribución multi-factor (pestaña \"Atribución IPSA\") — con los números "
+            "reales de esa fila."
         )
 
         if capm_insumos["rf_cl"] is not None:
@@ -1476,12 +1574,16 @@ with tab_acciones_dow:
         formato_dow["Beta ajustada"] = "{:.2f}"
         formato_dow["Volatilidad anualizada (%)"] = "{:.2f}%"
         formato_dow["CAPM (%)"] = "{:.2f}%"
+        formato_dow["Sharpe"] = "{:.2f}"
+        formato_dow["Treynor (%)"] = "{:+.2f}%"
+        formato_dow["Alpha (%)"] = "{:+.2f}%"
 
         def _tooltip_dow(ticker: str, fila: pd.Series) -> str:
             # Sin bloque de atribución: el modelo de atribución multi-factor
             # (market_data.calcular_atribucion_ipsa) es específico del mercado
             # chileno (cobre, S&P 500, USD/CLP explicando a ECH) y no le
             # aplica a una acción del Dow Jones de la misma forma.
+            capm_valor = fila["CAPM (%)"] if pd.notna(fila["CAPM (%)"]) else None
             return _armar_tooltip([
                 f"<b>{nombre_completo(ticker)}</b>",
                 explicacion_rendimiento(fila["1M %"] if pd.notna(fila["1M %"]) else None),
@@ -1489,15 +1591,24 @@ with tab_acciones_dow:
                     fila["Beta"] if pd.notna(fila["Beta"]) else None,
                     fila["Beta ajustada"] if pd.notna(fila["Beta ajustada"]) else None,
                 ),
-                explicacion_capm(fila["CAPM (%)"] if pd.notna(fila["CAPM (%)"]) else None),
+                explicacion_capm(capm_valor),
                 explicacion_volatilidad(
                     fila["Volatilidad anualizada (%)"] if pd.notna(fila["Volatilidad anualizada (%)"]) else None
+                ),
+                explicacion_sharpe(fila["Sharpe"] if pd.notna(fila["Sharpe"]) else None),
+                explicacion_treynor(fila["Treynor (%)"] if pd.notna(fila["Treynor (%)"]) else None),
+                explicacion_alfa(
+                    fila["Alpha (%)"] if pd.notna(fila["Alpha (%)"]) else None,
+                    (capm_valor + fila["Alpha (%)"]) if capm_valor is not None and pd.notna(fila["Alpha (%)"]) else None,
+                    capm_valor,
                 ),
             ])
 
         st.markdown(
             _renderizar_heatmap_con_tooltips(
-                df_resumen_dow, columnas_pct_dow, ["Volatilidad anualizada (%)", "CAPM (%)"], formato_dow, _tooltip_dow,
+                df_resumen_dow, columnas_pct_dow,
+                ["Volatilidad anualizada (%)", "CAPM (%)", "Sharpe", "Treynor (%)", "Alpha (%)"],
+                formato_dow, _tooltip_dow,
             ),
             unsafe_allow_html=True,
         )
@@ -1514,9 +1625,16 @@ with tab_acciones_dow:
             "La columna \"Atraso\" muestra \"Precio congelado — N días hábiles\" cuando Yahoo "
             "Finance no refrescó el precio de ese ticker hace más de 5 días hábiles (contados "
             "desde la última fecha con cambio real de precio) — el % de cambio mostrado no es "
-            "confiable en ese caso. Pasa el mouse sobre el nombre de cada ticker para ver el "
+            "confiable en ese caso. "
+            "\"Sharpe\" = (retorno realizado del último año − Rf) / volatilidad. \"Treynor\" = "
+            "(retorno realizado − Rf) / Beta. "
+            "\"Alpha\" (Jensen, simplificado): retorno realizado del último año menos el mínimo "
+            "que el CAPM exigía dado el riesgo de esa acción — describe lo que ya pasó, no "
+            "predice lo que va a pasar. "
+            "Pasa el mouse sobre el nombre de cada ticker para ver el "
             "nombre completo de la empresa y una explicación en simple de su rendimiento "
-            "reciente, Beta, CAPM y volatilidad, con los números reales de esa fila."
+            "reciente, Beta, CAPM, volatilidad, Sharpe, Treynor y Alpha, con los números reales "
+            "de esa fila."
         )
 
     except Exception as e:
