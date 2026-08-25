@@ -76,6 +76,29 @@ FRED_URL = "https://fred.stlouisfed.org/graph/fredgraph.csv"
 CODIGO_TREASURY_1Y = "FRED.DGS1"
 NOMBRE_TREASURY_1Y = "Bono del Tesoro de EEUU a 1 año (Treasury Constant Maturity, H.15)"
 
+# Resto de la curva de Treasury Constant Maturity (H.15), para ajustar
+# Nelson-Siegel y Svensson en "Laboratorio Financiero" (Pregunta 2:
+# Modelos de Estructura de Tasas). DGS1 (1 año) ya se descarga arriba con
+# su propio nombre porque además se usa como Rf en otras partes del
+# laboratorio; estos 10 plazos son exclusivos de la curva completa.
+# Incluye DGS10 aunque ya existe un "UST10Y" (vía Yahoo Finance, ^TNX,
+# usado en otras partes del dashboard) a propósito: para ajustar una
+# curva bien necesitas que TODOS los puntos vengan de la misma fuente
+# (acá, el H.15 real vía FRED) — mezclar un punto de Yahoo con el resto
+# de FRED introduciría una inconsistencia metodológica en el ajuste.
+SERIES_TREASURY_FRED = {
+    "DGS1MO": "1 mes",
+    "DGS3MO": "3 meses",
+    "DGS6MO": "6 meses",
+    "DGS2": "2 años",
+    "DGS3": "3 años",
+    "DGS5": "5 años",
+    "DGS7": "7 años",
+    "DGS10": "10 años",
+    "DGS20": "20 años",
+    "DGS30": "30 años",
+}
+
 
 def descargar_serie(codigo_serie: str, first_date: str = "2015-01-01") -> list[dict]:
     """Pide una serie a la API del BCCh y devuelve una lista de {fecha, valor}."""
@@ -232,6 +255,14 @@ def actualizar_todas_las_series():
         observaciones = descargar_serie_fred("DGS1")
         _guardar_y_commitear(CODIGO_TREASURY_1Y, NOMBRE_TREASURY_1Y, "diaria", observaciones)
         print(f"  -> {len(observaciones)} observaciones procesadas")
+
+        for fred_id, plazo in SERIES_TREASURY_FRED.items():
+            codigo = f"FRED.{fred_id}"
+            nombre = f"Bono del Tesoro de EEUU a {plazo} (Treasury Constant Maturity, H.15)"
+            print(f"Descargando {nombre} ({codigo})...")
+            observaciones = descargar_serie_fred(fred_id)
+            _guardar_y_commitear(codigo, nombre, "diaria", observaciones)
+            print(f"  -> {len(observaciones)} observaciones procesadas")
 
         def _guardar_metadata():
             # Registra que esta fuente se actualizó ahora

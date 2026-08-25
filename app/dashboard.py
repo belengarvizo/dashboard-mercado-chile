@@ -38,6 +38,7 @@ from constants import (
     SECTORES_OBLIGATORIOS_LABORATORIO,
 )
 import portfolio_lab as lab
+import estructura_tasas as et
 from market_data import (
     calcular_resumen_mercado,
     calcular_retornos_reales,
@@ -1948,6 +1949,71 @@ def diagnosticar_cobertura_cacheado(df_precios: pd.DataFrame, tickers: tuple, fe
     return lab.diagnosticar_cobertura(df_precios, list(tickers), fecha_inicio, fecha_fin)
 
 
+# --- Pregunta 2: Modelos de Estructura de Tasas ---
+NOMBRE_A_PLAZO_TREASURY = {
+    f"Bono del Tesoro de EEUU a {plazo} (Treasury Constant Maturity, H.15)": plazo
+    for plazo in et.PLAZOS_ANIOS
+}
+ANIOS_TAREA_ESTRUCTURA_TASAS = tuple(range(2017, 2027))
+
+
+@st.cache_data(ttl=3600)
+def _cargar_curva_treasury(df_macro: pd.DataFrame) -> pd.DataFrame:
+    """Pivotea las 11 series de Treasury Constant Maturity (una fila por
+    fecha, una columna por plazo) para poder ajustar Nelson-Siegel y
+    Svensson. Mismas series que ya carga cargar_series_macro() — no hace
+    ninguna consulta nueva a la BD."""
+    # pd.read_sql devuelve "fecha" (columna DATE en Postgres) como
+    # datetime.date, no Timestamp -- se convierte explícitamente para
+    # poder comparar con pd.Timestamp(...) más abajo (mismo ajuste que
+    # calcular_resumen_ipsa hace con df_todas al principio).
+    df = df_macro[df_macro["nombre"].isin(NOMBRE_A_PLAZO_TREASURY)].assign(
+        fecha=lambda d: pd.to_datetime(d["fecha"])
+    ).copy()
+    df["plazo"] = df["nombre"].map(NOMBRE_A_PLAZO_TREASURY)
+    pivote = df.pivot_table(index="fecha", columns="plazo", values="valor")
+    return pivote.reindex(columns=list(et.PLAZOS_ANIOS.keys()))
+
+
+def _ultima_fecha_habil_junio(pivote: pd.DataFrame, anio: int):
+    """Última fecha de junio de `anio` con curva completa (los 11 plazos
+    sin NaN) — el "último día transado de junio" que pide el enunciado."""
+    ventana = pivote[(pivote.index >= pd.Timestamp(anio, 6, 1)) & (pivote.index <= pd.Timestamp(anio, 6, 30))]
+    ventana = ventana.dropna()
+    return ventana.index[-1] if len(ventana) else None
+
+
+@st.cache_data(ttl=3600)
+def _ajustar_modelos_por_anio(pivote: pd.DataFrame, anios: tuple) -> pd.DataFrame:
+    """Ajusta Nelson-Siegel y Svensson para el último día hábil de junio
+    de cada año en `anios` — devuelve una fila por año con RMSE,
+    parámetros de Nelson-Siegel, y las curvas ajustadas (para graficar)."""
+    filas = []
+    plazos = list(et.PLAZOS_ANIOS.values())
+    for anio in anios:
+        fecha = _ultima_fecha_habil_junio(pivote, anio)
+        if fecha is None:
+            continue
+        tasas = pivote.loc[fecha].tolist()
+        ns = et.ajustar_nelson_siegel(plazos, tasas)
+        sv = et.ajustar_svensson(plazos, tasas)
+        filas.append({
+            "Año": anio,
+            "Fecha": fecha.date(),
+            "RMSE Nelson-Siegel": ns["rmse"],
+            "RMSE Svensson": sv["rmse"],
+            "Mejora Svensson (%)": (1 - sv["rmse"] / ns["rmse"]) * 100 if ns["rmse"] else None,
+            "β0 (nivel)": ns["parametros"]["beta0"],
+            "β1 (pendiente)": ns["parametros"]["beta1"],
+            "β2 (curvatura)": ns["parametros"]["beta2"],
+            "τ1": ns["parametros"]["tau1"],
+            "_tasas_obs": tasas,
+            "_ns_ajustado": ns["ajustado"].tolist(),
+            "_sv_ajustado": sv["ajustado"].tolist(),
+        })
+    return pd.DataFrame(filas)
+
+
 def _grafico_base_frontera() -> go.Figure:
     fig = go.Figure()
     fig.update_layout(xaxis_title="Volatilidad anualizada", yaxis_title="Retorno esperado anualizado", height=550)
@@ -2836,6 +2902,151 @@ with tab_laboratorio:
             "**in-sample** — ver advertencia en la sección 12. Herramienta educativa para "
             "reproducir la tarea, no una recomendación de inversión."
         )
+
+        # ============================================================
+        # Pregunta 2: Modelos de Estructura de Tasas
+        # ============================================================
+        st.divider()
+        st.header("Pregunta 2: Modelos de Estructura de Tasas")
+        st.caption(
+            "Ajusta Nelson-Siegel (1987) y Svensson (1994) sobre la curva de tasas del "
+            "Tesoro de EEUU (Treasury Constant Maturity, H.15 de la Reserva Federal), el "
+            "último día hábil de junio de cada año entre 2017 y 2026 (10 fechas, 20 curvas "
+            "ajustadas — 10 de cada modelo), encontrando los parámetros óptimos GLOBALES en "
+            "cada ajuste (múltiples puntos de partida para τ, no solo el primer mínimo que "
+            "encuentre el optimizador). "
+            "**Nota de fuente:** los datos vienen de FRED (Federal Reserve Bank of St. "
+            "Louis) en vez del downloader interactivo de federalreserve.gov/datadownload — "
+            "es la MISMA serie H.15 (Treasury Constant Maturity), publicada por el mismo "
+            "Sistema de la Reserva Federal, vía un endpoint CSV público más simple de "
+            "automatizar que la herramienta de descarga manual."
+        )
+
+        try:
+            pivote_treasury = _cargar_curva_treasury(df_macro_lab)
+            tabla_modelos = _ajustar_modelos_por_anio(pivote_treasury, ANIOS_TAREA_ESTRUCTURA_TASAS)
+
+            if tabla_modelos.empty:
+                st.warning("Todavía no hay suficientes datos de Treasury Constant Maturity para ajustar los modelos.")
+            else:
+                plazos_anios_lista = list(et.PLAZOS_ANIOS.values())
+
+                st.subheader("1. Curva observada vs. ajustada, por año")
+                anio_elegido = st.selectbox(
+                    "Año (último día hábil de junio)", tabla_modelos["Año"].tolist(),
+                    index=len(tabla_modelos) - 1,
+                )
+                fila_elegida = tabla_modelos[tabla_modelos["Año"] == anio_elegido].iloc[0]
+
+                fig_curva = go.Figure()
+                fig_curva.add_trace(go.Scatter(
+                    x=plazos_anios_lista, y=fila_elegida["_tasas_obs"], mode="markers",
+                    name="Observado (FRED)", marker=dict(size=10, color="black"),
+                ))
+                fig_curva.add_trace(go.Scatter(
+                    x=plazos_anios_lista, y=fila_elegida["_ns_ajustado"], mode="lines", name="Nelson-Siegel",
+                ))
+                fig_curva.add_trace(go.Scatter(
+                    x=plazos_anios_lista, y=fila_elegida["_sv_ajustado"], mode="lines", name="Svensson",
+                    line=dict(dash="dash"),
+                ))
+                fig_curva.update_layout(
+                    title=f"Curva de tasas del Tesoro de EEUU — {fila_elegida['Fecha']}",
+                    xaxis_title="Plazo (años)", yaxis_title="Tasa (%)", height=450,
+                )
+                st.plotly_chart(fig_curva, use_container_width=True)
+                st.caption(
+                    f"RMSE Nelson-Siegel: **{fila_elegida['RMSE Nelson-Siegel']:.4f} pp** — "
+                    f"RMSE Svensson: **{fila_elegida['RMSE Svensson']:.4f} pp**."
+                )
+
+                st.subheader("2. Comparación de ajuste entre modelos (RMSE)")
+                tabla_rmse = tabla_modelos[
+                    ["Año", "Fecha", "RMSE Nelson-Siegel", "RMSE Svensson", "Mejora Svensson (%)"]
+                ]
+                st.dataframe(
+                    tabla_rmse.style.format({
+                        "RMSE Nelson-Siegel": "{:.4f}",
+                        "RMSE Svensson": "{:.4f}",
+                        "Mejora Svensson (%)": "{:+.1f}%",
+                    }),
+                    use_container_width=True, hide_index=True,
+                )
+                fila_mejor = tabla_rmse.loc[tabla_rmse["Mejora Svensson (%)"].idxmax()]
+                fila_peor = tabla_rmse.loc[tabla_rmse["Mejora Svensson (%)"].idxmin()]
+                st.caption(
+                    f"Svensson mejora MÁS el ajuste en **{int(fila_mejor['Año'])}** "
+                    f"({fila_mejor['Mejora Svensson (%)']:+.1f}%) y MENOS en "
+                    f"**{int(fila_peor['Año'])}** ({fila_peor['Mejora Svensson (%)']:+.1f}%). "
+                    "En general, el término extra de Svensson (un segundo parámetro de "
+                    "curvatura con su propio τ) ayuda más cuando la curva tiene una forma "
+                    "compleja — invertida o con más de una \"joroba\" — y menos cuando la "
+                    "curva es suave y sube monótonamente. Cambiá el año de la sección 1 para "
+                    "ver la forma real de la curva en cada caso y confirmarlo vos mismo."
+                )
+
+                st.subheader("3. Evolución de los parámetros de Nelson-Siegel")
+                fig_params = go.Figure()
+                for columna, nombre_serie in [
+                    ("β0 (nivel)", "β0 — nivel de largo plazo"),
+                    ("β1 (pendiente)", "β1 — pendiente (corto − largo)"),
+                    ("β2 (curvatura)", "β2 — curvatura"),
+                ]:
+                    fig_params.add_trace(go.Scatter(
+                        x=tabla_modelos["Año"], y=tabla_modelos[columna], mode="lines+markers", name=nombre_serie,
+                    ))
+                fig_params.add_hline(y=0, line_dash="dot", line_color="gray")
+                fig_params.update_layout(xaxis_title="Año", yaxis_title="Valor del parámetro (pp)", height=450)
+                st.plotly_chart(fig_params, use_container_width=True)
+                st.caption(
+                    "**β0 (nivel):** hacia dónde converge la tasa a plazos muy largos — el "
+                    "\"piso\" de largo plazo de toda la curva. **β1 (pendiente):** aproximadamente "
+                    "la tasa corta menos la larga — negativo cuando la curva sube (normal), "
+                    "positivo cuando está invertida. **β2 (curvatura):** qué tan pronunciada es "
+                    "la \"joroba\" en el tramo medio de la curva (plazos de 2-7 años)."
+                )
+
+                st.subheader("4. Datos objetivos para la Pregunta 3 (inversiones de la curva)")
+                st.caption(
+                    "Esto calcula HECHOS de los datos — fechas y duración de cada inversión — "
+                    "no es el análisis en sí. Conectalo vos con noticias y eventos económicos "
+                    "reales de cada período para responder la Pregunta 3."
+                )
+                spread_10y2y = (pivote_treasury["10 años"] - pivote_treasury["2 años"]).dropna()
+                if len(spread_10y2y) < 2:
+                    st.warning("Todavía no hay suficiente historia de 10 años y 2 años para calcular el spread.")
+                else:
+                    fig_spread = go.Figure()
+                    fig_spread.add_trace(go.Scatter(
+                        x=spread_10y2y.index, y=spread_10y2y.values, mode="lines",
+                        name="Spread 10 años − 2 años", line=dict(color="steelblue"),
+                    ))
+                    fig_spread.add_hline(y=0, line_dash="dash", line_color="red")
+                    fig_spread.update_layout(
+                        title="Spread 10Y-2Y del Tesoro de EEUU (negativo = curva invertida)",
+                        xaxis_title="Fecha", yaxis_title="Spread (pp)", height=400,
+                    )
+                    st.plotly_chart(fig_spread, use_container_width=True)
+
+                    invertida = spread_10y2y < 0
+                    cambios = invertida.astype(int).diff().fillna(0)
+                    inicios = spread_10y2y.index[cambios == 1].tolist()
+                    if invertida.iloc[0]:
+                        inicios = [spread_10y2y.index[0]] + inicios
+                    finales = spread_10y2y.index[cambios == -1].tolist()
+                    if invertida.iloc[-1]:
+                        finales = finales + [spread_10y2y.index[-1]]
+                    tramos_inversion = list(zip(inicios, finales))
+
+                    if tramos_inversion:
+                        st.write("**Períodos con curva invertida (spread 10Y-2Y negativo):**")
+                        for inicio, fin in tramos_inversion:
+                            dias = (fin - inicio).days
+                            st.write(f"- {inicio.date()} a {fin.date()} ({dias} días corridos)")
+                    else:
+                        st.write("El spread 10Y-2Y no estuvo negativo en el período con datos disponible.")
+        except Exception as e_estructura_tasas:
+            st.warning(f"No se pudo calcular la sección de estructura de tasas: {e_estructura_tasas}")
 
     except Exception as e:
         st.error(f"No se pudo calcular el laboratorio financiero: {e}")
