@@ -39,6 +39,7 @@ from constants import (
 )
 import portfolio_lab as lab
 import estructura_tasas as et
+import modelo_recesion as mr
 from market_data import (
     calcular_resumen_mercado,
     calcular_retornos_reales,
@@ -928,10 +929,10 @@ except Exception:
 
 (
     tab_premercado, tab_macro, tab_acciones, tab_atribucion, tab_acciones_dow, tab_riesgo,
-    tab_benchmark, tab_laboratorio,
+    tab_benchmark, tab_laboratorio, tab_recesion,
 ) = st.tabs([
     "Brief Premercado", "Indicadores macro", "Acciones IPSA", "Atribución IPSA", "Acciones Dow Jones",
-    "Riesgo", "Benchmark", "Laboratorio Financiero",
+    "Riesgo", "Benchmark", "Laboratorio Financiero", "Modelo de Recesión EEUU",
 ])
 
 # --- Tab 0: Brief Premercado ---
@@ -3062,3 +3063,188 @@ with tab_laboratorio:
 
     except Exception as e:
         st.error(f"No se pudo calcular el laboratorio financiero: {e}")
+
+# --- Tab 8: Modelo de Recesión EEUU ---
+with tab_recesion:
+    st.header("Modelo de Recesión EEUU (Probit)")
+    st.caption(
+        "Extiende un modelo Probit de recesión de EEUU (predictores originales: "
+        "crecimiento del PIB rezagado (g_lag) y pendiente de la curva de tasas "
+        "rezagada (p_lag), estimados sobre datos trimestrales desde 1962) agregando "
+        "4 variables de FRED — tasa de desempleo (UNRATE), solicitudes iniciales de "
+        "seguro de desempleo (ICSA), spread de bonos corporativos Baa vs Treasury "
+        "10 años (BAA10Y) y el índice de condiciones financieras de Chicago Fed "
+        "(NFCI) — para ver si mejoran la sensibilidad del modelo original (32.14% "
+        "con corte 0.5, es decir: solo detectaba 1 de cada 3 recesiones reales)."
+    )
+    try:
+        df_series_macro = cargar_series_macro()
+        modelos = mr.comparar_modelos(df_series_macro)
+        m_original = modelos["original"]
+        m_restringido = modelos["original_restringido"]
+        m_extendido = modelos["extendido"]
+
+        st.subheader("1. Comparación de modelos")
+        st.caption(
+            "El modelo extendido solo cubre 1986-2026 (BAA10Y no existe antes en "
+            "FRED), así que compararlo directo contra el original en su muestra "
+            "completa (1962-2026) mezclaría dos efectos: si la mejora viene de las "
+            "variables nuevas, o si el subperíodo 1986-2026 simplemente tiene "
+            "recesiones más fáciles de predecir. Por eso se agrega una tercera fila: "
+            "el modelo original, pero restringido a las mismas observaciones exactas "
+            "que usa el extendido — así la fila 2 vs 3 aísla el efecto real de las "
+            "variables nuevas, con el período fijo."
+        )
+
+        tabla_comparacion = pd.DataFrame([
+            {
+                "Modelo": "1. Original — muestra completa",
+                "Período": f"{m_original['fecha_min'].date()} a {m_original['fecha_max'].date()}",
+                "N": m_original["n_obs"],
+                "Sensibilidad": m_original["sensibilidad"],
+                "Especificidad": m_original["especificidad"],
+                "Precisión global": m_original["precision_global"],
+            },
+            {
+                "Modelo": "2. Original — restringido a 1986+",
+                "Período": f"{m_restringido['fecha_min'].date()} a {m_restringido['fecha_max'].date()}",
+                "N": m_restringido["n_obs"],
+                "Sensibilidad": m_restringido["sensibilidad"],
+                "Especificidad": m_restringido["especificidad"],
+                "Precisión global": m_restringido["precision_global"],
+            },
+            {
+                "Modelo": "3. Extendido (+FRED) — 1986+",
+                "Período": f"{m_extendido['fecha_min'].date()} a {m_extendido['fecha_max'].date()}",
+                "N": m_extendido["n_obs"],
+                "Sensibilidad": m_extendido["sensibilidad"],
+                "Especificidad": m_extendido["especificidad"],
+                "Precisión global": m_extendido["precision_global"],
+            },
+        ]).set_index("Modelo")
+        st.dataframe(
+            tabla_comparacion.style.format({
+                "Sensibilidad": "{:.1%}", "Especificidad": "{:.1%}", "Precisión global": "{:.1%}",
+            }),
+            use_container_width=True,
+        )
+
+        st.info(
+            f"**Comparación justa (fila 2 vs 3, mismo período 1986-2026):** la "
+            f"sensibilidad del modelo original CAE a {m_restringido['sensibilidad']:.1%} "
+            "en este subperíodo — no detecta ninguna de las 12 recesiones-trimestre "
+            "de esa ventana usando solo g_lag y p_lag. Las 4 variables de FRED la "
+            f"suben a {m_extendido['sensibilidad']:.1%}. La mejora real atribuible a "
+            "las variables nuevas es mucho mayor de lo que sugería comparar "
+            f"directamente 1 vs 3 ({m_original['sensibilidad']:.1%} → "
+            f"{m_extendido['sensibilidad']:.1%}).\n\n"
+            f"**Comparación de período (fila 1 vs 2, mismos predictores):** la "
+            "sensibilidad del modelo original NO mejora por estar en un subperíodo "
+            f"más fácil — al contrario, cae de {m_original['sensibilidad']:.1%} a "
+            f"{m_restringido['sensibilidad']:.1%}. Esto descarta la hipótesis de que "
+            "1986-2026 sea un período 'más fácil': las recesiones recientes (2001, "
+            "2008-09, 2020) son en realidad más difíciles de anticipar con solo "
+            "crecimiento del PIB y pendiente de la curva rezagados que las recesiones "
+            "de los 70s y 80s."
+        )
+
+        st.markdown("**¿El modelo original (1986+) retiene algo de señal con un corte más bajo que 0.5?**")
+        desglose_episodios = mr.desglose_por_episodio(m_restringido)
+        st.dataframe(
+            desglose_episodios.style.format({"Probabilidad máxima alcanzada": "{:.4f}"}),
+            use_container_width=True,
+        )
+        corte_optimo = mr.corte_optimo_por_precision(m_restringido)
+        st.caption(
+            "El modelo original re-estimado en 1986-2026 retiene una señal débil "
+            "para 2008-09 (probabilidad máxima 0.32) pero ninguna señal útil para "
+            "1990-91, 2001 o 2020. Usando el mismo criterio objetivo de corte óptimo "
+            "(maximización de precisión global) aplicado al modelo original completo, "
+            f"el corte resultante para este modelo restringido es {corte_optimo['corte']:.2f} "
+            f"— punto en el cual la sensibilidad es {corte_optimo['sensibilidad']:.0%}. Esto "
+            "confirma que la pérdida de poder predictivo del modelo de dos variables "
+            "en el período moderno es real, y no un artefacto de la elección del "
+            "punto de corte."
+        )
+
+        st.subheader("2. Coeficientes, errores estándar y p-values")
+        tab_coef_1, tab_coef_2 = st.tabs(["Modelo original", "Modelo extendido"])
+        with tab_coef_1:
+            tabla_original = m_original["resultado"].summary2().tables[1]
+            st.dataframe(tabla_original.style.format("{:.4f}"), use_container_width=True)
+        with tab_coef_2:
+            tabla_extendido = m_extendido["resultado"].summary2().tables[1]
+
+            def _resaltar_no_significativo(fila):
+                es_no_sig = fila["P>|z|"] > 0.05
+                return ["background-color: rgba(220, 80, 60, 0.18)" if es_no_sig else "" for _ in fila]
+
+            st.table(tabla_extendido.style.format("{:.4f}").apply(_resaltar_no_significativo, axis=1))
+            st.caption(
+                "En rojo: variables con p-value > 0.05 (no significativas al 5%). "
+                "icsa_lag y baa10y_lag no resultan significativas en este modelo; "
+                "unrate_lag y nfci_lag sí. statsmodels además advierte de posible "
+                "quasi-separación (una fracción de las observaciones se predice de "
+                "forma perfecta) — esperable con solo 9 recesiones en 161 trimestres "
+                "y 6 predictores, así que conviene no sobreinterpretar la magnitud "
+                "exacta de cada coeficiente, aunque el resultado general (mejora en "
+                "sensibilidad) se mantiene."
+            )
+
+        st.subheader("3. Matrices de confusión (corte 0.5)")
+        col_c, col_d, col_e = st.columns(3)
+        with col_c:
+            st.markdown("**1. Original, completo**")
+            st.dataframe(m_original["matriz"], use_container_width=True)
+        with col_d:
+            st.markdown("**2. Original, 1986+**")
+            st.dataframe(m_restringido["matriz"], use_container_width=True)
+        with col_e:
+            st.markdown("**3. Extendido, 1986+**")
+            st.dataframe(m_extendido["matriz"], use_container_width=True)
+
+        st.subheader("4. Probabilidad de recesión predicha en el tiempo")
+        fig_prob = go.Figure()
+        recesiones_real = m_extendido["y_real"]
+        fechas_real = m_extendido["fechas"]
+        en_recesion = recesiones_real == 1
+        cambios = en_recesion.astype(int).diff().fillna(0)
+        inicios = fechas_real[cambios == 1].tolist()
+        if en_recesion.iloc[0]:
+            inicios = [fechas_real.iloc[0]] + inicios
+        finales = fechas_real[cambios == -1].tolist()
+        if en_recesion.iloc[-1]:
+            finales = finales + [fechas_real.iloc[-1]]
+        for inicio, fin in zip(inicios, finales):
+            fig_prob.add_vrect(x0=inicio, x1=fin, fillcolor="red", opacity=0.12, line_width=0)
+
+        fig_prob.add_trace(go.Scatter(
+            x=m_original["fechas"], y=m_original["prob_predicha"], mode="lines",
+            name="1. Original, completo", line=dict(color="lightsteelblue", dash="dot"),
+        ))
+        fig_prob.add_trace(go.Scatter(
+            x=m_restringido["fechas"], y=m_restringido["prob_predicha"], mode="lines",
+            name="2. Original, 1986+", line=dict(color="steelblue"),
+        ))
+        fig_prob.add_trace(go.Scatter(
+            x=m_extendido["fechas"], y=m_extendido["prob_predicha"], mode="lines",
+            name="3. Extendido, 1986+", line=dict(color="darkorange"),
+        ))
+        fig_prob.add_hline(y=0.5, line_dash="dash", line_color="gray", annotation_text="Corte 0.5")
+        fig_prob.update_layout(
+            xaxis_title="Fecha", yaxis_title="Probabilidad de recesión predicha", height=450,
+            legend=dict(orientation="h", y=1.1),
+        )
+        st.plotly_chart(fig_prob, use_container_width=True)
+        st.caption(
+            "Franjas rojas: trimestres con recesión real (R=1) según el modelo "
+            "extendido. Comparar la línea celeste oscura (2. original, 1986+) contra "
+            "la naranja (3. extendido, 1986+) dentro de las franjas rojas es la "
+            "comparación justa: la naranja sube por encima del corte 0.5 en más "
+            "recesiones reales que la celeste oscura, que casi no reacciona — "
+            "consistente con la sensibilidad de 0% del modelo original en este "
+            "subperíodo."
+        )
+
+    except Exception as e:
+        st.error(f"No se pudo calcular el modelo de recesión: {e}")

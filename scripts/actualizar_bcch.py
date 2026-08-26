@@ -99,6 +99,22 @@ SERIES_TREASURY_FRED = {
     "DGS30": "30 años",
 }
 
+# Predictores adicionales para el modelo Probit de recesión de EEUU
+# ("Modelo de Recesión EEUU" en el dashboard, que extiende recesion.py con
+# variables de FRED buscando mejorar la sensibilidad del modelo original,
+# que solo usaba g_lag y p_lag). Mismo endpoint CSV público sin API key.
+# Ninguna de estas 4 series tiene historia hasta 1962 en FRED (a diferencia
+# de g y p del Excel original): UNRATE arranca en 1948, ICSA en 1967,
+# BAA10Y en 1986, NFCI en 1971 -- por eso se piden desde 1948 acá (lo más
+# atrás que existe cualquiera de ellas) y el merge posterior con el Excel
+# recorta cada modelo a la ventana que sus propias variables permiten.
+SERIES_RECESION_FRED = {
+    "UNRATE": {"nombre": "Tasa de desempleo de EEUU (UNRATE)", "frecuencia": "mensual"},
+    "ICSA": {"nombre": "Solicitudes iniciales de seguro de desempleo de EEUU (ICSA)", "frecuencia": "semanal"},
+    "BAA10Y": {"nombre": "Spread bonos corporativos Baa vs Treasury 10 años (BAA10Y)", "frecuencia": "diaria"},
+    "NFCI": {"nombre": "Índice de condiciones financieras nacionales de Chicago Fed (NFCI)", "frecuencia": "semanal"},
+}
+
 
 def descargar_serie(codigo_serie: str, first_date: str = "2015-01-01") -> list[dict]:
     """Pide una serie a la API del BCCh y devuelve una lista de {fecha, valor}."""
@@ -262,6 +278,13 @@ def actualizar_todas_las_series():
             print(f"Descargando {nombre} ({codigo})...")
             observaciones = descargar_serie_fred(fred_id)
             _guardar_y_commitear(codigo, nombre, "diaria", observaciones)
+            print(f"  -> {len(observaciones)} observaciones procesadas")
+
+        for fred_id, info in SERIES_RECESION_FRED.items():
+            codigo = f"FRED.{fred_id}"
+            print(f"Descargando {info['nombre']} ({codigo})...")
+            observaciones = descargar_serie_fred(fred_id, first_date="1948-01-01")
+            _guardar_y_commitear(codigo, info["nombre"], info["frecuencia"], observaciones)
             print(f"  -> {len(observaciones)} observaciones procesadas")
 
         def _guardar_metadata():

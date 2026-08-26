@@ -10,3 +10,5 @@ matplotlib
 feedparser
 scipy
 google-genai
+statsmodels
+openpyxl
