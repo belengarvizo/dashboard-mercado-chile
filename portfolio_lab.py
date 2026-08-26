@@ -11,7 +11,7 @@ más simple, de 2 casos, sobre un universo Chile+EEUU distinto).
 
 import numpy as np
 import pandas as pd
-from scipy.optimize import minimize
+from scipy.optimize import linprog, minimize
 
 from market_data import calcular_retornos_reales, calcular_capm_regresion, matriz_retornos_alineados
 
@@ -203,17 +203,72 @@ def _bounds(n: int, permitir_short: bool, limite_abs: float | None) -> list[tupl
     return [(0.0, 1.0)] * n
 
 
-def _resolver_slsqp(mu, cov, bounds, restricciones_extra, w0) -> np.ndarray | None:
-    restr = [{"type": "eq", "fun": lambda w: np.sum(w) - 1.0}] + list(restricciones_extra)
+def _retorno_maximo_alcanzable(
+    mu: np.ndarray, bounds: list[tuple], restriccion_sector: tuple[np.ndarray, float] | None = None,
+) -> float:
+    """max w@mu sujeto a sum(w)=1, lo_i <= w_i <= hi_i, y (si se pasa) un
+    piso sectorial sum(w[idx]) >= peso_min -- una LP simple, resuelta
+    exacto con linprog en vez de con SLSQP (mucho más barato: linprog en
+    ~127 variables tarda milisegundos).
+
+    Sirve para acotar el extremo superior de la curva de la frontera: sin
+    esto, _frontera_slsqp le pide a SLSQP retornos objetivo por encima de
+    lo que las restricciones realmente permiten (ej. mu.max() de un solo
+    activo, cuando hay un tope por activo y/o un piso sectorial que lo
+    hacen inalcanzable) -- SLSQP no falla rápido en esos casos, agota
+    cientos de iteraciones buscando un punto que no existe (medido: ~93%
+    del tiempo de una frontera restrictiva se iba en objetivos infactibles
+    antes de este recorte -- tanto con tope por activo como, aparte, con
+    piso sectorial sin tope por activo, que es un caso distinto y hay que
+    acotar aparte porque no lo cubre un simple tope por activo)."""
+    n = len(mu)
+    lo = np.array([b[0] for b in bounds], dtype=float)
+    hi = np.array([b[1] for b in bounds], dtype=float)
+
+    A_ub, b_ub = None, None
+    if restriccion_sector is not None:
+        idx, peso_min = restriccion_sector
+        fila = np.zeros(n)
+        fila[idx] = -1.0  # -sum(w[idx]) <= -peso_min  <=>  sum(w[idx]) >= peso_min
+        A_ub, b_ub = [fila], [-peso_min]
+
+    res = linprog(
+        -mu, A_ub=A_ub, b_ub=b_ub, A_eq=[np.ones(n)], b_eq=[1.0],
+        bounds=list(zip(lo, hi)), method="highs",
+    )
+    if not res.success:
+        # No debería pasar si w_minvar ya fue factible con estos mismos
+        # bounds/restricciones -- de todos modos, mu.max() (el
+        # comportamiento anterior) es un fallback seguro, nunca más
+        # restrictivo que la realidad.
+        return float(mu.max())
+    return float(-res.fun)
+
+
+def _restriccion_suma_uno(n: int) -> dict:
+    """sum(w) = 1, con su jacobiano exacto (vector de unos) -- se arma una
+    vez por llamada y se reutiliza en las 3 funciones SLSQP de abajo."""
+    return {"type": "eq", "fun": lambda w: np.sum(w) - 1.0, "jac": lambda w: np.ones(n)}
+
+
+def _resolver_slsqp(mu, cov, bounds, restricciones_extra, w0, ftol: float = 1e-9) -> np.ndarray | None:
+    n = len(w0)
+    restr = [_restriccion_suma_uno(n)] + list(restricciones_extra)
+    # Objetivo = varianza del portafolio, w^T @ Cov @ w -> gradiente exacto
+    # 2 @ Cov @ w (Cov es simétrica). Pasarlo via jac= evita que SLSQP lo
+    # estime por diferencias finitas (n evaluaciones extra del objetivo
+    # por cada iteración, solo para aproximar el gradiente).
     res = minimize(
-        lambda w: w @ cov @ w, w0, method="SLSQP", bounds=bounds, constraints=restr,
-        options={"maxiter": 500, "ftol": 1e-12},
+        lambda w: w @ cov @ w, w0, jac=lambda w: 2 * cov @ w,
+        method="SLSQP", bounds=bounds, constraints=restr,
+        options={"maxiter": 500, "ftol": ftol},
     )
     return res.x if res.success else None
 
 
-def _tangencia_slsqp(mu, cov, rf, bounds, restricciones_extra, w0) -> np.ndarray | None:
-    restr = [{"type": "eq", "fun": lambda w: np.sum(w) - 1.0}] + list(restricciones_extra)
+def _tangencia_slsqp(mu, cov, rf, bounds, restricciones_extra, w0, ftol: float = 1e-9) -> np.ndarray | None:
+    n = len(w0)
+    restr = [_restriccion_suma_uno(n)] + list(restricciones_extra)
 
     def _sharpe_negativo(w):
         ret = w @ mu
@@ -221,9 +276,21 @@ def _tangencia_slsqp(mu, cov, rf, bounds, restricciones_extra, w0) -> np.ndarray
         vol = var ** 0.5 if var > 0 else 0.0
         return -(ret - rf) / vol if vol > 1e-12 else 1e6
 
+    def _sharpe_negativo_jac(w):
+        # f(w) = -(w@mu - rf) / sqrt(w@cov@w). Por regla del cociente,
+        # con V = sqrt(w@cov@w) y dV/dw = (cov@w)/V:
+        # df/dw = -mu/V + (w@mu - rf) * (cov@w) / V^3
+        ret = w @ mu
+        var = w @ cov @ w
+        vol = var ** 0.5 if var > 0 else 0.0
+        if vol <= 1e-12:
+            return np.zeros(n)
+        return -mu / vol + (ret - rf) * (cov @ w) / (vol ** 3)
+
     res = minimize(
-        _sharpe_negativo, w0, method="SLSQP", bounds=bounds, constraints=restr,
-        options={"maxiter": 500, "ftol": 1e-12},
+        _sharpe_negativo, w0, jac=_sharpe_negativo_jac,
+        method="SLSQP", bounds=bounds, constraints=restr,
+        options={"maxiter": 500, "ftol": ftol},
     )
     return res.x if res.success else None
 
@@ -231,11 +298,21 @@ def _tangencia_slsqp(mu, cov, rf, bounds, restricciones_extra, w0) -> np.ndarray
 def _frontera_slsqp(mu, cov, bounds, restricciones_extra, retorno_minvar, retorno_max, n_puntos, w0) -> list[np.ndarray]:
     objetivos = [retorno_minvar] if retorno_max <= retorno_minvar else np.linspace(retorno_minvar, retorno_max, n_puntos)
     puntos = []
+    # Warm start: cada punto de la curva parte de la solución del punto
+    # anterior (no siempre de pesos iguales) -- puntos vecinos de una
+    # frontera eficiente tienen soluciones parecidas, así que el
+    # optimizador necesita muchas menos iteraciones para converger que
+    # arrancando desde cero cada vez. Si un punto falla, el siguiente
+    # sigue partiendo del último punto que sí convergió (no de w0 crudo).
+    w_actual = w0
     for r in objetivos:
-        restr_r = list(restricciones_extra) + [{"type": "eq", "fun": lambda w, r=r: w @ mu - r}]
-        w = _resolver_slsqp(mu, cov, bounds, restr_r, w0)
+        restr_r = list(restricciones_extra) + [
+            {"type": "eq", "fun": lambda w, r=r: w @ mu - r, "jac": lambda w: mu}
+        ]
+        w = _resolver_slsqp(mu, cov, bounds, restr_r, w_actual)
         if w is not None and np.all(np.isfinite(w)) and abs(np.sum(w) - 1.0) < 1e-4:
             puntos.append(w)
+            w_actual = w
     return puntos
 
 
@@ -279,14 +356,19 @@ def calcular_frontera(
         return None
 
     restricciones_extra = []
+    restriccion_sector_lp = None
     if restriccion_sectorial is not None:
         tickers_grupo, peso_min = restriccion_sectorial
         idx_arr = np.array([tickers.index(t) for t in tickers_grupo if t in tickers])
         if len(idx_arr):
+            jac_sector = np.zeros(n)
+            jac_sector[idx_arr] = 1.0
             restricciones_extra.append({
                 "type": "ineq",
                 "fun": lambda w, idx=idx_arr, pm=peso_min: np.sum(w[idx]) - pm,
+                "jac": lambda w, g=jac_sector: g,
             })
+            restriccion_sector_lp = (idx_arr, peso_min)
 
     sin_restricciones = limite_abs is None and permitir_short and not restricciones_extra
     regularizado = False
@@ -298,6 +380,7 @@ def calcular_frontera(
         regularizado = cerrado["regularizado"]
         w_minvar = cerrado["w_minvar"]
         w_tangencia = cerrado.get("w_tangencia")
+        ret_max = float(mu.max())
     else:
         bounds = _bounds(n, permitir_short, limite_abs)
         w0 = np.ones(n) / n
@@ -305,12 +388,16 @@ def calcular_frontera(
         if w_minvar is None:
             return None
         w_tangencia = _tangencia_slsqp(mu, cov_opt, rf, bounds, restricciones_extra, w0)
+        # Acotado a lo que estos bounds realmente permiten alcanzar, no al
+        # retorno de un solo activo sin restricciones (ver
+        # _retorno_maximo_alcanzable) -- clave para que _frontera_slsqp no
+        # pierda tiempo en objetivos infactibles.
+        ret_max = _retorno_maximo_alcanzable(mu, bounds, restriccion_sector_lp)
 
     if w_tangencia is not None and (not np.all(np.isfinite(w_tangencia)) or abs(np.sum(w_tangencia) - 1.0) > 1e-3):
         w_tangencia = None
 
     ret_minvar_opt = float(w_minvar @ mu)
-    ret_max = float(mu.max())
     # La curva de la frontera se dibuja hasta el mayor retorno alcanzable
     # entre los activos individuales — pero con venta corta, M (tangencia)
     # puede tener un retorno MAYOR que cualquier activo individual (apalanca
