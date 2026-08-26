@@ -944,6 +944,7 @@ ETIQUETA_EN_POR_ES = {
     "Bono UST 10 años": "UST 10Y Bond",
     "TPM EEUU": "US Fed Funds Rate",
     "IPSA (proxy ECH)": "IPSA (ECH proxy)",
+    "USD/CLP": "USD/CLP exchange rate",
     "TPM Chile": "Chile Policy Rate",
     "IPC (inflación anual)": "CPI (annual inflation)",
     "Imacec": "Imacec (economic activity index)",
@@ -1927,6 +1928,27 @@ FECHA_FIN_TAREA = pd.Timestamp("2026-07-31")
 NOMBRE_TREASURY_1Y = "Bono del Tesoro de EEUU a 1 año (Treasury Constant Maturity, H.15)"
 
 
+# diagnosticar_cobertura() siempre calcula "sesiones teóricas" contra
+# ^GSPC (ver portfolio_lab.py) sin importar qué tickers se le pidan -- si
+# se prefiltra el DataFrame antes de pasarlo, ^GSPC tiene que quedar
+# incluido explícitamente o esa cuenta se rompe (queda vacía).
+TICKER_REFERENCIA_COBERTURA = "^GSPC"
+
+
+def _filtrar_precios_lab(df_precios: pd.DataFrame, tickers, fecha_inicio, fecha_fin) -> pd.DataFrame:
+    """Recorta df_precios (~200k+ filas de TODAS las acciones del sistema)
+    a solo los tickers y la ventana de fechas que la función cacheada
+    correspondiente realmente usa, ANTES de pasarlo -- así @st.cache_data
+    hashea solo esa fracción en cada rerun, no el universo completo (ver
+    diagnóstico de performance del Laboratorio Financiero: hashear ~200k
+    filas en cada cambio de restricción es un costo que se paga incluso
+    en un cache-hit)."""
+    fecha_inicio_ts = pd.Timestamp(fecha_inicio)
+    fecha_fin_ts = pd.Timestamp(fecha_fin)
+    fecha = pd.to_datetime(df_precios["fecha"])
+    return df_precios[df_precios["ticker"].isin(tickers) & (fecha >= fecha_inicio_ts) & (fecha <= fecha_fin_ts)]
+
+
 @st.cache_data(ttl=3600)
 def preparar_datos_lab_cacheado(df_precios: pd.DataFrame, tickers: tuple, fecha_inicio, fecha_fin) -> dict:
     return lab.preparar_datos_laboratorio(df_precios, list(tickers), fecha_inicio, fecha_fin)
@@ -1956,6 +1978,13 @@ NOMBRE_A_PLAZO_TREASURY = {
     for plazo in et.PLAZOS_ANIOS
 }
 ANIOS_TAREA_ESTRUCTURA_TASAS = tuple(range(2017, 2027))
+
+
+def _filtrar_macro_por_nombre(df_macro: pd.DataFrame, nombres) -> pd.DataFrame:
+    """Recorta df_macro (~30k filas de TODAS las series del BCCh) a solo
+    las series pedidas, ANTES de pasarlo a una función @st.cache_data —
+    mismo motivo que _filtrar_precios_lab."""
+    return df_macro[df_macro["nombre"].isin(nombres)]
 
 
 @st.cache_data(ttl=3600)
@@ -2120,7 +2149,10 @@ with tab_laboratorio:
             ))
         fecha_inicio_lab = fecha_fin_lab - pd.DateOffset(years=anios_ventana)
 
-        datos_lab = preparar_datos_lab_cacheado(df_acciones_lab, tuple(tickers_lab), fecha_inicio_lab, fecha_fin_lab)
+        df_acciones_lab_filtrado = _filtrar_precios_lab(df_acciones_lab, tickers_lab, fecha_inicio_lab, fecha_fin_lab)
+        datos_lab = preparar_datos_lab_cacheado(
+            df_acciones_lab_filtrado, tuple(tickers_lab), fecha_inicio_lab, fecha_fin_lab,
+        )
 
         if datos_lab["tickers_excluidos"]:
             lista_excl = ", ".join(f"{t} ({n} obs.)" for t, n in datos_lab["tickers_excluidos"])
@@ -2132,8 +2164,12 @@ with tab_laboratorio:
         col_f3.metric("Observaciones", f"{datos_lab['n_observaciones']:,}")
         col_f4.metric("Acciones usadas", len(datos_lab["tickers_validos"]))
 
+        df_acciones_cobertura_filtrado = _filtrar_precios_lab(
+            df_acciones_lab, list(datos_lab["tickers_validos"]) + [TICKER_REFERENCIA_COBERTURA],
+            fecha_inicio_lab, fecha_fin_lab,
+        )
         diagnostico_cobertura = diagnosticar_cobertura_cacheado(
-            df_acciones_lab, tuple(datos_lab["tickers_validos"]), fecha_inicio_lab, fecha_fin_lab,
+            df_acciones_cobertura_filtrado, tuple(datos_lab["tickers_validos"]), fecha_inicio_lab, fecha_fin_lab,
         )
         sesiones_teoricas = diagnostico_cobertura["sesiones_teoricas"]
         n_perdidas = sesiones_teoricas - datos_lab["n_observaciones"]
@@ -2936,7 +2972,8 @@ with tab_laboratorio:
             st.info("Apretá el botón de arriba para correr el ajuste (tarda unos segundos).")
         else:
             try:
-                pivote_treasury = _cargar_curva_treasury(df_macro_lab)
+                df_macro_treasury = _filtrar_macro_por_nombre(df_macro_lab, NOMBRE_A_PLAZO_TREASURY)
+                pivote_treasury = _cargar_curva_treasury(df_macro_treasury)
                 tabla_modelos = _ajustar_modelos_por_anio(pivote_treasury, ANIOS_TAREA_ESTRUCTURA_TASAS)
 
                 if tabla_modelos.empty:

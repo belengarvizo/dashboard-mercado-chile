@@ -8,13 +8,14 @@ actualizado diariamente.
 
 ## Qué muestra
 
-El dashboard tiene 8 pestañas:
+El dashboard tiene 9 pestañas:
 
 1. **Brief Premercado** — para revisar antes de que abra la Bolsa de Santiago.
    Sección "Importante": % de cambio de la última sesión de S&P 500, Dow
    Jones, cobre, **petróleo WTI** (`CL=F`), el bono UST a 10 años, la tasa
    de política monetaria de EEUU (Effective Federal Funds Rate, vía FRED),
-   el IPSA (proxy ECH), la TPM de Chile, el IPC, el Imacec y la tasa de
+   el IPSA (proxy ECH), el **tipo de cambio observado (USD/CLP, vía
+   BCCh)**, la TPM de Chile, el IPC, el Imacec y la tasa de
    desempleo (INE, desestacionalizada, vía BCCh) — con flecha y color
    verde/rojo, pensado para leerse en 10 segundos. Si el dato más reciente
    de un indicador no está disponible (ej. NaN), cae automáticamente al

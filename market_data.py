@@ -18,6 +18,7 @@ INDICADORES_PREMERCADO = [
     ("Bono UST 10 años", "macro", "Bono del Tesoro de EEUU a 10 años (UST10Y)", "%"),
     ("TPM EEUU", "macro", "Tasa de política monetaria de EEUU (Effective Federal Funds Rate)", "%"),
     ("IPSA (proxy ECH)", "accion", "ECH", ""),
+    ("USD/CLP", "macro", "Tipo de cambio observado", "CLP"),
     ("TPM Chile", "macro", "Tasa de política monetaria (TPM)", "%"),
     ("IPC (inflación anual)", "macro", "IPC variación 12 meses (inflación anual, empalme base 2023=100)", "%"),
     ("Imacec", "macro", "IMACEC", ""),
