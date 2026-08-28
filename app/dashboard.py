@@ -1001,12 +1001,191 @@ def _evento_en_ingles(evento) -> str:
     return DESCRIPCION_EN_POR_TIPO.get(evento.tipo, evento.descripcion)
 
 
+_MD_BOLD = __import__("re").compile(r"\*\*(.+?)\*\*")
+
+
+def _md_a_reportlab(texto: str) -> str:
+    """Convierte el subconjunto de markdown que realmente usa el brief
+    diario (negrita **texto**) a las tags que entiende Paragraph de
+    reportlab (<b>texto</b>) -- no es un parser de markdown general,
+    solo cubre lo que scripts/generar_brief.py efectivamente produce."""
+    texto = texto.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    return _MD_BOLD.sub(r"<b>\1</b>", texto)
+
+
+@st.cache_data(ttl=3600)
+def generar_pdf_brief_premercado() -> bytes:
+    """Arma un PDF de una página con el mismo contenido de la pestaña
+    "Brief Premercado" (Key Indicators, calendario, resumen del día,
+    titulares) -- reusa las mismas funciones/cachés que la pestaña, no
+    vuelve a golpear la base con queries nuevas. Cacheado 1 hora, igual
+    que el resto de los datos de esta pestaña."""
+    import io
+
+    from reportlab.lib import colors
+    from reportlab.lib.pagesizes import letter
+    from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+    from reportlab.lib.units import cm
+    from reportlab.platypus import (
+        ListFlowable, ListItem, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle,
+    )
+
+    estilos = getSampleStyleSheet()
+    estilo_bullet = ParagraphStyle("bullet", parent=estilos["Normal"], spaceAfter=4)
+    estilo_seccion = ParagraphStyle("seccion", parent=estilos["Heading3"], spaceBefore=10, spaceAfter=4)
+    estilo_subseccion = ParagraphStyle("subseccion", parent=estilos["Heading4"], spaceBefore=6, spaceAfter=2)
+
+    hoy = date.today()
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(
+        buffer, pagesize=letter, topMargin=1.8 * cm, bottomMargin=1.8 * cm,
+        leftMargin=1.8 * cm, rightMargin=1.8 * cm,
+    )
+    story = [
+        Paragraph(f"Financial Market as of {hoy.strftime('%d/%m/%Y')}", estilos["Title"]),
+        Spacer(1, 10),
+    ]
+
+    # --- Key indicators ---
+    try:
+        df_macro = cargar_series_macro()
+        df_acciones = cargar_precios_acciones()
+        indicadores = calcular_resumen_mercado(df_macro, df_acciones)
+
+        story.append(Paragraph("Key Indicators", estilo_seccion))
+        filas = [["Indicator", "Value", "Change", "As of"]]
+        for ind in indicadores:
+            etiqueta_en = ETIQUETA_EN_POR_ES.get(ind["etiqueta"], ind["etiqueta"])
+            if ind["resultado"]:
+                valor, cambio_pct, fecha, cambio_absoluto = ind["resultado"]
+                unidad_en = ind["unidad"].replace("barril", "barrel")
+                valor_texto = f"{valor:,.2f}" + (f" {unidad_en}" if unidad_en else "")
+                delta_texto = f"{cambio_absoluto:+.2f} pp" if ind["unidad"] == "%" else f"{cambio_pct:+.2f}%"
+                filas.append([etiqueta_en, valor_texto, delta_texto, pd.Timestamp(fecha).strftime("%Y-%m-%d")])
+            else:
+                filas.append([etiqueta_en, "—", "—", "—"])
+
+        tabla = Table(filas, hAlign="LEFT", colWidths=[6.5 * cm, 3.2 * cm, 2.5 * cm, 2.8 * cm])
+        tabla.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#2a78d6")),
+            ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+            ("FONTSIZE", (0, 0), (-1, -1), 8),
+            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+            ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#cccccc")),
+            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f5f4f1")]),
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ]))
+        story.append(tabla)
+
+        spread_2s10s = calcular_spread_2s10s(df_macro)
+        if spread_2s10s:
+            fecha_spread = pd.Timestamp(spread_2s10s["fecha"]).strftime("%Y-%m-%d")
+            etiqueta = "Inverted curve" if spread_2s10s["invertida"] else "Normal curve"
+            story.append(Spacer(1, 6))
+            story.append(Paragraph(
+                f"<b>{etiqueta}.</b> 2s10s spread (UST10Y − UST2Y): "
+                f"{spread_2s10s['spread']:+.2f} pp as of {fecha_spread}.",
+                estilo_bullet,
+            ))
+
+        breakeven = calcular_serie_inflacion_breakeven(df_macro)
+        if len(breakeven) >= 2:
+            valor_actual = float(breakeven.iloc[-1])
+            fecha_breakeven = pd.Timestamp(breakeven.index[-1]).strftime("%Y-%m-%d")
+            story.append(Paragraph(
+                f"<b>Breakeven inflation (BCP 10Y − BCU 10Y):</b> {valor_actual:.2f} pp as of {fecha_breakeven}.",
+                estilo_bullet,
+            ))
+    except Exception as e:
+        story.append(Paragraph(f"Could not load key indicators: {e}", estilo_bullet))
+
+    # --- Economic calendar ---
+    story.append(Paragraph("Economic Calendar — Next 7 Days", estilo_seccion))
+    try:
+        eventos_semana = proximos_eventos(hoy, dias=7)
+        if not eventos_semana:
+            story.append(Paragraph("No events scheduled in the next 7 days.", estilo_bullet))
+        else:
+            items = []
+            for evento in eventos_semana:
+                indicador = INDICADOR_POR_TIPO[evento.tipo]
+                if evento.fecha_inicio == evento.fecha_fin:
+                    fecha_texto = evento.fecha_inicio.strftime("%Y-%m-%d")
+                else:
+                    fecha_texto = f"{evento.fecha_inicio.strftime('%b %d')} to {evento.fecha_fin.strftime('%Y-%m-%d')}"
+                nota_estimado = "" if evento.confirmado else " (estimated date, not confirmed)"
+                organismo = ORGANISMO_EN_POR_TIPO.get(evento.tipo, indicador["organismo"])
+                items.append(ListItem(Paragraph(
+                    f"<b>{fecha_texto}</b> — [{indicador['etiqueta']}] {organismo}: "
+                    f"{_evento_en_ingles(evento)}{nota_estimado}",
+                    estilo_bullet,
+                )))
+            story.append(ListFlowable(items, bulletType="bullet", leftIndent=12))
+    except Exception as e:
+        story.append(Paragraph(f"Could not load the economic calendar: {e}", estilo_bullet))
+
+    # --- Today's summary (AI brief) ---
+    story.append(Paragraph("Today's Summary", estilo_seccion))
+    try:
+        df_brief = cargar_brief_diario()
+        if df_brief.empty:
+            story.append(Paragraph("The daily summary hasn't been generated yet.", estilo_bullet))
+        else:
+            fila_brief = df_brief.iloc[0]
+            story.append(Paragraph(
+                f"Generated on {pd.Timestamp(fila_brief['generado_en']).strftime('%Y-%m-%d %H:%M')} "
+                f"for {pd.Timestamp(fila_brief['fecha']).strftime('%Y-%m-%d')}.",
+                estilos["Italic"],
+            ))
+            for bloque in str(fila_brief["contenido"]).split("\n\n"):
+                bloque = bloque.strip()
+                if not bloque:
+                    continue
+                # El brief usa "## " para secciones (Global Overview, etc.) y
+                # "### " para subgrupos dentro de una sección (ej. Chile/Global
+                # dentro de "Political & Geopolitical Events") -- cualquier
+                # cantidad de "#" al inicio se trata como encabezado, con
+                # "###" (o más) en un estilo más chico que "##".
+                if bloque.startswith("#"):
+                    nivel = len(bloque) - len(bloque.lstrip("#"))
+                    texto_encabezado = bloque[nivel:].strip()
+                    estilo_encabezado = estilo_seccion if nivel <= 2 else estilo_subseccion
+                    story.append(Paragraph(_md_a_reportlab(texto_encabezado), estilo_encabezado))
+                    continue
+                lineas_bullet = [l.strip() for l in bloque.split("\n") if l.strip().startswith("- ")]
+                if lineas_bullet:
+                    items = [ListItem(Paragraph(_md_a_reportlab(l[2:].strip()), estilo_bullet)) for l in lineas_bullet]
+                    story.append(ListFlowable(items, bulletType="bullet", leftIndent=12))
+                else:
+                    story.append(Paragraph(_md_a_reportlab(bloque), estilo_bullet))
+            story.append(Paragraph(
+                "Summary generated automatically by AI from public headlines — it may contain "
+                "errors or inaccuracies, and does not constitute investment advice.",
+                estilos["Italic"],
+            ))
+    except Exception as e:
+        story.append(Paragraph(f"Could not load the daily summary: {e}", estilo_bullet))
+
+    doc.build(story)
+    return buffer.getvalue()
+
+
 with tab_premercado:
     st.caption(
         "This is the only tab shown in English — the rest of the dashboard is in "
         "Spanish. Meant to be read before the Santiago Stock Exchange opens, quickly, "
         "not for live analysis."
     )
+
+    try:
+        st.download_button(
+            "📄 Download PDF",
+            data=generar_pdf_brief_premercado(),
+            file_name=f"financial_market_{date.today().isoformat()}.pdf",
+            mime="application/pdf",
+        )
+    except Exception as e:
+        st.caption(f"PDF export unavailable right now: {e}")
 
     st.subheader("Key indicators")
 
