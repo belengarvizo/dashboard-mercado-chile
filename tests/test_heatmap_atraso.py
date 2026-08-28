@@ -101,9 +101,18 @@ def test_columna_atraso_ipsa_coincide_con_calculo_manual_para_todos_los_tickers(
 
 
 def test_columna_atraso_no_usa_cero_dias_confuso():
-    """Un ticker sin atraso debe decir "Al día", nunca "0 días"."""
+    """Un ticker sin atraso debe decir "Al día", nunca "0 días".
+
+    El patrón usa un negative lookbehind (?<!\\d) para exigir que el "0"
+    sea un dígito solo, no parte de otro número -- sin esto, contains()
+    hace match por substring y "3**0** días hábiles" (un atraso real de
+    30 días, texto correcto) dispara un falso positivo. Confirmado en
+    producción: con el apagón de datos de Yahoo Finance para el IPSA
+    documentado en esta sesión, varios tickers llegaron a mostrar
+    "30 días hábiles" (dato real y correcto), lo que rompía esta prueba
+    con el patrón anterior sin que hubiera ningún "0 días" real."""
     for df in _tablas_heatmap_html():
-        assert not df["Atraso"].astype(str).str.contains("0 días").any()
+        assert not df["Atraso"].astype(str).str.contains(r"(?<!\d)0 días", regex=True).any()
 
 
 if __name__ == "__main__":
