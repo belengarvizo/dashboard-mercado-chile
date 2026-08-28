@@ -958,7 +958,7 @@ except Exception:
     tab_premercado, tab_macro, tab_acciones, tab_atribucion, tab_acciones_dow, tab_riesgo,
     tab_benchmark, tab_laboratorio, tab_recesion,
 ) = st.tabs([
-    "Brief Premercado", "Indicadores macro", "Acciones IPSA", "Atribución IPSA", "Acciones Dow Jones",
+    "Brief", "Indicadores macro", "Acciones IPSA", "Atribución IPSA", "Acciones Dow Jones",
     "Riesgo", "Benchmark", "Laboratorio Financiero", "Modelo de Recesión EEUU",
 ])
 
