@@ -1014,36 +1014,103 @@ def _md_a_reportlab(texto: str) -> str:
     return _MD_BOLD.sub(r"<b>\1</b>", texto)
 
 
+# Paleta del PDF: navy + dorado apagado (look "nota de research institucional"),
+# separada del resto del dashboard (que usa otra paleta) porque un PDF impreso/
+# descargado se juzga con otros códigos visuales (formal, quieto) que un dashboard
+# interactivo en pantalla.
+_PDF_NAVY = "#1c2b45"
+_PDF_GOLD = "#a8823c"
+_PDF_INK = "#2b2b2b"
+_PDF_MUTED = "#6d6d6d"
+_PDF_RULE = "#d9d5cb"
+_PDF_ROW_ALT = "#f7f6f2"
+_PDF_POSITIVO = "#2f6f4f"
+_PDF_NEGATIVO = "#a13c3c"
+
+
 @st.cache_data(ttl=3600)
 def generar_pdf_brief_premercado() -> bytes:
-    """Arma un PDF de una página con el mismo contenido de la pestaña
-    "Brief Premercado" (Key Indicators, calendario, resumen del día,
-    titulares) -- reusa las mismas funciones/cachés que la pestaña, no
-    vuelve a golpear la base con queries nuevas. Cacheado 1 hora, igual
-    que el resto de los datos de esta pestaña."""
+    """Arma un PDF con el mismo contenido de la pestaña "Brief Premercado"
+    (Key Indicators, calendario, resumen del día, titulares) -- reusa las
+    mismas funciones/cachés que la pestaña, no vuelve a golpear la base con
+    queries nuevas. Cacheado 1 hora, igual que el resto de los datos de esta
+    pestaña.
+
+    Estilo: tipografía serif (Times) para títulos + sans (Helvetica) para
+    texto/datos, paleta navy+dorado, tablas sin grilla completa (solo líneas
+    horizontales) -- imita el aspecto de una nota de research institucional
+    en vez del look por defecto de reportlab (Helvetica genérico + tabla
+    con grilla azul)."""
     import io
+    from datetime import datetime
 
     from reportlab.lib import colors
     from reportlab.lib.pagesizes import letter
-    from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+    from reportlab.lib.styles import ParagraphStyle
     from reportlab.lib.units import cm
     from reportlab.platypus import (
-        ListFlowable, ListItem, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle,
+        HRFlowable, ListFlowable, ListItem, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle,
     )
 
-    estilos = getSampleStyleSheet()
-    estilo_bullet = ParagraphStyle("bullet", parent=estilos["Normal"], spaceAfter=4)
-    estilo_seccion = ParagraphStyle("seccion", parent=estilos["Heading3"], spaceBefore=10, spaceAfter=4)
-    estilo_subseccion = ParagraphStyle("subseccion", parent=estilos["Heading4"], spaceBefore=6, spaceAfter=2)
+    c_navy = colors.HexColor(_PDF_NAVY)
+    c_gold = colors.HexColor(_PDF_GOLD)
+    c_ink = colors.HexColor(_PDF_INK)
+    c_muted = colors.HexColor(_PDF_MUTED)
+    c_rule = colors.HexColor(_PDF_RULE)
+
+    estilo_titulo = ParagraphStyle(
+        "titulo", fontName="Times-Bold", fontSize=21, leading=25, textColor=c_navy, spaceAfter=1,
+    )
+    estilo_fecha = ParagraphStyle(
+        "fecha", fontName="Helvetica", fontSize=10.5, leading=13, textColor=c_muted,
+    )
+    estilo_tagline = ParagraphStyle(
+        "tagline", fontName="Helvetica-Oblique", fontSize=8.5, leading=11, textColor=c_muted, spaceBefore=5,
+    )
+    estilo_seccion = ParagraphStyle(
+        "seccion", fontName="Times-Bold", fontSize=13, leading=16, textColor=c_navy, spaceBefore=16, spaceAfter=2,
+    )
+    estilo_subseccion = ParagraphStyle(
+        "subseccion", fontName="Times-Bold", fontSize=10.5, leading=13, textColor=c_navy, spaceBefore=8, spaceAfter=3,
+    )
+    estilo_bullet = ParagraphStyle(
+        "bullet", fontName="Helvetica", fontSize=9, leading=12.5, textColor=c_ink, spaceAfter=4,
+    )
+    estilo_italic = ParagraphStyle(
+        "italic", fontName="Helvetica-Oblique", fontSize=8, leading=11, textColor=c_muted, spaceAfter=4,
+    )
+
+    def _agregar_titulo_seccion(story, texto):
+        """Encabezado de sección + regla dorada debajo — separa secciones por
+        estructura visual (línea), no solo por salto de línea/tamaño de fuente."""
+        story.append(Paragraph(texto.upper(), estilo_seccion))
+        story.append(HRFlowable(width="100%", thickness=0.9, color=c_gold, spaceBefore=1, spaceAfter=7))
+
+    def _pie_pagina(canvas, doc):
+        canvas.saveState()
+        canvas.setStrokeColor(c_rule)
+        canvas.setLineWidth(0.5)
+        canvas.line(1.8 * cm, 1.5 * cm, letter[0] - 1.8 * cm, 1.5 * cm)
+        canvas.setFont("Helvetica", 7.5)
+        canvas.setFillColor(c_muted)
+        canvas.drawString(1.8 * cm, 1.1 * cm, f"Generated {datetime.now().strftime('%Y-%m-%d %H:%M')} — Mercado Económico Chileno")
+        canvas.drawRightString(letter[0] - 1.8 * cm, 1.1 * cm, f"Page {doc.page}")
+        canvas.restoreState()
 
     hoy = date.today()
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(
-        buffer, pagesize=letter, topMargin=1.8 * cm, bottomMargin=1.8 * cm,
+        buffer, pagesize=letter, topMargin=1.8 * cm, bottomMargin=2.2 * cm,
         leftMargin=1.8 * cm, rightMargin=1.8 * cm,
     )
     story = [
-        Paragraph(f"Financial Market as of {hoy.strftime('%d/%m/%Y')}", estilos["Title"]),
+        Paragraph("Financial Market", estilo_titulo),
+        Paragraph(f"As of {hoy.strftime('%d/%m/%Y')}", estilo_fecha),
+        HRFlowable(width="100%", thickness=1.5, color=c_gold, spaceBefore=7, spaceAfter=4),
+        Paragraph(
+            "Prepared before the Santiago Stock Exchange opens — Mercado Económico Chileno",
+            estilo_tagline,
+        ),
         Spacer(1, 10),
     ]
 
@@ -1053,36 +1120,53 @@ def generar_pdf_brief_premercado() -> bytes:
         df_acciones = cargar_precios_acciones()
         indicadores = calcular_resumen_mercado(df_macro, df_acciones)
 
-        story.append(Paragraph("Key Indicators", estilo_seccion))
+        _agregar_titulo_seccion(story, "Key Indicators")
         filas = [["Indicator", "Value", "Change", "As of"]]
+        colores_delta = []  # (fila, color) — solo para las filas con dato real
         for ind in indicadores:
             etiqueta_en = ETIQUETA_EN_POR_ES.get(ind["etiqueta"], ind["etiqueta"])
             if ind["resultado"]:
                 valor, cambio_pct, fecha, cambio_absoluto = ind["resultado"]
                 unidad_en = ind["unidad"].replace("barril", "barrel")
                 valor_texto = f"{valor:,.2f}" + (f" {unidad_en}" if unidad_en else "")
+                delta_num = cambio_absoluto if ind["unidad"] == "%" else cambio_pct
                 delta_texto = f"{cambio_absoluto:+.2f} pp" if ind["unidad"] == "%" else f"{cambio_pct:+.2f}%"
                 filas.append([etiqueta_en, valor_texto, delta_texto, pd.Timestamp(fecha).strftime("%Y-%m-%d")])
+                colores_delta.append((len(filas) - 1, _PDF_POSITIVO if delta_num >= 0 else _PDF_NEGATIVO))
             else:
                 filas.append([etiqueta_en, "—", "—", "—"])
 
-        tabla = Table(filas, hAlign="LEFT", colWidths=[6.5 * cm, 3.2 * cm, 2.5 * cm, 2.8 * cm])
-        tabla.setStyle(TableStyle([
-            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#2a78d6")),
+        comandos_tabla = [
+            ("BACKGROUND", (0, 0), (-1, 0), c_navy),
             ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
-            ("FONTSIZE", (0, 0), (-1, -1), 8),
             ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-            ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#cccccc")),
-            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f5f4f1")]),
+            ("FONTNAME", (0, 1), (-1, -1), "Helvetica"),
+            ("FONTSIZE", (0, 0), (-1, -1), 8.5),
+            ("ALIGN", (1, 0), (-1, -1), "RIGHT"),
+            ("ALIGN", (0, 0), (0, -1), "LEFT"),
+            ("LINEBELOW", (0, 0), (-1, 0), 1.1, c_navy),
+            ("LINEBELOW", (0, 1), (-1, -2), 0.4, c_rule),
+            ("LINEBELOW", (0, -1), (-1, -1), 0.4, c_rule),
+            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor(_PDF_ROW_ALT)]),
             ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-        ]))
+            ("TOPPADDING", (0, 0), (-1, -1), 5),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+            ("LEFTPADDING", (0, 0), (-1, -1), 7),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 7),
+        ]
+        for fila_idx, color_hex in colores_delta:
+            comandos_tabla.append(("TEXTCOLOR", (2, fila_idx), (2, fila_idx), colors.HexColor(color_hex)))
+            comandos_tabla.append(("FONTNAME", (2, fila_idx), (2, fila_idx), "Helvetica-Bold"))
+
+        tabla = Table(filas, hAlign="LEFT", colWidths=[6.5 * cm, 3.2 * cm, 2.5 * cm, 2.8 * cm])
+        tabla.setStyle(TableStyle(comandos_tabla))
         story.append(tabla)
 
         spread_2s10s = calcular_spread_2s10s(df_macro)
         if spread_2s10s:
             fecha_spread = pd.Timestamp(spread_2s10s["fecha"]).strftime("%Y-%m-%d")
             etiqueta = "Inverted curve" if spread_2s10s["invertida"] else "Normal curve"
-            story.append(Spacer(1, 6))
+            story.append(Spacer(1, 8))
             story.append(Paragraph(
                 f"<b>{etiqueta}.</b> 2s10s spread (UST10Y − UST2Y): "
                 f"{spread_2s10s['spread']:+.2f} pp as of {fecha_spread}.",
@@ -1101,7 +1185,7 @@ def generar_pdf_brief_premercado() -> bytes:
         story.append(Paragraph(f"Could not load key indicators: {e}", estilo_bullet))
 
     # --- Economic calendar ---
-    story.append(Paragraph("Economic Calendar — Next 7 Days", estilo_seccion))
+    _agregar_titulo_seccion(story, "Economic Calendar — Next 7 Days")
     try:
         eventos_semana = proximos_eventos(hoy, dias=7)
         if not eventos_semana:
@@ -1116,17 +1200,20 @@ def generar_pdf_brief_premercado() -> bytes:
                     fecha_texto = f"{evento.fecha_inicio.strftime('%b %d')} to {evento.fecha_fin.strftime('%Y-%m-%d')}"
                 nota_estimado = "" if evento.confirmado else " (estimated date, not confirmed)"
                 organismo = ORGANISMO_EN_POR_TIPO.get(evento.tipo, indicador["organismo"])
-                items.append(ListItem(Paragraph(
-                    f"<b>{fecha_texto}</b> — [{indicador['etiqueta']}] {organismo}: "
-                    f"{_evento_en_ingles(evento)}{nota_estimado}",
-                    estilo_bullet,
-                )))
+                items.append(ListItem(
+                    Paragraph(
+                        f"<b>{fecha_texto}</b> — [{indicador['etiqueta']}] {organismo}: "
+                        f"{_evento_en_ingles(evento)}{nota_estimado}",
+                        estilo_bullet,
+                    ),
+                    bulletColor=c_gold,
+                ))
             story.append(ListFlowable(items, bulletType="bullet", leftIndent=12))
     except Exception as e:
         story.append(Paragraph(f"Could not load the economic calendar: {e}", estilo_bullet))
 
     # --- Today's summary (AI brief) ---
-    story.append(Paragraph("Today's Summary", estilo_seccion))
+    _agregar_titulo_seccion(story, "Today's Summary")
     try:
         df_brief = cargar_brief_diario()
         if df_brief.empty:
@@ -1136,7 +1223,7 @@ def generar_pdf_brief_premercado() -> bytes:
             story.append(Paragraph(
                 f"Generated on {pd.Timestamp(fila_brief['generado_en']).strftime('%Y-%m-%d %H:%M')} "
                 f"for {pd.Timestamp(fila_brief['fecha']).strftime('%Y-%m-%d')}.",
-                estilos["Italic"],
+                estilo_italic,
             ))
             for bloque in str(fila_brief["contenido"]).split("\n\n"):
                 bloque = bloque.strip()
@@ -1150,24 +1237,35 @@ def generar_pdf_brief_premercado() -> bytes:
                 if bloque.startswith("#"):
                     nivel = len(bloque) - len(bloque.lstrip("#"))
                     texto_encabezado = bloque[nivel:].strip()
-                    estilo_encabezado = estilo_seccion if nivel <= 2 else estilo_subseccion
-                    story.append(Paragraph(_md_a_reportlab(texto_encabezado), estilo_encabezado))
+                    if nivel <= 2:
+                        _agregar_titulo_seccion(story, texto_encabezado)
+                    else:
+                        story.append(Paragraph(_md_a_reportlab(texto_encabezado), estilo_subseccion))
                     continue
-                lineas_bullet = [l.strip() for l in bloque.split("\n") if l.strip().startswith("- ")]
+                # El brief de IA a veces usa "- " y a veces "* " para viñetas
+                # (ambos son markdown válido) -- reconocer solo "- " dejaba los
+                # bloques con "* " sin detectar como lista, y el asterisco
+                # literal quedaba visible en el PDF en vez de una viñeta real.
+                lineas_bullet = [l.strip() for l in bloque.split("\n") if l.strip()[:2] in ("- ", "* ")]
                 if lineas_bullet:
-                    items = [ListItem(Paragraph(_md_a_reportlab(l[2:].strip()), estilo_bullet)) for l in lineas_bullet]
+                    items = [
+                        ListItem(Paragraph(_md_a_reportlab(l[2:].strip()), estilo_bullet), bulletColor=c_gold)
+                        for l in lineas_bullet
+                    ]
                     story.append(ListFlowable(items, bulletType="bullet", leftIndent=12))
                 else:
                     story.append(Paragraph(_md_a_reportlab(bloque), estilo_bullet))
+            story.append(Spacer(1, 4))
+            story.append(HRFlowable(width="100%", thickness=0.4, color=c_rule, spaceBefore=2, spaceAfter=5))
             story.append(Paragraph(
                 "Summary generated automatically by AI from public headlines — it may contain "
                 "errors or inaccuracies, and does not constitute investment advice.",
-                estilos["Italic"],
+                estilo_italic,
             ))
     except Exception as e:
         story.append(Paragraph(f"Could not load the daily summary: {e}", estilo_bullet))
 
-    doc.build(story)
+    doc.build(story, onFirstPage=_pie_pagina, onLaterPages=_pie_pagina)
     return buffer.getvalue()
 
 
