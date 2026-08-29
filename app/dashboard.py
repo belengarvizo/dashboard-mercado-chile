@@ -7,6 +7,7 @@ Correr localmente con: streamlit run app/dashboard.py
 
 import math
 import os
+import random
 import sys
 from datetime import date
 
@@ -2133,6 +2134,36 @@ with tab_benchmark:
 OPCIONES_LABORATORIO = sorted(set(
     TICKERS_LABORATORIO_AMPLIADO + TICKERS_DOW_JONES + TICKERS_MAGNIFICAS + TICKERS_EEUU_ADICIONALES
 ))
+
+
+def _muestra_aleatoria_lab(con_restriccion_sectorial: bool, n: int = 50) -> list[str]:
+    """Arma una muestra aleatoria de `n` tickers para experimentar con distintas
+    composiciones (ver qué tanto cambia la frontera/GMV según qué acciones se elijan).
+
+    Sin restricción: sortea directo de TODO el universo del selector (incluye
+    tickers sin sector conocido, como algunos del Dow Jones/Magníficas que no
+    están en el universo del Laboratorio) -- la muestra más "libre" posible.
+
+    Con restricción: primero garantiza 2 tickers al azar de cada sector
+    obligatorio de la tarea (para que la selección siempre cumpla el mínimo),
+    y rellena el resto al azar desde el universo con sector conocido -- nunca
+    saca de TICKERS_DOW_JONES/MAGNIFICAS/EEUU_ADICIONALES porque esos tickers
+    no siempre tienen sector mapeado en SECTOR_POR_TICKER_LABORATORIO.
+    """
+    if not con_restriccion_sectorial:
+        return random.sample(OPCIONES_LABORATORIO, min(n, len(OPCIONES_LABORATORIO)))
+
+    elegidos = []
+    for sector in SECTORES_OBLIGATORIOS_LABORATORIO:
+        candidatos_sector = [t for t in TICKERS_LABORATORIO_AMPLIADO if SECTOR_POR_TICKER_LABORATORIO.get(t) == sector]
+        elegidos += random.sample(candidatos_sector, min(2, len(candidatos_sector)))
+    restantes = [t for t in TICKERS_LABORATORIO_AMPLIADO if t not in elegidos]
+    faltan = max(0, n - len(elegidos))
+    elegidos += random.sample(restantes, min(faltan, len(restantes)))
+    random.shuffle(elegidos)
+    return elegidos
+
+
 FECHA_FIN_TAREA = pd.Timestamp("2026-07-31")
 NOMBRE_TREASURY_1Y = "Bono del Tesoro de EEUU a 1 año (Treasury Constant Maturity, H.15)"
 
@@ -2321,9 +2352,25 @@ with tab_laboratorio:
             st.subheader("1. Universo de acciones (S&P 500)")
 
             st.session_state.setdefault("lab_tickers", TICKERS_LABORATORIO_50)
-            if st.button("↺ Usar muestra recomendada de 50 acciones"):
-                st.session_state["lab_tickers"] = TICKERS_LABORATORIO_50
-                st.rerun()
+            col_muestra1, col_muestra2, col_muestra3 = st.columns(3)
+            with col_muestra1:
+                if st.button("↺ Usar muestra recomendada de 50 acciones"):
+                    st.session_state["lab_tickers"] = TICKERS_LABORATORIO_50
+                    st.rerun()
+            with col_muestra2:
+                if st.button("🎲 Muestra aleatoria (con mínimo sectorial)"):
+                    st.session_state["lab_tickers"] = _muestra_aleatoria_lab(con_restriccion_sectorial=True)
+                    st.rerun()
+            with col_muestra3:
+                if st.button("🎲 Muestra aleatoria (sin restricción)"):
+                    st.session_state["lab_tickers"] = _muestra_aleatoria_lab(con_restriccion_sectorial=False)
+                    st.rerun()
+            st.caption(
+                "Las dos muestras aleatorias son para **experimentar**: comparar cómo cambia la "
+                "frontera/GMV según qué acciones entran, no un requisito de la tarea. La de "
+                "\"sin restricción\" puede no cumplir el mínimo de 2 por sector obligatorio — el "
+                "aviso de sectores insuficientes de abajo te avisa si pasó."
+            )
 
             tickers_lab = st.multiselect(
                 "Acciones seleccionadas", OPCIONES_LABORATORIO, key="lab_tickers",
