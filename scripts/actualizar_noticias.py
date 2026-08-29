@@ -21,6 +21,13 @@ mercado atado al S&P 500 (`?s=^GSPC`), no el feed general de noticias
 (tarjetas de crédito, seguros, tasas de depósito) que no aporta a un
 brief de mercado; el de `^GSPC` trae solo movimientos de acciones,
 índices y bonos — verificado en vivo antes de elegirlo.
+
+MarketWatch se evaluó como fuente adicional (candidato: feed
+"marketpulse") pero se descartó: aunque el RSS parsea sin error, sus
+titulares más recientes tienen más de un año de antigüedad (probado en
+vivo, igual que "realtimeheadlines") -- MarketWatch aparentemente
+descontinuó la actualización en tiempo real de sus feeds públicos, así
+que no sirve para un brief que necesita noticias del día.
 """
 
 import os
