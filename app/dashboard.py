@@ -8,7 +8,9 @@ Correr localmente con: streamlit run app/dashboard.py
 import math
 import os
 import random
+import re
 import sys
+from collections import Counter
 from datetime import date
 
 sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
@@ -43,6 +45,7 @@ import estructura_tasas as et
 import modelo_recesion as mr
 from market_data import (
     calcular_resumen_mercado,
+    calcular_cambio_reciente,
     calcular_retornos_reales,
     calcular_capm_regresion,
     detectar_apagon_mercado,
@@ -967,6 +970,8 @@ except Exception:
 ETIQUETA_EN_POR_ES = {
     "S&P 500": "S&P 500",
     "Dow Jones": "Dow Jones",
+    "Nasdaq": "Nasdaq Composite",
+    "VIX": "VIX (volatility index)",
     "Cobre": "Copper",
     "Petróleo WTI": "WTI Oil",
     "Bono UST 10 años": "UST 10Y Bond",
@@ -1002,7 +1007,7 @@ def _evento_en_ingles(evento) -> str:
     return DESCRIPCION_EN_POR_TIPO.get(evento.tipo, evento.descripcion)
 
 
-_MD_BOLD = __import__("re").compile(r"\*\*(.+?)\*\*")
+_MD_BOLD = re.compile(r"\*\*(.+?)\*\*")
 
 
 def _md_a_reportlab(texto: str) -> str:
@@ -1269,6 +1274,91 @@ def generar_pdf_brief_premercado() -> bytes:
     return buffer.getvalue()
 
 
+# --- Enriquecimiento de titulares: menciones de empresas + categoría ---
+# Nombres de prensa comunes para las 30 acciones del IPSA (para detectar
+# menciones en titulares) -- best-effort, no exhaustivo: cubre el nombre
+# más usado en prensa chilena para cada ticker, no todas las variantes
+# posibles. Puede haber falsos negativos (la empresa se nombra distinto),
+# pero pocos falsos positivos porque el match exige palabra completa.
+NOMBRES_PRENSA_IPSA = {
+    "AGUAS-A.SN": ["Aguas Andinas"],
+    "ANDINA-B.SN": ["Embotelladora Andina", "Coca-Cola Andina"],
+    "BCI.SN": ["BCI", "Banco de Crédito e Inversiones"],
+    "BSANTANDER.SN": ["Banco Santander", "Santander Chile"],
+    "CAP.SN": ["CAP"],
+    "CCU.SN": ["CCU", "Cervecerías Unidas"],
+    "CENCOMALLS.SN": ["Cenco Malls", "Cencosud Shopping"],
+    "CENCOSUD.SN": ["Cencosud"],
+    "CHILE.SN": ["Banco de Chile"],
+    "CMPC.SN": ["CMPC"],
+    "COLBUN.SN": ["Colbún"],
+    "CONCHATORO.SN": ["Concha y Toro"],
+    "COPEC.SN": ["Copec"],
+    "ECL.SN": ["Engie Chile", "Engie Energía"],
+    "ENELAM.SN": ["Enel Américas"],
+    "ENELCHILE.SN": ["Enel Chile"],
+    "ENTEL.SN": ["Entel"],
+    "FALABELLA.SN": ["Falabella"],
+    "IAM.SN": ["Aguas Metropolitanas"],
+    "ILC.SN": ["Inversiones La Construcción"],
+    "ITAUCL.SN": ["Itaú Chile", "Itaú Corpbanca"],
+    "LTM.SN": ["Latam Airlines", "LATAM"],
+    "MALLPLAZA.SN": ["Mallplaza"],
+    "PARAUCO.SN": ["Parque Arauco"],
+    "QUINENCO.SN": ["Quiñenco"],
+    "RIPLEY.SN": ["Ripley"],
+    "SALFACORP.SN": ["Salfacorp", "SalfaCorp"],
+    "SMU.SN": ["SMU", "Unimarc"],
+    "SQM-B.SN": ["SQM", "Soquimich"],
+    "VAPORES.SN": ["Vapores", "CSAV"],
+}
+# \b de regex trata "-" como límite de palabra, así que \bCAP\b hace match
+# dentro de "Large-Cap"/"Small-Cap" (visto en un titular real de ETFs
+# durante la verificación) -- se usa un lookaround que además excluye letra
+# u "-" pegados al nombre, en vez de \b, para nombres cortos como "CAP" o
+# "SMU" que son especialmente propensos a este falso positivo.
+_MENCIONES_IPSA_REGEX = {
+    ticker: re.compile(
+        "|".join(rf"(?<![A-Za-zÀ-ÿ-]){re.escape(n)}(?![A-Za-zÀ-ÿ-])" for n in nombres),
+        re.IGNORECASE,
+    )
+    for ticker, nombres in NOMBRES_PRENSA_IPSA.items()
+}
+
+_PALABRAS_MACRO = [
+    "ipc", "imacec", "tpm", "inflación", "inflacion", "dólar", "dolar", "peso chileno",
+    "cobre", "pib", "desempleo", "tasa de interés", "tasa de interes", "banco central",
+    "fed", "federal reserve", "cpi", "unemployment", "interest rate", "treasury",
+]
+_PALABRAS_POLITICA = [
+    "gobierno", "congreso", "presidente", "elección", "eleccion", "ministro", "senado",
+    "sanciones", "guerra", "trump", "boric", "casa blanca", "white house", "opep",
+]
+
+
+def _detectar_menciones_ipsa(titulo: str) -> list[str]:
+    """Tickers IPSA cuyo nombre de prensa aparece como palabra completa en
+    el titular (heurística de texto simple, no NLP real -- ver nota en
+    NOMBRES_PRENSA_IPSA)."""
+    return [t for t, patron in _MENCIONES_IPSA_REGEX.items() if patron.search(titulo)]
+
+
+def _categorizar_titular(titulo: str, menciones: list[str]) -> str:
+    """Categoría heurística por palabras clave -- NO usa IA (a diferencia
+    del resumen diario): rápida y gratis, pero puede clasificar mal un
+    titular ambiguo. Se prioriza "Corporate" si hay una mención de empresa
+    detectada, porque en la práctica esos titulares casi siempre son sobre
+    esa empresa puntual más que sobre macro/política en general."""
+    if menciones:
+        return "Corporate"
+    titulo_low = titulo.lower()
+    if any(p in titulo_low for p in _PALABRAS_MACRO):
+        return "Macro"
+    if any(p in titulo_low for p in _PALABRAS_POLITICA):
+        return "Political"
+    return "General"
+
+
 with tab_premercado:
     st.caption(
         "This is the only tab shown in English — the rest of the dashboard is in "
@@ -1441,15 +1531,70 @@ with tab_premercado:
             else:
                 df_noticias = df_noticias.assign(fecha_publicacion=pd.to_datetime(df_noticias["fecha_publicacion"]))
                 df_noticias["dia"] = df_noticias["fecha_publicacion"].dt.date
+                df_noticias["menciones"] = df_noticias["titulo"].apply(_detectar_menciones_ipsa)
+                df_noticias["categoria"] = [
+                    _categorizar_titular(t, m) for t, m in zip(df_noticias["titulo"], df_noticias["menciones"])
+                ]
 
-                # df_noticias ya viene ordenado desc por fecha_publicacion (ver cargar_noticias),
-                # así que agrupar sin volver a ordenar deja primero el día más reciente.
-                for dia, grupo in df_noticias.groupby("dia", sort=False):
-                    st.markdown(f"**{dia.strftime('%Y-%m-%d')}**")
-                    for _, fila in grupo.iterrows():
-                        hora = fila["fecha_publicacion"].strftime("%H:%M")
-                        titulo_seguro = _escapar_markdown_matematico(fila["titulo"])
-                        st.markdown(f"- {hora} · *{fila['fuente']}* — [{titulo_seguro}]({fila['link']})")
+                # --- Most mentioned IPSA tickers on the most recent day present ---
+                dia_mas_reciente = df_noticias["dia"].max()
+                menciones_hoy = [
+                    t for lista in df_noticias.loc[df_noticias["dia"] == dia_mas_reciente, "menciones"] for t in lista
+                ]
+                if menciones_hoy:
+                    conteo = Counter(menciones_hoy).most_common(5)
+                    st.markdown(
+                        f"**Most mentioned ({dia_mas_reciente.strftime('%Y-%m-%d')}):** "
+                        + ", ".join(f"{t} ({n})" for t, n in conteo)
+                    )
+                    st.divider()
+
+                col_busqueda, col_categoria = st.columns([2, 1])
+                with col_busqueda:
+                    busqueda = st.text_input(
+                        "Search headlines", key="noticias_busqueda", placeholder="e.g. Codelco, inflation, copper",
+                    )
+                with col_categoria:
+                    categorias_disponibles = ["Corporate", "Macro", "Political", "General"]
+                    categorias_elegidas = st.multiselect(
+                        "Category", categorias_disponibles, default=categorias_disponibles, key="noticias_categorias",
+                    )
+
+                df_filtrado = df_noticias[df_noticias["categoria"].isin(categorias_elegidas)]
+                if busqueda:
+                    df_filtrado = df_filtrado[df_filtrado["titulo"].str.contains(re.escape(busqueda), case=False, na=False)]
+
+                if df_filtrado.empty:
+                    st.info("No headlines match this filter.")
+                else:
+                    # Cambio % de cada ticker mencionado, calculado UNA vez por ticker
+                    # (no por titular) -- varios titulares pueden mencionar la misma
+                    # empresa, no tiene sentido recalcular la misma serie repetidas veces.
+                    df_acciones_noticias = cargar_precios_acciones()
+                    tickers_mencionados = sorted({t for lista in df_filtrado["menciones"] for t in lista})
+                    cambios_por_ticker = {}
+                    for ticker in tickers_mencionados:
+                        serie = (
+                            df_acciones_noticias[df_acciones_noticias["ticker"] == ticker]
+                            .sort_values("fecha").set_index("fecha")["precio_cierre"]
+                        )
+                        cambios_por_ticker[ticker] = calcular_cambio_reciente(serie)
+
+                    # df_filtrado ya viene ordenado desc por fecha_publicacion (ver cargar_noticias),
+                    # así que agrupar sin volver a ordenar deja primero el día más reciente.
+                    for dia, grupo in df_filtrado.groupby("dia", sort=False):
+                        st.markdown(f"**{dia.strftime('%Y-%m-%d')}**")
+                        for _, fila in grupo.iterrows():
+                            hora = fila["fecha_publicacion"].strftime("%H:%M")
+                            titulo_seguro = _escapar_markdown_matematico(fila["titulo"])
+                            linea = f"- {hora} · *{fila['fuente']}* · `{fila['categoria']}` — [{titulo_seguro}]({fila['link']})"
+                            for ticker in fila["menciones"]:
+                                resultado = cambios_por_ticker.get(ticker)
+                                if resultado:
+                                    _, cambio_pct, _, _ = resultado
+                                    flecha = "🔺" if cambio_pct >= 0 else "🔻"
+                                    linea += f" {flecha} **{ticker}** {cambio_pct:+.2f}%"
+                            st.markdown(linea)
 
         except Exception as e:
             st.error(f"Could not load headlines: {e}")
@@ -1464,7 +1609,12 @@ with tab_premercado:
         "headline matches exactly what each outlet published. \"La Tercera Pulso\" and "
         "\"Emol Economía\" don't have a working RSS feed of their own today, so their "
         "headlines come via a site-filtered Google News search instead — not the "
-        "outlet's official feed."
+        "outlet's official feed. In the detail section, the company tag (e.g. \"🔺 "
+        "FALABELLA.SN +1.2%\") and the category label (Corporate/Macro/Political/General) "
+        "next to each headline are a simple keyword/text match against a fixed list of "
+        "IPSA company names — not AI, and not exhaustive: a headline can mention a company "
+        "using a name variant that isn't in the list and get no tag, or get miscategorized "
+        "if it's ambiguous."
     )
 
 # --- Tab 1: Series macro del BCCh ---

@@ -66,6 +66,14 @@ TICKER_PETROLEO_WTI = "CL=F"
 # Dow Jones Industrial Average, usado en el Brief Premercado.
 TICKER_DOW_JONES = "^DJI"
 
+# Nasdaq Composite, usado en el Brief Premercado (Key Indicators) -- la
+# pata "tech" que faltaba junto a S&P 500 y Dow Jones.
+TICKER_NASDAQ = "^IXIC"
+
+# CBOE Volatility Index ("VIX", el índice del miedo), usado en el Brief
+# Premercado (Key Indicators).
+TICKER_VIX = "^VIX"
+
 # Las 30 acciones que componen el Dow Jones Industrial Average. Verificadas
 # contra dos fuentes independientes y vigentes (Wikipedia y stockanalysis.com)
 # y contra la API de Yahoo Finance antes de agregarlas — la composición del
