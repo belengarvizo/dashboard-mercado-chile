@@ -22,6 +22,13 @@ from retry_utils import con_reintentos_db
 # Todos los códigos fueron verificados contra SearchSeries de la propia API.
 SERIES_A_DESCARGAR = {
     "F073.TCO.PRE.Z.D": {"nombre": "Tipo de cambio observado", "frecuencia": "diaria"},
+    # Unidad de Fomento: encontrada vía SearchSeries (function=SearchSeries
+    # no filtra por texto del lado del servidor pese al parámetro "series" --
+    # hay que traer el catálogo completo de la frecuencia y filtrar client-
+    # side por título) -- verificada con GetSeries antes de agregarla, con
+    # el valor del día devuelto coincidiendo con el orden de magnitud real
+    # de la UF (~40.870 CLP en 2026).
+    "F073.UFF.PRE.Z.D": {"nombre": "Unidad de fomento (UF)", "frecuencia": "diaria"},
     "F022.TPM.TIN.D001.NO.Z.D": {"nombre": "Tasa de política monetaria (TPM)", "frecuencia": "diaria"},
     # El BCCh discontinuó la serie base 2018=100 (G073.IPC.IND.2018.M) en
     # diciembre de 2023 al cambiar de año base; esta es la serie "empalmada"

@@ -21,6 +21,7 @@ INDICADORES_PREMERCADO = [
     ("TPM EEUU", "macro", "Tasa de política monetaria de EEUU (Effective Federal Funds Rate)", "%"),
     ("IPSA (proxy ECH)", "accion", "ECH", ""),
     ("USD/CLP", "macro", "Tipo de cambio observado", "CLP"),
+    ("UF", "macro", "Unidad de fomento (UF)", "CLP"),
     ("TPM Chile", "macro", "Tasa de política monetaria (TPM)", "%"),
     ("IPC (inflación anual)", "macro", "IPC variación 12 meses (inflación anual, empalme base 2023=100)", "%"),
     ("Imacec", "macro", "IMACEC", ""),

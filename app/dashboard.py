@@ -978,6 +978,7 @@ ETIQUETA_EN_POR_ES = {
     "TPM EEUU": "US Fed Funds Rate",
     "IPSA (proxy ECH)": "IPSA (ECH proxy)",
     "USD/CLP": "USD/CLP exchange rate",
+    "UF": "UF (inflation-indexed unit)",
     "TPM Chile": "Chile Policy Rate",
     "IPC (inflación anual)": "CPI (annual inflation)",
     "Imacec": "Imacec (economic activity index)",
