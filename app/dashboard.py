@@ -327,18 +327,30 @@ def _texto_atraso(atrasado: bool, dias_habiles_atraso: int) -> str:
     return "Al día"
 
 
-def _color_gradiente_hex(cmap, valor, vmin, vmax) -> str | None:
+def _color_gradiente_hex(cmap, valor, vmin, vmax) -> tuple[str, str] | None:
     """Replica a mano el color que Styler.background_gradient() calcularía
     para `valor` dentro de [vmin, vmax] con el colormap `cmap` — necesario
     porque st.dataframe() (el renderer real de la tabla) no soporta HTML
     dentro de las celdas, así que el heatmap con tooltips se arma como HTML
-    propio en vez de con un Styler, y hay que reproducir el color a mano."""
+    propio en vez de con un Styler, y hay que reproducir el color a mano.
+
+    Devuelve (color_fondo, color_texto): pandas Styler.background_gradient()
+    elige automáticamente texto oscuro o claro según la luminancia del
+    fondo (parámetro text_color_threshold) para que siga siendo legible en
+    todo el gradiente, no solo en los extremos más saturados -- acá se
+    replica ese cálculo a mano por el mismo motivo de arriba. Sin esto, un
+    valor cercano al centro del gradiente (fondo casi blanco/beige) queda
+    con texto claro fijo encima y se ve lavado/ilegible -- reportado en
+    producción con la columna 1D % (variaciones chicas, fondo casi neutro)."""
     if pd.isna(valor) or vmax == vmin:
         return None
     fraccion = (valor - vmin) / (vmax - vmin)
     fraccion = min(max(fraccion, 0.0), 1.0)
     r, g, b, _a = cmap(fraccion)
-    return f"rgb({int(r * 255)}, {int(g * 255)}, {int(b * 255)})"
+    r255, g255, b255 = int(r * 255), int(g * 255), int(b * 255)
+    luminancia = 0.299 * r255 + 0.587 * g255 + 0.114 * b255
+    color_texto = "#1a1a1a" if luminancia > 150 else "#f5f5f5"
+    return f"rgb({r255}, {g255}, {b255})", color_texto
 
 
 def _armar_tooltip(bloques: list) -> str:
@@ -393,14 +405,15 @@ def _renderizar_heatmap_con_tooltips(
             valor = fila[columna]
             fondo = ""
             if not atrasado:
-                color = None
+                resultado_color = None
                 if columna in columnas_pct:
-                    color = _color_gradiente_hex(CMAP_DIVERGENTE, valor, -max_abs, max_abs)
+                    resultado_color = _color_gradiente_hex(CMAP_DIVERGENTE, valor, -max_abs, max_abs)
                 elif columna in columnas_secuenciales:
                     vmin, vmax = minmax_secuencial[columna]
-                    color = _color_gradiente_hex(CMAP_SECUENCIAL, valor, vmin, vmax)
-                if color:
-                    fondo = f"background-color:{color};"
+                    resultado_color = _color_gradiente_hex(CMAP_SECUENCIAL, valor, vmin, vmax)
+                if resultado_color:
+                    color_fondo, color_texto_celda = resultado_color
+                    fondo = f"background-color:{color_fondo}; color:{color_texto_celda};"
             if columna in formato and pd.notna(valor):
                 texto = formato[columna].format(valor)
             elif pd.isna(valor):
