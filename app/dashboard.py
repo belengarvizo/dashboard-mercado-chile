@@ -4134,3 +4134,142 @@ with tab_mesa_dinero:
             )
     except Exception as e:
         st.caption(f"No se pudo cargar el historial todavía: {e}")
+
+    st.divider()
+    st.subheader("5. Práctica: decisión de colocación de excedentes")
+    st.caption(
+        "Esta es la decisión central del día a día de una mesa de dinero: en qué "
+        "instrumento colocas el excedente de caja. Cada escenario es aleatorio — "
+        "practica calzando el plazo del instrumento con cuándo realmente necesitas "
+        "el efectivo de vuelta, no solo persiguiendo la tasa más alta."
+    )
+
+    with st.expander("🔎 Cómo se busca esto en la práctica, no solo cómo se calcula"):
+        st.caption(
+            "Ejemplo real de esta semana: buscar \"Imacec\" en Google mostró dos "
+            "cifras distintas para el mismo mes — la vista general con IA decía "
+            "-1,5% interanual, y la ficha de datos al lado decía -3,29% sobre un "
+            "índice de 106,97. Ninguna fuente estaba necesariamente mala: el "
+            "Imacec publica tres cifras cada mes (interanual de la serie original, "
+            "mensual desestacionalizada, y en 12 meses desestacionalizada), y una "
+            "tarjeta automática de un buscador puede estar calculando su propio "
+            "cambio período a período sobre el índice, sin usar ninguna de las tres "
+            "oficiales. Para julio 2026, el Banco Central publicó -1,5% interanual, "
+            "-1,7% mensual desestacionalizada y -2,1% en 12 meses desestacionalizada "
+            "— ninguna es -3,29%. La lección: para un indicador oficial, ve siempre "
+            "al comunicado de prensa en bcentral.cl o a la serie en Bloomberg, nunca "
+            "a una tarjeta automática de un buscador, y confirma cuál de las "
+            "variaciones te están citando antes de usarla."
+        )
+        st.caption(
+            "Aplica el mismo criterio al resto de los datos de esta pestaña: la TPM "
+            "y las tasas de mercado monetario se buscan en bcentral.cl → "
+            "Estadísticas, o en Bloomberg con las funciones de la sección 2 (BTMM, "
+            "GC, WIRP); el tipo de cambio y el cobre, en bcentral.cl o con FXC/GMM; "
+            "el S&P 500 y el VIX, con cualquier proveedor de precios en tiempo real "
+            "o con WEI. Cuando un número te sorprenda, el primer paso siempre es "
+            "confirmar la fuente antes de usarlo en una decisión."
+        )
+
+    def _nuevo_escenario_colocacion():
+        """Arma un escenario aleatorio de práctica: cuánto excedente hay que
+        colocar hoy, para cuándo se necesita ese efectivo de vuelta, y a qué
+        tasa está cada instrumento ese día (con ruido alrededor de la TPM
+        ingresada en la sección 1, para que la respuesta no sea siempre la
+        misma)."""
+        tpm_ref = st.session_state.get("md_tpm") or 5.0
+        excedente = random.choice([45_000_000, 80_000_000, 120_000_000, 175_000_000, 260_000_000])
+        horizonte = random.choice([1, 7, 30, 90])
+        plantilla = {
+            "Fondo mutuo money market": {"plazo": 0, "spread": -0.35, "riesgo": "Muy bajo", "liquidez": "Rescate el mismo día"},
+            "Overnight interbancario": {"plazo": 1, "spread": -0.10, "riesgo": "Contraparte bancaria", "liquidez": "Vence mañana"},
+            "Pacto (repo) con el Banco Central": {"plazo": 7, "spread": -0.05, "riesgo": "Mínimo (colateral BC)", "liquidez": "Alta"},
+            "DAP a plazo con banco comercial": {"plazo": 30, "spread": 0.45, "riesgo": "Contraparte bancaria", "liquidez": "Multa por rescate anticipado"},
+            "PDBC (Banco Central, mercado secundario)": {"plazo": 90, "spread": 0.25, "riesgo": "Precio si se vende antes de vencer", "liquidez": "Hay que vender en el secundario"},
+        }
+        instrumentos = {}
+        for nombre, datos in plantilla.items():
+            tasa = round(max(tpm_ref + datos["spread"] + random.uniform(-0.15, 0.15), 0.10), 2)
+            instrumentos[nombre] = {**datos, "tasa": tasa}
+        return {"excedente": excedente, "horizonte": horizonte, "instrumentos": instrumentos}
+
+    if "md_escenario" not in st.session_state:
+        st.session_state["md_escenario"] = _nuevo_escenario_colocacion()
+    if "md_colocacion_historial" not in st.session_state:
+        st.session_state["md_colocacion_historial"] = []
+
+    if st.button("🎲 Nuevo escenario del día", key="md_nuevo_escenario"):
+        st.session_state["md_escenario"] = _nuevo_escenario_colocacion()
+
+    escenario = st.session_state["md_escenario"]
+
+    col_esc1, col_esc2 = st.columns(2)
+    col_esc1.metric("Excedente a colocar hoy", f"${escenario['excedente']:,.0f}".replace(",", "."))
+    col_esc2.metric("No necesitas el efectivo antes de", f"{escenario['horizonte']} día(s)")
+
+    df_instrumentos = pd.DataFrame([
+        {
+            "Instrumento": nombre,
+            "Plazo (días)": datos["plazo"],
+            "Tasa hoy (%)": datos["tasa"],
+            "Riesgo": datos["riesgo"],
+            "Liquidez antes del plazo": datos["liquidez"],
+        }
+        for nombre, datos in escenario["instrumentos"].items()
+    ])
+    st.dataframe(df_instrumentos, hide_index=True, use_container_width=True)
+
+    eleccion = st.radio(
+        "¿En qué instrumento colocarías el excedente de hoy?",
+        options=list(escenario["instrumentos"].keys()),
+        key="md_colocacion_eleccion",
+    )
+
+    if st.button("✅ Evaluar mi decisión", key="md_colocacion_evaluar"):
+        instrumentos = escenario["instrumentos"]
+        elegido = instrumentos[eleccion]
+        seguros = {n: d for n, d in instrumentos.items() if d["plazo"] <= escenario["horizonte"]}
+        mejor_seguro_nombre = max(seguros, key=lambda n: seguros[n]["tasa"]) if seguros else None
+
+        if elegido["plazo"] > escenario["horizonte"]:
+            st.error(
+                f"⚠️ Descalce de liquidez: elegiste un instrumento a {elegido['plazo']} días, pero "
+                f"necesitabas el efectivo en {escenario['horizonte']}. Para conseguirlo antes tendrías "
+                f"que vender o rescatar anticipadamente — con riesgo de precio o multa, exactamente lo "
+                f"que la tesorería trata de evitar."
+                + (f" La mejor opción sin ese riesgo hoy era **{mejor_seguro_nombre}** al "
+                   f"{seguros[mejor_seguro_nombre]['tasa']:.2f}%." if mejor_seguro_nombre else "")
+            )
+            eficiencia = 0.0
+        elif mejor_seguro_nombre and eleccion != mejor_seguro_nombre:
+            diferencia_tasa = seguros[mejor_seguro_nombre]["tasa"] - elegido["tasa"]
+            eficiencia = (elegido["tasa"] / seguros[mejor_seguro_nombre]["tasa"]) * 100
+            st.warning(
+                f"El plazo calza bien, pero dejaste tasa sobre la mesa: **{mejor_seguro_nombre}** "
+                f"ofrecía {seguros[mejor_seguro_nombre]['tasa']:.2f}% (vs. {elegido['tasa']:.2f}% "
+                f"elegido), {diferencia_tasa:.2f} puntos más, sin asumir más riesgo de liquidez para "
+                f"este horizonte."
+            )
+        else:
+            eficiencia = 100.0
+            st.success(
+                f"✅ Calce óptimo: {eleccion} a {elegido['tasa']:.2f}% era la mejor tasa disponible "
+                f"que seguía cubriendo tu necesidad de liquidez en {escenario['horizonte']} día(s)."
+            )
+
+        st.session_state["md_colocacion_historial"].append({
+            "Ronda": len(st.session_state["md_colocacion_historial"]) + 1,
+            "Elección": eleccion,
+            "Horizonte (días)": escenario["horizonte"],
+            "Eficiencia": round(eficiencia, 0),
+        })
+
+    if st.session_state["md_colocacion_historial"]:
+        df_hist_coloc = pd.DataFrame(st.session_state["md_colocacion_historial"])
+        st.markdown("**Tu historial de rondas (esta sesión)**")
+        st.dataframe(df_hist_coloc, hide_index=True, use_container_width=True)
+        st.caption(
+            f"Eficiencia promedio: {df_hist_coloc['Eficiencia'].mean():.0f}% (100% = elegiste "
+            "siempre la mejor tasa disponible sin descalce de liquidez). Se reinicia si recargas "
+            "la página — es para practicar en la sesión, no queda guardado en el historial de la BD."
+        )
