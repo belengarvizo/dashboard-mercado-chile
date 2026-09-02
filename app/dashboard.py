@@ -11,7 +11,7 @@ import random
 import re
 import sys
 from collections import Counter
-from datetime import date
+from datetime import date, datetime
 
 sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
 
@@ -23,7 +23,7 @@ import plotly.graph_objects as go
 from matplotlib.colors import LinearSegmentedColormap
 from scipy import stats
 from sqlalchemy import text
-from models import get_engine
+from models import get_engine, CuadraturaMesaDinero
 from constants import (
     TICKERS_IPSA,
     TICKERS_IPSA_PRINCIPALES,
@@ -973,10 +973,10 @@ except Exception:
 
 (
     tab_premercado, tab_macro, tab_acciones, tab_atribucion, tab_acciones_dow, tab_riesgo,
-    tab_benchmark, tab_laboratorio, tab_recesion,
+    tab_benchmark, tab_laboratorio, tab_recesion, tab_mesa_dinero,
 ) = st.tabs([
     "Brief Premercado", "Indicadores macro", "Acciones IPSA", "Atribución IPSA", "Acciones Dow Jones",
-    "Riesgo", "Benchmark", "Laboratorio Financiero", "Modelo de Recesión EEUU",
+    "Riesgo", "Benchmark", "Laboratorio Financiero", "Modelo de Recesión EEUU", "Simulación Mesa de Dinero",
 ])
 
 # --- Tab 0: Brief Premercado ---
@@ -3837,3 +3837,300 @@ with tab_recesion:
 
     except Exception as e:
         st.error(f"No se pudo calcular el modelo de recesión: {e}")
+
+# --- Tab 9: Simulación Mesa de Dinero ---
+with tab_mesa_dinero:
+    st.header("🏦 Simulación Mesa de Dinero")
+    st.caption(
+        "Plantilla de práctica para la rutina diaria de un analista de tesorería: "
+        "indicadores del día, cuadratura de posición de liquidez y una planilla "
+        "de riesgo-retorno de portafolio."
+    )
+    st.info(
+        "📟 Tengo acceso a la plataforma Bloomberg — cada sección incluye las "
+        "funciones (mnemónicos) de la guía ENFIN4350 que usaría en ese paso, "
+        "para practicar con datos en vivo de la terminal además de los números "
+        "de este dashboard."
+    )
+
+    def _tabla_bloomberg(filas):
+        """Renderiza una tabla compacta de mnemónicos Bloomberg de referencia
+        para la sección correspondiente (ver Guia_Bloomberg_ENFIN4350)."""
+        st.dataframe(
+            pd.DataFrame(filas, columns=["Mnemónico", "Función", "Uso en esta sección"]),
+            hide_index=True,
+            use_container_width=True,
+        )
+
+    st.subheader("1. Indicadores del día")
+    st.caption("Cópialos desde las pestañas de este mismo dashboard.")
+    col1, col2, col3, col4, col5, col6 = st.columns(6)
+    with col1:
+        st.number_input("USD/CLP", value=0.0, step=0.01, key="md_usdclp")
+    with col2:
+        st.number_input("UF (CLP)", value=0.0, step=0.01, key="md_uf")
+    with col3:
+        st.number_input("TPM Chile (%)", value=0.0, step=0.01, key="md_tpm")
+    with col4:
+        st.number_input("S&P 500", value=0.0, step=0.01, key="md_sp500")
+    with col5:
+        st.number_input("VIX", value=0.0, step=0.01, key="md_vix")
+    with col6:
+        st.number_input("Cobre (US$/lb)", value=0.0, step=0.01, key="md_cobre")
+
+    st.text_area(
+        "Brief del día (4-5 líneas: qué se movió, cuánto y por qué)",
+        key="md_brief",
+        placeholder="Ej: USD/CLP subió 0.6% tras datos de inflación en EEUU sobre lo esperado...",
+    )
+
+    with st.expander("📟 Funciones Bloomberg de referencia — color de mercado y contexto macro"):
+        _tabla_bloomberg([
+            ("FRNT", "Titulares financieros globales en tiempo real", "Detectar catalizadores antes de escribir el brief"),
+            ("TOP", "Noticias destacadas filtrables por región/sector", "Identificar el factor dominante del día"),
+            ("NI", "Noticias por categoría (ej. NI FED, NI CHILE)", "Seguir de forma focalizada un driver de tu tesis"),
+            ("DAYB", "Resumen de eventos económicos del día", "Planificación táctica antes de datos de alto impacto"),
+            ("WEI", "Panel de principales índices bursátiles del mundo", "Lectura rápida de risk-on / risk-off"),
+            ("GMM", "Tablero macro global en tiempo real", "Vista única de divisas, tasas, commodities y acciones"),
+            ("FXC", "Matriz de tipos de cambio cruzados", "Consultar USD/CLP y otros cruces relevantes"),
+        ])
+
+    st.divider()
+    st.subheader("2. Cuadratura de posición de liquidez")
+
+    col_a, col_b = st.columns(2)
+    with col_a:
+        l_inicial = st.number_input("Saldo inicial (apertura)", value=1_250_000_000, step=1_000_000, key="md_l_inicial")
+        l_depositos = st.number_input("+ Depósitos recibidos", value=340_500_000, step=1_000_000, key="md_l_depositos")
+        l_retiros = st.number_input("– Retiros / giros procesados", value=285_200_000, step=1_000_000, key="md_l_retiros")
+        l_transfrec = st.number_input("+ Transferencias interbancarias recibidas", value=95_000_000, step=1_000_000, key="md_l_transfrec")
+    with col_b:
+        l_transfenv = st.number_input("– Transferencias interbancarias enviadas", value=128_750_000, step=1_000_000, key="md_l_transfenv")
+        l_pago = st.number_input("– Pago de obligaciones / vencimientos", value=42_300_000, step=1_000_000, key="md_l_pago")
+        l_venc = st.number_input("+ Vencimiento de inversiones propias", value=150_000_000, step=1_000_000, key="md_l_venc")
+        l_coloc = st.number_input("– Colocación de excedentes (repo / DAP interbancario)", value=180_000_000, step=1_000_000, key="md_l_coloc")
+
+    saldo_esperado = l_inicial + l_depositos - l_retiros + l_transfrec - l_transfenv - l_pago + l_venc - l_coloc
+
+    l_informado = st.number_input("Saldo informado por el sistema", value=1_200_100_000, step=1_000_000, key="md_l_informado")
+    diferencia = l_informado - saldo_esperado
+
+    col_res1, col_res2, col_res3 = st.columns(3)
+    col_res1.metric("Saldo esperado (calculado)", f"${saldo_esperado:,.0f}".replace(",", "."))
+    col_res2.metric("Saldo informado", f"${l_informado:,.0f}".replace(",", "."))
+    with col_res3:
+        if abs(diferencia) < 1:
+            st.success("✅ Cuadra")
+        else:
+            st.error(f"⚠️ No cuadra: ${abs(diferencia):,.0f}".replace(",", "."))
+
+    st.markdown("**Encaje / reserva técnica**")
+    col_e1, col_e2, col_e3 = st.columns(3)
+    with col_e1:
+        e_base = st.number_input("Depósitos sujetos a encaje (CLP)", value=1_590_500_000, step=1_000_000, key="md_e_base")
+    with col_e2:
+        e_tasa = st.number_input("Tasa de encaje exigida (%)", value=9.0, step=0.1, key="md_e_tasa")
+    with col_e3:
+        e_disp = st.number_input("Encaje disponible (CLP)", value=150_000_000, step=1_000_000, key="md_e_disp")
+
+    e_requerido = e_base * (e_tasa / 100)
+    e_resultado = e_disp - e_requerido
+
+    col_e4, col_e5 = st.columns(2)
+    col_e4.metric("Encaje requerido", f"${e_requerido:,.0f}".replace(",", "."))
+    with col_e5:
+        if e_resultado >= 0:
+            st.success(f"Excedente de ${e_resultado:,.0f}".replace(",", "."))
+        else:
+            st.error(f"Déficit de encaje: ${abs(e_resultado):,.0f}".replace(",", "."))
+
+    with st.expander("📟 Funciones Bloomberg de referencia — tasas y mercado monetario"):
+        _tabla_bloomberg([
+            ("BTMM", "Tasas de mercado monetario y bonos soberanos por país", "Evaluar el régimen de tasas que afecta el costo de fondeo"),
+            ("GC", "Curvas de rendimiento soberanas o de swaps", "Ver dónde calza el plazo de tus colocaciones de excedentes"),
+            ("WIRP", "Probabilidades implícitas de movimientos de la TPM", "Anticipar cambios en el costo de fondeo de mañana"),
+            ("YAS", "Rendimiento y spread de un bono individual", "Valorar un DAP o instrumento concreto usado en la cuadratura"),
+            ("WB", "Panel de bonos soberanos del mundo por plazo", "Comparar tasas de referencia para colocar excedentes"),
+        ])
+
+    st.divider()
+    st.subheader("3. Planilla de riesgo-retorno del portafolio")
+
+    if "md_portafolio" not in st.session_state:
+        st.session_state["md_portafolio"] = pd.DataFrame([
+            {"Activo": "SQM-B", "Peso %": 20.0, "Retorno % anual": 12.5, "Vol % anual": 34.0},
+            {"Activo": "COPEC", "Peso %": 15.0, "Retorno % anual": 9.0, "Vol % anual": 22.0},
+            {"Activo": "ECH (proxy IPSA)", "Peso %": 30.0, "Retorno % anual": 8.5, "Vol % anual": 19.0},
+            {"Activo": "S&P 500", "Peso %": 35.0, "Retorno % anual": 14.0, "Vol % anual": 16.5},
+        ])
+
+    df_portafolio = st.data_editor(
+        st.session_state["md_portafolio"],
+        num_rows="dynamic",
+        use_container_width=True,
+        key="md_editor_portafolio",
+    )
+    st.session_state["md_portafolio"] = df_portafolio
+
+    rf = st.number_input(
+        "Tasa libre de riesgo anual (%)", value=4.08, step=0.01, key="md_rf",
+        help="UST 1 año — verificado con el Fed H.15",
+    )
+
+    if not df_portafolio.empty:
+        df_calc = df_portafolio.copy()
+        df_calc["Sharpe"] = df_calc.apply(
+            lambda fila: (fila["Retorno % anual"] - rf) / fila["Vol % anual"] if fila["Vol % anual"] else None,
+            axis=1,
+        )
+        st.dataframe(
+            df_calc.style.format({
+                "Peso %": "{:.1f}", "Retorno % anual": "{:.2f}", "Vol % anual": "{:.2f}", "Sharpe": "{:.2f}",
+            }),
+            use_container_width=True,
+        )
+
+        # float(...) explícito: df_calc["Peso %"].sum() etc. devuelven
+        # numpy.float64, que psycopg2 no sabe adaptar como parámetro de
+        # una consulta parametrizada (falla con "schema np does not
+        # exist" al intentar guardar el historial) — confirmado en una
+        # corrida real antes de este fix, no asumido.
+        peso_total = float(df_calc["Peso %"].sum())
+        retorno_portafolio = float((df_calc["Peso %"] / 100 * df_calc["Retorno % anual"]).sum())
+        vol_portafolio = float((df_calc["Peso %"] / 100 * df_calc["Vol % anual"]).sum())
+        sharpe_portafolio = (retorno_portafolio - rf) / vol_portafolio if vol_portafolio else None
+
+        col_p1, col_p2, col_p3, col_p4 = st.columns(4)
+        col_p1.metric(
+            "Peso total", f"{peso_total:.1f}%",
+            delta=None if abs(peso_total - 100) < 0.01 else "no suma 100%",
+            delta_color="inverse",
+        )
+        col_p2.metric("Retorno portafolio", f"{retorno_portafolio:.2f}%")
+        col_p3.metric("Volatilidad portafolio", f"{vol_portafolio:.2f}%")
+        col_p4.metric("Sharpe portafolio", f"{sharpe_portafolio:.2f}" if sharpe_portafolio is not None else "—")
+
+    st.caption(
+        "La volatilidad del portafolio aquí es un promedio ponderado simple entre "
+        "activos (no usa matriz de covarianzas). Para el cálculo riguroso con "
+        "correlaciones reales, usa la pestaña Laboratorio Financiero."
+    )
+
+    with st.expander("📟 Funciones Bloomberg de referencia — construcción y riesgo del portafolio"):
+        _tabla_bloomberg([
+            ("BETA", "Sensibilidad del precio respecto al mercado", "Contrastar contra la Vol % anual que ingresaste por activo"),
+            ("PRTU", "Construcción de portafolio personalizado con pesos", "Replicar esta misma tabla directamente en la terminal"),
+            ("PORT", "Seguimiento, atribución y rebalanceo en tiempo real", "Monitorear el portafolio una vez armado en PRTU"),
+            ("VIX", "Índice de volatilidad implícita del S&P 500", "Contexto de régimen de volatilidad del mercado"),
+            ("HVG", "Volatilidad histórica del activo, graficada", "Verificar la Vol % anual que ingresaste contra el dato real"),
+            ("HS", "Spread y correlación histórica entre dos activos", "Chequear si dos posiciones son en la práctica la misma apuesta"),
+        ])
+
+    st.divider()
+    st.subheader("4. Registro y descargas")
+
+    if not df_portafolio.empty:
+        st.download_button(
+            "⬇️ Descargar planilla de riesgo-retorno (CSV)",
+            df_calc.to_csv(index=False),
+            file_name=f"riesgo_retorno_{date.today().isoformat()}.csv",
+            mime="text/csv",
+        )
+
+    resumen_dia = pd.DataFrame([{
+        "Fecha": date.today().isoformat(),
+        "USD/CLP": st.session_state.get("md_usdclp") or None,
+        "UF": st.session_state.get("md_uf") or None,
+        "TPM Chile (%)": st.session_state.get("md_tpm") or None,
+        "Saldo esperado": saldo_esperado,
+        "Saldo informado": l_informado,
+        "Diferencia cuadratura": diferencia,
+        "Encaje excedente/déficit": e_resultado,
+        "Retorno portafolio (%)": retorno_portafolio if not df_portafolio.empty else None,
+        "Vol portafolio (%)": vol_portafolio if not df_portafolio.empty else None,
+        "Sharpe portafolio": sharpe_portafolio if not df_portafolio.empty else None,
+        "Brief": st.session_state.get("md_brief") or None,
+    }])
+    st.download_button(
+        "⬇️ Descargar resumen del día (CSV)",
+        resumen_dia.to_csv(index=False),
+        file_name=f"resumen_mesa_dinero_{date.today().isoformat()}.csv",
+        mime="text/csv",
+    )
+
+    st.markdown("**Historial de cuadraturas guardadas**")
+    st.caption(
+        "Guarda un snapshot de hoy para ir armando un track record de varios "
+        "días de práctica — útil para mostrar en una entrevista. Se guarda en "
+        "la misma base de datos del dashboard, no en el navegador, así que no "
+        "se pierde entre sesiones."
+    )
+
+    if st.button("💾 Guardar día en el historial", key="md_guardar"):
+        try:
+            with engine.begin() as conn:
+                conn.execute(
+                    text(
+                        "INSERT INTO cuadraturas_mesa_dinero "
+                        "(guardado_en, saldo_esperado, saldo_informado, diferencia, "
+                        "encaje_excedente, retorno_portafolio, vol_portafolio, "
+                        "sharpe_portafolio, usdclp, uf, tpm_chile, brief) "
+                        "VALUES "
+                        "(:guardado_en, :saldo_esperado, :saldo_informado, :diferencia, "
+                        ":encaje_excedente, :retorno_portafolio, :vol_portafolio, "
+                        ":sharpe_portafolio, :usdclp, :uf, :tpm_chile, :brief)"
+                    ),
+                    {
+                        "guardado_en": datetime.now(),
+                        "saldo_esperado": saldo_esperado,
+                        "saldo_informado": l_informado,
+                        "diferencia": diferencia,
+                        "encaje_excedente": e_resultado,
+                        "retorno_portafolio": retorno_portafolio if not df_portafolio.empty else None,
+                        "vol_portafolio": vol_portafolio if not df_portafolio.empty else None,
+                        "sharpe_portafolio": sharpe_portafolio if not df_portafolio.empty else None,
+                        "usdclp": st.session_state.get("md_usdclp") or None,
+                        "uf": st.session_state.get("md_uf") or None,
+                        "tpm_chile": st.session_state.get("md_tpm") or None,
+                        "brief": st.session_state.get("md_brief") or None,
+                    },
+                )
+            st.success("Día guardado en el historial.")
+        except Exception as e:
+            st.error(f"No se pudo guardar: {e}")
+
+    try:
+        df_historial = pd.read_sql(
+            text(
+                "SELECT guardado_en, saldo_esperado, saldo_informado, diferencia, "
+                "encaje_excedente, retorno_portafolio, vol_portafolio, sharpe_portafolio, "
+                "usdclp, uf, tpm_chile FROM cuadraturas_mesa_dinero "
+                "ORDER BY guardado_en DESC LIMIT 60"
+            ),
+            engine,
+        )
+        if df_historial.empty:
+            st.caption("Todavía no hay días guardados.")
+        else:
+            st.dataframe(df_historial, use_container_width=True, hide_index=True)
+
+            if len(df_historial) >= 2:
+                df_hist_asc = df_historial.sort_values("guardado_en")
+                fig_hist = go.Figure()
+                fig_hist.add_trace(go.Scatter(
+                    x=df_hist_asc["guardado_en"], y=df_hist_asc["sharpe_portafolio"],
+                    mode="lines+markers", name="Sharpe portafolio",
+                ))
+                fig_hist.update_layout(
+                    height=280, xaxis_title="Fecha guardado", yaxis_title="Sharpe portafolio",
+                )
+                st.plotly_chart(fig_hist, use_container_width=True)
+
+            st.download_button(
+                "⬇️ Descargar historial completo (CSV)",
+                df_historial.to_csv(index=False),
+                file_name="historial_mesa_dinero.csv",
+                mime="text/csv",
+            )
+    except Exception as e:
+        st.caption(f"No se pudo cargar el historial todavía: {e}")

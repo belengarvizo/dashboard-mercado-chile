@@ -76,6 +76,29 @@ class BriefDiario(Base):
     generado_en = Column(DateTime, nullable=False)
 
 
+class CuadraturaMesaDinero(Base):
+    """Historial de "snapshots" guardados manualmente desde la pestaña
+    Simulación Mesa de Dinero del dashboard. No es un dato de mercado real
+    ni de ningún banco: es un registro de práctica del propio usuario
+    (cuadratura de liquidez + riesgo-retorno del día), para que pueda
+    mostrar un track record de varios días al practicar."""
+    __tablename__ = "cuadraturas_mesa_dinero"
+
+    id = Column(Integer, primary_key=True)
+    guardado_en = Column(DateTime, nullable=False)
+    saldo_esperado = Column(Numeric, nullable=False)
+    saldo_informado = Column(Numeric, nullable=False)
+    diferencia = Column(Numeric, nullable=False)
+    encaje_excedente = Column(Numeric)
+    retorno_portafolio = Column(Numeric)
+    vol_portafolio = Column(Numeric)
+    sharpe_portafolio = Column(Numeric)
+    usdclp = Column(Numeric)
+    uf = Column(Numeric)
+    tpm_chile = Column(Numeric)
+    brief = Column(Text)
+
+
 def get_engine():
     database_url = os.environ["DATABASE_URL"]
     # pool_pre_ping: antes de reusar una conexión del pool, hace un chequeo
