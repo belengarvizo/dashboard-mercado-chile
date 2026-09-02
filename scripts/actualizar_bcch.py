@@ -41,6 +41,17 @@ SERIES_A_DESCARGAR = {
     # variación mensual, que pueden confundirse con "la inflación").
     "G073.IPC.V12.2023.M": {"nombre": "IPC variación 12 meses (inflación anual, empalme base 2023=100)", "frecuencia": "mensual"},
     "F032.IMC.IND.Z.Z.EP18.Z.Z.0.M": {"nombre": "IMACEC", "frecuencia": "mensual"},
+    # Variación a 12 meses del Imacec (mismo problema que el IPC arriba: el
+    # nivel del índice por sí solo no sirve para mostrar "cuánto subió/bajó
+    # la actividad económica" -- calcular un % entre dos observaciones
+    # mensuales consecutivas del índice da un cambio mes a mes sin
+    # desestacionalizar, que no es la cifra que se reporta como "el Imacec
+    # cayó/subió X%". Encontrada vía SearchSeries; verificada contra el
+    # comunicado de prensa del Banco Central: julio 2026 da -1.49% acá vs.
+    # -1,5% publicado — descubierta porque el dashboard mostraba -3,29% para
+    # julio 2026 (el cambio mes a mes del índice bruto) mientras la prensa
+    # reportaba -1,5% interanual.
+    "F032.IMC.V12.Z.Z.2018.Z.Z.0.M": {"nombre": "IMACEC variación 12 meses", "frecuencia": "mensual"},
     "F019.PPB.PRE.100.D": {"nombre": "Precio del cobre (USD/oz troy)", "frecuencia": "diaria"},
     "F022.SPC.TPR.D090.NO.Z.D": {"nombre": "Swap Promedio Cámara nominal (90 días)", "frecuencia": "diaria"},
     "F022.PDBC.TIN.D014.NO.Z.D": {"nombre": "Tasa libre de riesgo CLP (PDBC 14 días)", "frecuencia": "diaria"},

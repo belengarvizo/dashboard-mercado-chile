@@ -24,7 +24,12 @@ INDICADORES_PREMERCADO = [
     ("UF", "macro", "Unidad de fomento (UF)", "CLP"),
     ("TPM Chile", "macro", "Tasa de política monetaria (TPM)", "%"),
     ("IPC (inflación anual)", "macro", "IPC variación 12 meses (inflación anual, empalme base 2023=100)", "%"),
-    ("Imacec", "macro", "IMACEC", ""),
+    # Serie de variación a 12 meses, no el nivel del índice (ver comentario
+    # en scripts/actualizar_bcch.py) -- el nivel del índice hacía que esta
+    # tarjeta mostrara un cambio mes a mes sin desestacionalizar (ej. -3,29%
+    # en julio 2026) en vez de la variación interanual que efectivamente se
+    # reporta como "el Imacec" (-1,5% ese mismo mes).
+    ("Imacec", "macro", "IMACEC variación 12 meses", "%"),
     ("Tasa de desempleo", "macro", "Tasa de desocupación nacional (INE, desestacionalizada)", "%"),
 ]
 
