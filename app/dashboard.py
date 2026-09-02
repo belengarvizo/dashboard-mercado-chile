@@ -5,6 +5,7 @@ APIs directamente) para que cargue rápido sin importar quién lo abra.
 Correr localmente con: streamlit run app/dashboard.py
 """
 
+import io
 import math
 import os
 import random
@@ -21,6 +22,7 @@ import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
 from matplotlib.colors import LinearSegmentedColormap
+from openpyxl import Workbook
 from scipy import stats
 from sqlalchemy import text
 from models import get_engine, CuadraturaMesaDinero
@@ -4279,4 +4281,116 @@ with tab_mesa_dinero:
             f"Eficiencia promedio: {df_hist_coloc['Eficiencia'].mean():.0f}% (100% = elegiste "
             "siempre la mejor tasa disponible sin descalce de liquidez). Se reinicia si recargas "
             "la página — es para practicar en la sesión, no queda guardado en el historial de la BD."
+        )
+
+    with st.expander("📟 Cómo ejecutarías esta decisión en Bloomberg, paso a paso"):
+        st.caption(
+            "No es una función suelta: encadenar varias funciones en orden es lo "
+            "que la guía ENFIN4350 llama analizar tasas (Paso 1b) y monitorear el "
+            "portafolio (Paso 5), aplicado a esta decisión puntual."
+        )
+        _tabla_bloomberg([
+            ("BTMM", "Resumen de tasas de mercado monetario y bonos soberanos por país", "Contexto: ¿cómo está el nivel general de tasas en Chile hoy?"),
+            ("GC / CRVF", "Grafica la curva de rendimiento soberana o de swaps; CRVF la localiza si no la tienes cargada", "Ver la forma de la curva CLP — empinada, plana o invertida — para saber si conviene alargar el plazo"),
+            ("WIRP", "Probabilidades implícitas de movimientos de la TPM en la próxima reunión", "Alta probabilidad de recorte → conviene lockear un plazo más largo ahora; alta probabilidad de alza → conviene quedarse corto y renovar después"),
+            ("YAS", "Rendimiento y spread de un bono o instrumento específico", "Confirmar la tasa exacta del instrumento elegido (ej. un PDBC concreto) antes de ejecutar, no solo la tasa indicativa"),
+            ("PRTU", "Construcción de portafolio personalizado con pesos", "Registrar la colocación ya ejecutada como una posición más del portafolio"),
+            ("PORT", "Seguimiento, atribución y rebalanceo en tiempo real", "Monitorear esa colocación junto con el resto de la cartera hasta que venza"),
+        ])
+
+    with st.expander("🧮 Excel avanzado: macro para automatizar esta misma decisión"):
+        st.caption(
+            "La tercera responsabilidad del puesto es justamente esta: planillas "
+            "automatizadas, no repetir la decisión a mano cada vez. La macro de "
+            "abajo replica en VBA la misma lógica que acabas de aplicar arriba "
+            "(filtrar por plazo ≤ horizonte, elegir la mejor tasa entre las que "
+            "califican, marcar un descalce), sobre una planilla con el horizonte "
+            "en B1 y la tabla de instrumentos desde A3."
+        )
+        st.code(
+            'Sub RecomendarColocacion()\n'
+            '    \' Recomienda el instrumento con mejor tasa entre los que respetan\n'
+            '    \' el horizonte de liquidez (Plazo <= Horizonte), y marca en rojo\n'
+            '    \' cualquier instrumento que generaría un descalce de liquidez.\n'
+            '    Dim horizonte As Long\n'
+            '    Dim fila As Long\n'
+            '    Dim mejorFila As Long\n'
+            '    Dim mejorTasa As Double\n'
+            '\n'
+            '    horizonte = Range("B1").Value\n'
+            '    mejorTasa = -1\n'
+            '    mejorFila = 0\n'
+            '\n'
+            '    fila = 4\n'
+            '    Do While Range("A" & fila).Value <> ""\n'
+            '        Dim plazo As Long, tasa As Double\n'
+            '        plazo = Range("B" & fila).Value\n'
+            '        tasa = Range("C" & fila).Value\n'
+            '\n'
+            '        If plazo > horizonte Then\n'
+            '            \' Descalce: el instrumento vence después de cuándo se\n'
+            '            \' necesita el efectivo -- se marca, no se considera.\n'
+            '            Range("A" & fila & ":C" & fila).Interior.Color = RGB(244, 199, 195)\n'
+            '        Else\n'
+            '            Range("A" & fila & ":C" & fila).Interior.ColorIndex = xlNone\n'
+            '            If tasa > mejorTasa Then\n'
+            '                mejorTasa = tasa\n'
+            '                mejorFila = fila\n'
+            '            End If\n'
+            '        End If\n'
+            '\n'
+            '        fila = fila + 1\n'
+            '    Loop\n'
+            '\n'
+            '    If mejorFila = 0 Then\n'
+            '        MsgBox "Ningún instrumento respeta el horizonte de " & horizonte & " días.", vbExclamation\n'
+            '        Exit Sub\n'
+            '    End If\n'
+            '\n'
+            '    Range("A" & mejorFila & ":C" & mejorFila).Interior.Color = RGB(198, 224, 180)\n'
+            '    Range("E1").Value = "Recomendado: " & Range("A" & mejorFila).Value & " (" & mejorTasa & "%)"\n'
+            '\n'
+            '    MsgBox "Mejor opción sin descalce: " & Range("A" & mejorFila).Value & _\n'
+            '           " a " & mejorTasa & "%.", vbInformation\n'
+            'End Sub',
+            language="vbnet",
+        )
+        st.caption(
+            "Cómo usarla: Alt+F11 abre el editor de VBA → clic derecho en el "
+            "proyecto → Insertar → Módulo → pega el código → vuelve a Excel → "
+            "pestaña Programador → Macros → RecomendarColocacion → Ejecutar. Se "
+            "puede asignar a un botón (Programador → Insertar → Botón) para no "
+            "tener que abrir el editor cada vez."
+        )
+
+        libro_excel = Workbook()
+        hoja = libro_excel.active
+        hoja.title = "Colocacion"
+        hoja["A1"] = "Horizonte (días)"
+        hoja["B1"] = escenario["horizonte"]
+        hoja["A3"], hoja["B3"], hoja["C3"] = "Instrumento", "Plazo (días)", "Tasa (%)"
+        fila_excel = 4
+        for nombre, datos in escenario["instrumentos"].items():
+            hoja[f"A{fila_excel}"] = nombre
+            hoja[f"B{fila_excel}"] = datos["plazo"]
+            hoja[f"C{fila_excel}"] = datos["tasa"]
+            fila_excel += 1
+        hoja["E1"] = "Recomendado:"
+        hoja.column_dimensions["A"].width = 34
+        hoja.column_dimensions["E"].width = 40
+        buffer_excel = io.BytesIO()
+        libro_excel.save(buffer_excel)
+
+        st.download_button(
+            "⬇️ Descargar planilla base (con el escenario de hoy, sin la macro)",
+            buffer_excel.getvalue(),
+            file_name="colocacion_excedentes_base.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+        st.caption(
+            "El archivo trae el mismo escenario que ves arriba, en el layout que "
+            "espera la macro (horizonte en B1, tabla desde A3). No incluye la "
+            "macro — Excel no guarda macros en .xlsx, solo en .xlsm — así que hay "
+            "que abrirlo, guardarlo como .xlsm y recién ahí pegar el código de "
+            "arriba."
         )
