@@ -224,7 +224,7 @@ hora de la última actualización de cada fuente de datos.
 - Tasa de política monetaria (TPM)
 - IPC (índice)
 - IMACEC
-- Precio del cobre (USD/oz troy)
+- Precio del cobre (USD/lb)
 - Swap Promedio Cámara nominal (90 días)
 - Tasa libre de riesgo CLP (PDBC a 14 días)
 - Bono BCCh en pesos (BCP) a 10 años, tasa de mercado secundario — usado

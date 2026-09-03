@@ -52,7 +52,11 @@ SERIES_A_DESCARGAR = {
     # julio 2026 (el cambio mes a mes del índice bruto) mientras la prensa
     # reportaba -1,5% interanual.
     "F032.IMC.V12.Z.Z.2018.Z.Z.0.M": {"nombre": "IMACEC variación 12 meses", "frecuencia": "mensual"},
-    "F019.PPB.PRE.100.D": {"nombre": "Precio del cobre (USD/oz troy)", "frecuencia": "diaria"},
+    # El nombre decía "USD/oz troy" pero el valor guardado (~6.5 en 2026) es
+    # US$/libra -- confirmado comparando contra el cobre LME (US$/tonelada)
+    # y COMEX (centavos/libra) convertidos a la misma unidad, ambos
+    # convergiendo en ~6.5-6.6, no en un valor compatible con oz troy.
+    "F019.PPB.PRE.100.D": {"nombre": "Precio del cobre (USD/lb)", "frecuencia": "diaria"},
     "F022.SPC.TPR.D090.NO.Z.D": {"nombre": "Swap Promedio Cámara nominal (90 días)", "frecuencia": "diaria"},
     "F022.PDBC.TIN.D014.NO.Z.D": {"nombre": "Tasa libre de riesgo CLP (PDBC 14 días)", "frecuencia": "diaria"},
     "F022.BCLP.TIS.AN10.NO.Z.D": {"nombre": "Bono BCCh en pesos (BCP) a 10 años - tasa mercado secundario", "frecuencia": "diaria"},

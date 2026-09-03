@@ -15,7 +15,10 @@ INDICADORES_PREMERCADO = [
     ("Dow Jones", "accion", "^DJI", ""),
     ("Nasdaq", "accion", "^IXIC", ""),
     ("VIX", "accion", "^VIX", ""),
-    ("Cobre", "macro", "Precio del cobre (USD/oz troy)", "US$/oz troy"),
+    # Etiqueta corregida: decía "USD/oz troy" pero el valor guardado
+    # (~6.5 en 2026) es US$/libra -- confirmado contra cobre LME y COMEX
+    # convertidos a la misma unidad (ver comentario en actualizar_bcch.py).
+    ("Cobre", "macro", "Precio del cobre (USD/lb)", "US$/lb"),
     ("Petróleo WTI", "accion", "CL=F", "US$/barril"),
     ("Bono UST 10 años", "macro", "Bono del Tesoro de EEUU a 10 años (UST10Y)", "%"),
     ("TPM EEUU", "macro", "Tasa de política monetaria de EEUU (Effective Federal Funds Rate)", "%"),
@@ -274,7 +277,7 @@ VENTANA_ATRIBUCION_IPSA = 120
 
 # (nombre del factor, columna de retorno, tipo de tabla de origen, nombre/ticker en la fuente)
 FACTORES_ATRIBUCION_IPSA = [
-    ("Cobre", "cobre", "macro", "Precio del cobre (USD/oz troy)"),
+    ("Cobre", "cobre", "macro", "Precio del cobre (USD/lb)"),
     ("S&P 500", "sp500", "accion", "^GSPC"),
     ("USD/CLP", "usdclp", "macro", "Tipo de cambio observado"),
 ]
@@ -293,7 +296,7 @@ def _retornos_atribucion_ipsa(df_acciones: pd.DataFrame, df_macro: pd.DataFrame)
     ech = df_acciones[df_acciones["ticker"] == "ECH"].sort_values("fecha").set_index("fecha")
     sp500 = df_acciones[df_acciones["ticker"] == "^GSPC"].sort_values("fecha").set_index("fecha")
     cobre = (
-        df_macro[df_macro["nombre"] == "Precio del cobre (USD/oz troy)"]
+        df_macro[df_macro["nombre"] == "Precio del cobre (USD/lb)"]
         .sort_values("fecha").set_index("fecha")["valor"]
     )
     usdclp = (
