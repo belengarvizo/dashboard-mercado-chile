@@ -11,6 +11,18 @@ se imprime un resumen con el estado de cada paso, y el script termina con
 código de salida distinto de cero si alguno falló — para que una falla
 parcial quede visible en el log de esa corrida, no se descubra recién al
 otro día por un dato atrasado.
+
+Orden: noticias y brief van PRIMERO, antes de los pulls de series del BCCh
+y precios de acciones. Esos dos pulls bajan la historia completa de cada
+serie/ticker en cada corrida y pueden tardar >30 min y ser matados por el
+límite de ejecución del contenedor (pasó el 2026-09-02) — poniéndolos al
+final, un kill del pull de acciones ya no se lleva por delante los
+titulares ni el resumen. El costo: el brief se arma con los indicadores de
+la corrida anterior (~1 día de atraso) en vez de los del mismo día; para
+un brief premercado de las 10:00 eso es aceptable (aún no hay cierre de
+hoy) y los titulares sí quedan frescos. Revisar este orden cuando los
+pulls pasen a ser incrementales y una corrida vuelva a durar pocos
+minutos.
 """
 
 import os
@@ -25,10 +37,10 @@ from scripts.actualizar_noticias import actualizar_todas_las_noticias
 from scripts.generar_brief import generar_brief_diario
 
 PASOS = [
-    ("Series del BCCh", actualizar_todas_las_series),
-    ("Acciones del IPSA", actualizar_todas_las_acciones),
     ("Titulares de noticias", actualizar_todas_las_noticias),
     ("Resumen diario (IA)", generar_brief_diario),
+    ("Series del BCCh", actualizar_todas_las_series),
+    ("Acciones del IPSA", actualizar_todas_las_acciones),
 ]
 
 
