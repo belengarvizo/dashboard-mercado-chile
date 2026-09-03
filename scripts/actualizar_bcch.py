@@ -1,17 +1,47 @@
 """
-Descarga las series macro del Banco Central de Chile y las guarda en la BD.
+Descarga las series macro del Banco Central de Chile (y de Yahoo Finance y
+FRED, para los datos de EEUU que el BCCh no publica) y las guarda en la BD.
 Este script lo corre el cron job de Railway una vez al día.
 
 Requiere las variables de entorno:
   BCCH_TOKEN   -> API key/token gratuito de la API del BCCh (autenticación REST)
   DATABASE_URL -> conexión a PostgreSQL (la da Railway)
+
+Estrategia de descarga (mismo motivo que actualizar_acciones.py: que una
+corrida diaria no vuelva a pasarse de 30 min y ser matada por el límite
+del contenedor):
+
+  Fase 1 — incremental: para todas las series se baja solo una ventana
+  reciente (DIAS_VENTANA_INCREMENTAL según la frecuencia). guardar_
+  observaciones ya hace UPDATE de los valores que cambiaron, así que las
+  revisiones (IPC/IMACEC/UNRATE se revisan hasta ~3 meses hacia atrás) se
+  corrigen igual dentro de esa ventana.
+
+  Fase 2 — re-sync de historia completa: baja desde el inicio real de cada
+  serie, pero solo una porción del total por corrida, empezando en un
+  offset rotativo por fecha e iterando circular hasta agotar PRESUPUESTO_
+  REFRESH_SEG. Cada serie se re-sincroniza por completo cada pocos días
+  sin que ninguna corrida baje las ~31 series enteras de una. Un corte por
+  presupuesto o un SIGKILL no pierde nada (commit por serie).
+
+  --full fuerza el re-sync completo de todas las series (uso manual).
+
+Las series del BCCh no tienen splits (son tasas, índices y tipo de cambio),
+así que acá no hay detector de reajuste como en actualizar_acciones.py.
 """
 
 import os
 import sys
-from datetime import datetime, date
+import time
+from datetime import datetime, date, timedelta
 
 sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
+
+# En un dev local en Windows la consola es cp1252 y un print con un carácter
+# no-latino aborta el script; con errors="replace" degrada a "?" en vez de
+# tirar UnicodeEncodeError. En el cron (Linux, UTF-8) es un no-op.
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(errors="replace")
 
 import requests
 import yfinance as yf
@@ -252,8 +282,76 @@ def guardar_observaciones(session, codigo: str, nombre: str, frecuencia: str, ob
         session.bulk_save_objects(nuevas)
 
 
-def actualizar_todas_las_series():
+# Cuánto hacia atrás baja la fase incremental, por frecuencia de la serie.
+# Margen holgado sobre la ventana real de revisiones (IPC/IMACEC/UNRATE se
+# revisan hasta ~3 meses; tasas y tipo de cambio no se revisan).
+DIAS_VENTANA_INCREMENTAL = {"diaria": 180, "semanal": 300, "mensual": 500}
+
+# Presupuesto de tiempo (segundos) para la fase 2 en una corrida normal.
+# Medido: fase 1 (~31 series, ventana reciente) ~10s; fase 2 completa de
+# las 31 series ~135s en un día con APIs rápidas. Con este presupuesto un
+# día lento se trunca y rota en vez de acumular tiempo.
+PRESUPUESTO_REFRESH_SEG = 200
+
+
+def _first_date_incremental(frecuencia: str) -> str:
+    dias = DIAS_VENTANA_INCREMENTAL.get(frecuencia, 180)
+    return (date.today() - timedelta(days=dias)).isoformat()
+
+
+def _construir_jobs() -> list[dict]:
+    """Lista unificada de todas las series a descargar, cada una con su
+    fuente (`kind`), su identificador en esa fuente y el inicio real de su
+    historia (`first_date_completo`)."""
+    jobs = []
+    for codigo, info in SERIES_A_DESCARGAR.items():
+        jobs.append({
+            "codigo": codigo, "nombre": info["nombre"], "frecuencia": info["frecuencia"],
+            "kind": "bcch", "ident": codigo, "first_date_completo": "2015-01-01",
+        })
+    jobs.append({"codigo": CODIGO_UST10, "nombre": NOMBRE_UST10, "frecuencia": "diaria",
+                 "kind": "yf", "ident": "^TNX", "first_date_completo": "2015-01-01"})
+    jobs.append({"codigo": CODIGO_UST2, "nombre": NOMBRE_UST2, "frecuencia": "diaria",
+                 "kind": "yf", "ident": "2YY=F", "first_date_completo": "2021-08-13"})
+    jobs.append({"codigo": CODIGO_TPM_EEUU, "nombre": NOMBRE_TPM_EEUU, "frecuencia": "diaria",
+                 "kind": "fred", "ident": "DFF", "first_date_completo": "2015-01-01"})
+    jobs.append({"codigo": CODIGO_TREASURY_1Y, "nombre": NOMBRE_TREASURY_1Y, "frecuencia": "diaria",
+                 "kind": "fred", "ident": "DGS1", "first_date_completo": "2015-01-01"})
+    for fred_id, plazo in SERIES_TREASURY_FRED.items():
+        jobs.append({
+            "codigo": f"FRED.{fred_id}",
+            "nombre": f"Bono del Tesoro de EEUU a {plazo} (Treasury Constant Maturity, H.15)",
+            "frecuencia": "diaria", "kind": "fred", "ident": fred_id,
+            "first_date_completo": "2015-01-01",
+        })
+    for fred_id, info in SERIES_RECESION_FRED.items():
+        jobs.append({
+            "codigo": f"FRED.{fred_id}", "nombre": info["nombre"], "frecuencia": info["frecuencia"],
+            "kind": "fred", "ident": fred_id, "first_date_completo": "1948-01-01",
+        })
+    return jobs
+
+
+def _descargar_job(job: dict, incremental: bool) -> list[dict]:
+    if incremental:
+        # nunca antes del inicio real de la serie (comparación lexicográfica
+        # de fechas ISO, válida para YYYY-MM-DD)
+        first_date = max(_first_date_incremental(job["frecuencia"]), job["first_date_completo"])
+    else:
+        first_date = job["first_date_completo"]
+
+    if job["kind"] == "bcch":
+        return descargar_serie(job["ident"], first_date)
+    if job["kind"] == "yf":
+        return descargar_serie_yfinance(job["ident"], first_date)
+    if job["kind"] == "fred":
+        return descargar_serie_fred(job["ident"], first_date)
+    raise ValueError(f"kind desconocido: {job['kind']}")
+
+
+def actualizar_todas_las_series(refresh_completo=False):
     session = get_session()
+    jobs = _construir_jobs()
 
     def _guardar_y_commitear(codigo, nombre, frecuencia, observaciones):
         def _hacerlo():
@@ -268,46 +366,30 @@ def actualizar_todas_las_series():
         con_reintentos_db(session, _hacerlo)
 
     try:
-        for codigo, info in SERIES_A_DESCARGAR.items():
-            print(f"Descargando {info['nombre']} ({codigo})...")
-            observaciones = descargar_serie(codigo)
-            _guardar_y_commitear(codigo, info["nombre"], info["frecuencia"], observaciones)
-            print(f"  -> {len(observaciones)} observaciones procesadas")
+        # --- Fase 1: ventana incremental para todas las series ---
+        for job in jobs:
+            print(f"Descargando {job['nombre']} ({job['codigo']})...")
+            observaciones = _descargar_job(job, incremental=True)
+            _guardar_y_commitear(job["codigo"], job["nombre"], job["frecuencia"], observaciones)
+            print(f"  -> {len(observaciones)} observaciones (ventana reciente)")
 
-        print(f"Descargando {NOMBRE_UST10} ({CODIGO_UST10})...")
-        observaciones = descargar_serie_yfinance("^TNX")
-        _guardar_y_commitear(CODIGO_UST10, NOMBRE_UST10, "diaria", observaciones)
-        print(f"  -> {len(observaciones)} observaciones procesadas")
+        # --- Fase 2: re-sync de historia completa, offset rotativo + presupuesto ---
+        if refresh_completo:
+            objetivo = jobs
+        else:
+            offset = date.today().toordinal() % len(jobs)
+            objetivo = jobs[offset:] + jobs[:offset]
 
-        print(f"Descargando {NOMBRE_UST2} ({CODIGO_UST2})...")
-        observaciones = descargar_serie_yfinance("2YY=F", first_date="2021-08-13")
-        _guardar_y_commitear(CODIGO_UST2, NOMBRE_UST2, "diaria", observaciones)
-        print(f"  -> {len(observaciones)} observaciones procesadas")
-
-        print(f"Descargando {NOMBRE_TPM_EEUU} ({CODIGO_TPM_EEUU})...")
-        observaciones = descargar_serie_fred("DFF")
-        _guardar_y_commitear(CODIGO_TPM_EEUU, NOMBRE_TPM_EEUU, "diaria", observaciones)
-        print(f"  -> {len(observaciones)} observaciones procesadas")
-
-        print(f"Descargando {NOMBRE_TREASURY_1Y} ({CODIGO_TREASURY_1Y})...")
-        observaciones = descargar_serie_fred("DGS1")
-        _guardar_y_commitear(CODIGO_TREASURY_1Y, NOMBRE_TREASURY_1Y, "diaria", observaciones)
-        print(f"  -> {len(observaciones)} observaciones procesadas")
-
-        for fred_id, plazo in SERIES_TREASURY_FRED.items():
-            codigo = f"FRED.{fred_id}"
-            nombre = f"Bono del Tesoro de EEUU a {plazo} (Treasury Constant Maturity, H.15)"
-            print(f"Descargando {nombre} ({codigo})...")
-            observaciones = descargar_serie_fred(fred_id)
-            _guardar_y_commitear(codigo, nombre, "diaria", observaciones)
-            print(f"  -> {len(observaciones)} observaciones procesadas")
-
-        for fred_id, info in SERIES_RECESION_FRED.items():
-            codigo = f"FRED.{fred_id}"
-            print(f"Descargando {info['nombre']} ({codigo})...")
-            observaciones = descargar_serie_fred(fred_id, first_date="1948-01-01")
-            _guardar_y_commitear(codigo, info["nombre"], info["frecuencia"], observaciones)
-            print(f"  -> {len(observaciones)} observaciones procesadas")
+        print(f"\n-- Re-sync historia completa: hasta {len(objetivo)} serie(s), presupuesto {PRESUPUESTO_REFRESH_SEG}s --")
+        inicio = time.monotonic()
+        for i, job in enumerate(objetivo):
+            if not refresh_completo and time.monotonic() - inicio > PRESUPUESTO_REFRESH_SEG:
+                print(f"  Presupuesto agotado; {len(objetivo) - i} serie(s) quedan para la próxima rotación.")
+                break
+            print(f"Re-sync completo {job['nombre']} ({job['codigo']})...")
+            observaciones = _descargar_job(job, incremental=False)
+            _guardar_y_commitear(job["codigo"], job["nombre"], job["frecuencia"], observaciones)
+            print(f"  -> {len(observaciones)} observaciones (historia completa)")
 
         def _guardar_metadata():
             # Registra que esta fuente se actualizó ahora
@@ -330,4 +412,4 @@ def actualizar_todas_las_series():
 
 
 if __name__ == "__main__":
-    actualizar_todas_las_series()
+    actualizar_todas_las_series(refresh_completo="--full" in sys.argv)

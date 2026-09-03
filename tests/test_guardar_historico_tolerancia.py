@@ -104,5 +104,44 @@ def test_ruido_de_punto_flotante_no_dispara_update_pero_cambio_real_si():
         session.close()
 
 
+def test_detector_de_reajuste_historico_distingue_split_de_ruido_de_dividendo():
+    """El segundo valor devuelto por guardar_historico() debe marcarse True
+    solo cuando un cierre YA guardado cambia por un factor grande (split o
+    corrección de datos), no por el re-ajuste continuo de dividendos."""
+    session = get_session()
+    _limpiar(session)
+    try:
+        f1 = pd.Timestamp("2024-02-01").date()
+        f2 = pd.Timestamp("2024-02-02").date()
+
+        guardar_historico(session, TICKER_PRUEBA, _historico({
+            f1: (100.0, 1000),
+            f2: (110.0, 1100),
+        }))
+        session.commit()
+
+        # (a) Ruido de re-ajuste por dividendo (~0.001%): NO es reajuste histórico.
+        _, reajuste_ruido = guardar_historico(session, TICKER_PRUEBA, _historico({
+            f1: (100.001, 1000),
+            f2: (110.001, 1100),
+        }))
+        session.commit()
+        assert reajuste_ruido is False, "El re-ajuste por dividendo en efectivo no debe marcar reajuste histórico"
+
+        # (b) Split 2:1 -> los cierres ya guardados caen ~50%: SÍ es reajuste.
+        _, reajuste_split = guardar_historico(session, TICKER_PRUEBA, _historico({
+            f1: (50.0, 1000),
+            f2: (55.0, 1100),
+        }))
+        session.commit()
+        assert reajuste_split is True, "Un split (cambio ~50% en un cierre ya guardado) debe marcar reajuste histórico"
+
+        print("OK: el detector distingue el ruido de dividendo de un split real.")
+    finally:
+        _limpiar(session)
+        session.close()
+
+
 if __name__ == "__main__":
     test_ruido_de_punto_flotante_no_dispara_update_pero_cambio_real_si()
+    test_detector_de_reajuste_historico_distingue_split_de_ruido_de_dividendo()
