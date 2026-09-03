@@ -4459,3 +4459,289 @@ with tab_mesa_dinero:
             "que abrirlo, guardarlo como .xlsm y recién ahí pegar el código de "
             "arriba."
         )
+
+    # ------------------------------------------------------------------
+    st.divider()
+    st.subheader("6. 📈 Laboratorio Renta Variable")
+    st.caption(
+        "Dos ejercicios de un curso de Renta Variable con reglas mecánicas y "
+        "totalmente especificadas: el sistema no \"opina\" si acertaste — vuelve a "
+        "aplicar las mismas reglas en código y te muestra el detalle acción por "
+        "acción. Mismo patrón que la sección 5: datos fijos → tu decisión → "
+        "evaluación con feedback. \"Nuevo intento\" reordena las acciones para que "
+        "no memorices por posición (la respuesta correcta no cambia)."
+    )
+
+    # ===== Módulo A — Passive Screener (Dodd-Graham) =====
+    st.markdown("#### Módulo A — Passive Screener (Dodd-Graham)")
+    st.caption(
+        "Screener pasivo estilo Graham: te quedas solo con las acciones que pasan "
+        "**dos** filtros de PE **a la vez**. Yield de los AAA corporate bonds = 5%. "
+        "El PE de cada acción se calcula como Precio / EPS."
+    )
+
+    RV_SCREENER_ACCIONES = {
+        "A": {"precio": 12.0, "eps": 1.05, "pe_prom": 25.0},
+        "B": {"precio": 24.0, "eps": 2.30, "pe_prom": 34.0},
+        "C": {"precio": 32.0, "eps": 1.76, "pe_prom": 25.0},
+        "D": {"precio": 2.0, "eps": 0.07, "pe_prom": 50.0},
+        "E": {"precio": 17.0, "eps": 0.80, "pe_prom": 70.0},
+        "F": {"precio": 23.0, "eps": 1.30, "pe_prom": 21.0},
+        "G": {"precio": 6.0, "eps": 0.50, "pe_prom": 22.0},
+    }
+    RV_SCREENER_YIELD_AAA = 0.05
+    RV_SCREENER_UMBRAL_C1 = 1 / RV_SCREENER_YIELD_AAA   # PE < 20
+    RV_SCREENER_FACTOR_C2 = 0.40                        # PE < 40% del PE promedio 5 años
+
+    def _rv_screener_detalle(letra):
+        d = RV_SCREENER_ACCIONES[letra]
+        pe = d["precio"] / d["eps"]
+        umbral_c2 = RV_SCREENER_FACTOR_C2 * d["pe_prom"]
+        c1 = pe < RV_SCREENER_UMBRAL_C1
+        c2 = pe < umbral_c2
+        return {"letra": letra, "pe": pe, "umbral_c2": umbral_c2, "c1": c1, "c2": c2, "ambos": c1 and c2}
+
+    RV_SCREENER_CORRECTAS = {l for l in RV_SCREENER_ACCIONES if _rv_screener_detalle(l)["ambos"]}
+
+    st.session_state.setdefault("rv_screener_orden", list(RV_SCREENER_ACCIONES))
+    st.session_state.setdefault("rv_screener_historial", [])
+
+    if st.button("🔀 Nuevo intento (reordenar acciones)", key="rv_screener_nuevo"):
+        orden_nuevo = list(RV_SCREENER_ACCIONES)
+        random.shuffle(orden_nuevo)
+        st.session_state["rv_screener_orden"] = orden_nuevo
+
+    orden_a = st.session_state["rv_screener_orden"]
+    st.dataframe(
+        pd.DataFrame([
+            {
+                "Acción": l,
+                "Precio": RV_SCREENER_ACCIONES[l]["precio"],
+                "EPS 2016": RV_SCREENER_ACCIONES[l]["eps"],
+                "PE promedio 5 años": RV_SCREENER_ACCIONES[l]["pe_prom"],
+            }
+            for l in orden_a
+        ]),
+        hide_index=True, use_container_width=True,
+    )
+    st.caption(
+        f"**Criterio 1:** PE < 1 / yield AAA = 1 / {RV_SCREENER_YIELD_AAA:.2f} = "
+        f"**{RV_SCREENER_UMBRAL_C1:.0f}**.  ·  **Criterio 2:** PE < "
+        f"{RV_SCREENER_FACTOR_C2:.0%} del PE promedio de los últimos 5 años de esa acción."
+    )
+
+    seleccion_a = st.multiselect(
+        "¿Qué acciones cumplen AMBOS criterios a la vez?",
+        options=orden_a,
+        key="rv_screener_seleccion",
+    )
+
+    if st.button("✅ Evaluar screener", key="rv_screener_evaluar"):
+        elegidas_a = set(seleccion_a)
+        faltaron_a = RV_SCREENER_CORRECTAS - elegidas_a
+        sobraron_a = elegidas_a - RV_SCREENER_CORRECTAS
+
+        if elegidas_a == RV_SCREENER_CORRECTAS:
+            st.success(
+                "✅ Correcto. "
+                + (f"Cumplen ambos criterios: **{', '.join(sorted(RV_SCREENER_CORRECTAS))}**."
+                   if RV_SCREENER_CORRECTAS
+                   else "Ninguna acción cumple ambos criterios a la vez, y así lo marcaste.")
+            )
+            acierto_a = 1.0
+        elif not sobraron_a and faltaron_a:
+            st.warning(
+                "Parcialmente correcto: todo lo que marcaste sí cumple ambos criterios, "
+                f"pero te faltó **{', '.join(sorted(faltaron_a))}**."
+            )
+            acierto_a = len(elegidas_a & RV_SCREENER_CORRECTAS) / len(RV_SCREENER_CORRECTAS)
+        else:
+            partes_a = []
+            if sobraron_a:
+                partes_a.append(
+                    f"marcaste **{', '.join(sorted(sobraron_a))}** que no cumple(n) los dos criterios"
+                )
+            if faltaron_a:
+                partes_a.append(f"te faltó **{', '.join(sorted(faltaron_a))}**")
+            st.error("⚠️ Incorrecto: " + "; ".join(partes_a) + ".")
+            n_ok = len(RV_SCREENER_CORRECTAS) or 1
+            acierto_a = max(len(elegidas_a & RV_SCREENER_CORRECTAS) - len(sobraron_a), 0) / n_ok
+
+        st.markdown("**Detalle acción por acción**")
+        st.dataframe(
+            pd.DataFrame([
+                {
+                    "Acción": x["letra"],
+                    "PE (Precio/EPS)": round(x["pe"], 2),
+                    "Umbral C1": RV_SCREENER_UMBRAL_C1,
+                    "Pasa C1": "sí" if x["c1"] else "no",
+                    "Umbral C2 (40%·PEprom)": round(x["umbral_c2"], 1),
+                    "Pasa C2": "sí" if x["c2"] else "no",
+                    "¿Ambos?": "✅ sí" if x["ambos"] else "no",
+                }
+                for x in (_rv_screener_detalle(l) for l in orden_a)
+            ]),
+            hide_index=True, use_container_width=True,
+        )
+        st.caption(
+            "Por qué estas dos reglas: el Criterio 1 exige que la acción rente más "
+            "(vía earnings yield = 1/PE) que un bono AAA — si el PE ≥ 20, el "
+            "earnings yield ≤ 5% y no compensa el riesgo extra de la acción. El "
+            "Criterio 2 exige que además esté barata **contra su propia historia** "
+            "(PE actual < 40% de su PE típico de 5 años). Varias acciones pasan una "
+            "y fallan la otra (C y G pasan C1 pero no C2; E pasa C2 pero no C1): "
+            "solo las que pasan las dos entran a la cartera."
+        )
+
+        st.session_state["rv_screener_historial"].append({
+            "Intento": len(st.session_state["rv_screener_historial"]) + 1,
+            "Marcaste": ", ".join(sorted(elegidas_a)) or "(ninguna)",
+            "Respuesta": ", ".join(sorted(RV_SCREENER_CORRECTAS)) or "(ninguna)",
+            "Acierto": f"{acierto_a:.0%}",
+        })
+
+    if st.session_state["rv_screener_historial"]:
+        st.dataframe(
+            pd.DataFrame(st.session_state["rv_screener_historial"]),
+            hide_index=True, use_container_width=True,
+        )
+
+    # ===== Módulo B — Contrarian Value Investor =====
+    st.divider()
+    st.markdown("#### Módulo B — Contrarian Value Investor")
+    st.caption(
+        "Ser contrarian = comprar las que peor lo hicieron el año pasado, apostando "
+        "a que reviertan. Armas una cartera equal-weight de 5 acciones y el sistema "
+        "calcula tu retorno real a 6 meses con los datos ya dados, comparándolo "
+        "contra la cartera momentum (las 5 mejores del año pasado)."
+    )
+
+    RV_CONTRARIAN = {
+        "A": {"ly": -0.02, "m6": -0.05}, "B": {"ly": -0.07, "m6": -0.03},
+        "C": {"ly": 0.02, "m6": -0.05}, "D": {"ly": 0.07, "m6": 0.02},
+        "E": {"ly": 0.10, "m6": -0.03}, "F": {"ly": -0.06, "m6": 0.04},
+        "G": {"ly": -0.20, "m6": 0.03}, "H": {"ly": -0.04, "m6": 0.05},
+        "I": {"ly": 0.20, "m6": 0.03}, "J": {"ly": 0.14, "m6": -0.08},
+        "L": {"ly": -0.07, "m6": -0.01}, "M": {"ly": -0.11, "m6": 0.03},
+        "N": {"ly": 0.05, "m6": 0.01},
+    }
+    RV_CONTRARIAN_N = 5
+
+    _rv_ordenadas_ly = sorted(RV_CONTRARIAN, key=lambda l: RV_CONTRARIAN[l]["ly"])
+    RV_CONTRARIAN_PEORES = _rv_ordenadas_ly[:RV_CONTRARIAN_N]              # G, M, B, L, F
+    RV_CONTRARIAN_MEJORES = _rv_ordenadas_ly[::-1][:RV_CONTRARIAN_N]      # I, J, E, D, N
+
+    def _rv_contrarian_retorno(letras):
+        """Retorno equal-weight a 6 meses: promedio simple del performance
+        posterior de las acciones de la cartera."""
+        return sum(RV_CONTRARIAN[l]["m6"] for l in letras) / len(letras)
+
+    RV_CONTRARIAN_RET_PEORES = _rv_contrarian_retorno(RV_CONTRARIAN_PEORES)     # +0.012
+    RV_CONTRARIAN_RET_MEJORES = _rv_contrarian_retorno(RV_CONTRARIAN_MEJORES)   # -0.010
+
+    st.session_state.setdefault("rv_contrarian_orden", list(RV_CONTRARIAN))
+    st.session_state.setdefault("rv_contrarian_historial", [])
+
+    if st.button("🔀 Nuevo intento (reordenar acciones)", key="rv_contrarian_nuevo"):
+        orden_nuevo = list(RV_CONTRARIAN)
+        random.shuffle(orden_nuevo)
+        st.session_state["rv_contrarian_orden"] = orden_nuevo
+
+    orden_b = st.session_state["rv_contrarian_orden"]
+    st.dataframe(
+        pd.DataFrame([
+            {
+                "Acción": l,
+                "Performance año pasado": f"{RV_CONTRARIAN[l]['ly']:+.0%}",
+                "Performance 6 meses después": f"{RV_CONTRARIAN[l]['m6']:+.0%}",
+            }
+            for l in orden_b
+        ]),
+        hide_index=True, use_container_width=True,
+    )
+    st.caption(
+        "En el momento de decidir solo conocerías la columna \"año pasado\". La de "
+        "\"6 meses después\" es lo que efectivamente pasó — el sistema la usa para "
+        "evaluar tu cartera; elegir mirándola es hacerse trampa."
+    )
+
+    seleccion_b = st.multiselect(
+        f"Elige las {RV_CONTRARIAN_N} acciones de tu cartera contrarian "
+        "(las peores del año pasado):",
+        options=orden_b,
+        key="rv_contrarian_seleccion",
+    )
+
+    if st.button("✅ Evaluar cartera", key="rv_contrarian_evaluar"):
+        if len(seleccion_b) != RV_CONTRARIAN_N:
+            st.error(
+                f"⚠️ Elige exactamente {RV_CONTRARIAN_N} acciones (llevas {len(seleccion_b)})."
+            )
+        else:
+            elegidas_b = set(seleccion_b)
+            correctas_b = set(RV_CONTRARIAN_PEORES)
+            ret_usuario = _rv_contrarian_retorno(list(elegidas_b))
+            faltaron_b = correctas_b - elegidas_b
+            sobraron_b = elegidas_b - correctas_b
+
+            if elegidas_b == correctas_b:
+                st.success(
+                    f"✅ Correcto: elegiste las {RV_CONTRARIAN_N} peores del año pasado "
+                    f"(**{', '.join(sorted(correctas_b))}**)."
+                )
+                acierto_b = 1.0
+            else:
+                st.warning(
+                    "Parcialmente correcto: marcaste "
+                    f"**{', '.join(sorted(sobraron_b))}** en vez de "
+                    f"**{', '.join(sorted(faltaron_b))}**. Igual calculo el retorno de tu cartera."
+                )
+                acierto_b = len(elegidas_b & correctas_b) / RV_CONTRARIAN_N
+
+            st.dataframe(
+                pd.DataFrame([
+                    {"Cartera": "Tuya",
+                     "Acciones": ", ".join(sorted(elegidas_b)),
+                     "Retorno 6 meses (equal-weight)": f"{ret_usuario:+.2%}"},
+                    {"Cartera": "Contrarian (5 peores reales)",
+                     "Acciones": ", ".join(sorted(correctas_b)),
+                     "Retorno 6 meses (equal-weight)": f"{RV_CONTRARIAN_RET_PEORES:+.2%}"},
+                    {"Cartera": "Momentum (5 mejores)",
+                     "Acciones": ", ".join(sorted(RV_CONTRARIAN_MEJORES)),
+                     "Retorno 6 meses (equal-weight)": f"{RV_CONTRARIAN_RET_MEJORES:+.2%}"},
+                ]),
+                hide_index=True, use_container_width=True,
+            )
+            st.caption(
+                f"En estos datos ganó la cartera **contrarian**: "
+                f"{RV_CONTRARIAN_RET_PEORES:+.1%} vs. {RV_CONTRARIAN_RET_MEJORES:+.1%} de "
+                f"momentum ({(RV_CONTRARIAN_RET_PEORES - RV_CONTRARIAN_RET_MEJORES):+.1%} de "
+                "diferencia). Las que más cayeron el año pasado (G −20%, M −11%) rebotaron "
+                "(+3% cada una a 6 meses), mientras que las estrellas del año pasado se dieron "
+                "vuelta (J: +14% → −8%; E: +10% → −3%). Es el patrón de **mean reversion**: "
+                "en este set no hubo persistencia del ganador, y comprar barato al que nadie "
+                "quería pagó. No es una ley — es el resultado de este ejercicio puntual, que "
+                "ilustra por qué un value investor mira al que el mercado castigó."
+            )
+
+            st.session_state["rv_contrarian_historial"].append({
+                "Intento": len(st.session_state["rv_contrarian_historial"]) + 1,
+                "Tu cartera": ", ".join(sorted(elegidas_b)),
+                "Tu retorno 6m": f"{ret_usuario:+.2%}",
+                "Acierto vs 5 peores": f"{acierto_b:.0%}",
+            })
+
+    if st.session_state["rv_contrarian_historial"]:
+        st.dataframe(
+            pd.DataFrame(st.session_state["rv_contrarian_historial"]),
+            hide_index=True, use_container_width=True,
+        )
+
+    with st.expander("📟 Cómo se haría esto en Bloomberg"):
+        _tabla_bloomberg([
+            ("EQS", "Equity Screening: filtros cuantitativos sobre un universo (PE, PB, yield, deuda) que se guardan y re-corren", "Automatizar el Módulo A — un screen con PE < 1/yield_AAA y PE < 0,4·PE_5a en vez de acción por acción"),
+            ("FA", "Financial Analysis: estados financieros y ratios históricos de una empresa, incluida la serie de PE", "Obtener el PE actual y el PE promedio de 5 años que pide el screener"),
+            ("RV", "Relative Valuation: múltiplos de la empresa contra un grupo de comparables", "Ver si un PE bajo es realmente barato o es todo el sector el que cotiza deprimido"),
+            ("PORT", "Portfolio & Risk Analytics: carga una cartera y calcula retorno, atribución y riesgo en cualquier ventana", "Backtestear la cartera contrarian contra la momentum del Módulo B sobre datos reales"),
+            ("TRA", "Total Return Analysis: retorno total de un activo o cartera entre dos fechas", "Medir el retorno a 6 meses de cada pata, como en el Módulo B"),
+        ])
