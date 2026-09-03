@@ -3855,6 +3855,71 @@ with tab_mesa_dinero:
         "de este dashboard."
     )
 
+    FUNCIONES_BLOOMBERG_PRACTICA = [
+        ("FRNT", "Escribe FRNT y anota un titular que NO sea de Chile ni de EEUU."),
+        ("TOP", "Escribe TOP y anota cuál es el factor dominante del día."),
+        ("NI", "Escribe NI CHILE y anota 2 titulares locales."),
+        ("DAYB", "Escribe DAYB y anota si hay un dato de alto impacto programado para HOY."),
+        ("WEI", "Escribe WEI y anota si el día es risk-on o risk-off (mayoría verde o roja)."),
+        ("GMM", "Escribe GMM y anota el nivel de un commodity distinto al cobre."),
+        ("FXC", "Escribe FXC y anota un cruce de monedas distinto a USD/CLP."),
+        ("BTMM", "Escribe BTMM, busca Chile y anota la tasa de referencia."),
+        ("GC", "Escribe GC y anota si la curva CLP está empinada, plana o invertida."),
+        ("CRVF", "Escribe CRVF y localiza la curva soberana de Chile."),
+        ("WIRP", "Escribe WIRP y anota la probabilidad de movimiento de TPM en la próxima RPM."),
+        ("YAS", "Escribe YAS sobre un bono chileno y anota su spread."),
+        ("WB", "Escribe WB y compara la tasa de Chile con la de otro país."),
+        ("BETA", "Escribe BETA sobre una acción del IPSA y anota el resultado."),
+        ("PRTU", "Escribe PRTU y arma un portafolio de prueba con 2 posiciones."),
+        ("PORT", "Escribe PORT sobre el portafolio que armaste en PRTU."),
+        ("VIX", "Escribe VIX Index y anota el nivel actual."),
+        ("HVG", "Escribe HVG sobre una acción y anota su volatilidad histórica."),
+        ("HS", "Escribe HS entre dos activos y anota la correlación."),
+    ]
+
+    with st.container(border=True):
+        st.markdown("**🎯 Tu registro de práctica en la Terminal Bloomberg**")
+        st.caption(
+            "Cada fila es una tarea concreta, no solo una referencia — hazla de "
+            "verdad en la terminal y recién ahí márcala. Se reinicia si recargas "
+            "la página: es para ver tu propio avance en esta sesión, no queda "
+            "guardado."
+        )
+
+        total_funciones = len(FUNCIONES_BLOOMBERG_PRACTICA)
+        practicados = sum(
+            1 for mnemonico, _ in FUNCIONES_BLOOMBERG_PRACTICA
+            if st.session_state.get(f"md_bb_check_{mnemonico}")
+        )
+        st.progress(
+            practicados / total_funciones,
+            text=f"{practicados}/{total_funciones} comandos practicados",
+        )
+
+        if st.button("🎲 Dame un comando para practicar ahora", key="md_bb_siguiente"):
+            pendientes = [
+                mnemonico for mnemonico, _ in FUNCIONES_BLOOMBERG_PRACTICA
+                if not st.session_state.get(f"md_bb_check_{mnemonico}")
+            ]
+            st.session_state["md_bb_sugerido"] = random.choice(pendientes) if pendientes else None
+
+        sugerido = st.session_state.get("md_bb_sugerido")
+        if sugerido and not st.session_state.get(f"md_bb_check_{sugerido}"):
+            tarea_sugerida = dict(FUNCIONES_BLOOMBERG_PRACTICA)[sugerido]
+            st.info(f"**{sugerido}** — {tarea_sugerida}")
+        elif practicados == total_funciones:
+            st.success("✅ Practicaste los 19 comandos de la lista en esta sesión.")
+
+        with st.expander("Ver / marcar todos los comandos"):
+            for mnemonico, tarea in FUNCIONES_BLOOMBERG_PRACTICA:
+                st.checkbox(f"**{mnemonico}** — {tarea}", key=f"md_bb_check_{mnemonico}")
+
+        st.text_area(
+            "Notas / hallazgos de hoy (opcional — pega lo que vayas encontrando)",
+            key="md_bb_notas",
+            placeholder="Ej: NI CHILE -> Banco Central advierte sobre...",
+        )
+
     def _tabla_bloomberg(filas):
         """Renderiza una tabla compacta de mnemónicos Bloomberg de referencia
         para la sección correspondiente (ver Guia_Bloomberg_ENFIN4350)."""
