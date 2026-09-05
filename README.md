@@ -363,11 +363,15 @@ particular no es confiable.
   de GitHub.
   - El dashboard (`streamlit run app/dashboard.py`) corre como servicio web
     permanente.
-  - Un **cron job diario a las 6:00 AM (hora de Chile)** corre
-    `python scripts/actualizar_todo.py`, que descarga las series del BCCh,
-    los precios de acciones, los titulares de noticias, y genera el resumen
-    diario con Gemini, en un solo paso, antes de que empiece el día bursátil.
-    Necesita `GEMINI_API_KEY` configurada como variable de entorno en Railway.
+  - Un **cron job diario a las 14:00 UTC** (≈10:00 hora de Chile) corre
+    `python scripts/actualizar_todo.py`, que descarga los titulares de
+    noticias, genera el resumen diario con Gemini, y actualiza las series
+    del BCCh y los precios de acciones, en un solo paso, antes de que
+    empiece el día bursátil. Necesita `GEMINI_API_KEY` configurada como
+    variable de entorno en Railway. El orden (noticias y brief primero,
+    luego los pulls de series/precios) es a propósito: esos pulls son los
+    largos y, si el contenedor mata la corrida por tiempo, los titulares y
+    el brief ya quedaron guardados.
 
 ### Limitación conocida: cold-start de Neon
 
@@ -381,7 +385,7 @@ compute siempre despierto, pero el costo no se justifica: en el plan Free
 agotaría la cuota de compute-hours mensual a mitad de mes, y en un plan
 pago equivale aproximadamente a lo mismo que desactivar el autosuspend
 directamente (~US$19/mes extra, estimado). Además, el cron diario de las
-6:00 AM ya despierta la base todos los días antes de que abra el mercado,
+14:00 UTC ya despierta la base todos los días antes de que abra el mercado,
 así que el cold-start real solo afecta a quien visite el dashboard después
 de un tramo largo sin ninguna otra visita — se deja como limitación
 conocida y aceptada, no como algo a resolver.
