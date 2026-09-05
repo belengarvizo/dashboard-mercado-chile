@@ -4,3 +4,11 @@ __pycache__/
 .venv/
 venv/
 .streamlit/secrets.toml
+
+# Scripts de diagnóstico manual, locales (no son parte del proyecto).
+# Nombres literales a propósito: un patrón verificar_*.py podría ignorar
+# sin querer un verificador legítimo que se agregue al repo más adelante.
+verificar_final.py
+verificar_metadata.py
+verificar_prod.py
+verificar_prod2.py

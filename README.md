@@ -358,7 +358,9 @@ particular no es confiable.
 
 ## Arquitectura de despliegue
 
-- **Base de datos:** PostgreSQL en [Neon](https://neon.tech) (`DATABASE_URL`).
+- **Base de datos:** PostgreSQL en [Railway](https://railway.app)
+  (`DATABASE_URL`, host `altaria.proxy.rlwy.net`) — el mismo Railway que
+  hostea la app y el cron.
 - **App + cron job:** [Railway](https://railway.app), conectado a este repo
   de GitHub.
   - El dashboard (`streamlit run app/dashboard.py`) corre como servicio web
@@ -373,22 +375,17 @@ particular no es confiable.
     largos y, si el contenedor mata la corrida por tiempo, los titulares y
     el brief ya quedaron guardados.
 
-### Limitación conocida: cold-start de Neon
+### Nota histórica: cold-start de la base de datos
 
-Neon (Postgres serverless) suspende el compute tras 5 minutos de inactividad
-— no es configurable a otro valor, solo activable/desactivable, y en el plan
-actual no se puede desactivar sin upgrade. Reactivar una instancia dormida
-puede agregar varios segundos (medido en este proyecto: hasta ~60s en la
-query más pesada) a la primera visita después de un período sin tráfico.
-Se evaluó agregar un ping periódico (cron adicional) para mantener el
-compute siempre despierto, pero el costo no se justifica: en el plan Free
-agotaría la cuota de compute-hours mensual a mitad de mes, y en un plan
-pago equivale aproximadamente a lo mismo que desactivar el autosuspend
-directamente (~US$19/mes extra, estimado). Además, el cron diario de las
-14:00 UTC ya despierta la base todos los días antes de que abra el mercado,
-así que el cold-start real solo afecta a quien visite el dashboard después
-de un tramo largo sin ninguna otra visita — se deja como limitación
-conocida y aceptada, no como algo a resolver.
+Cuando la base corría en Neon (Postgres serverless), la conexión sufría
+cold-start por autosuspend serverless: hasta ~60s en la primera query tras
+5 minutos de inactividad. Se evaluó un ping periódico como mitigación y se
+descartó por costo. Desde la migración a Railway (Postgres plugin, siempre
+activo) esta limitación ya no aplica.
+
+Pendiente para otra sesión: varios comentarios en el código (`models.py`,
+`retry_utils.py`, `scripts/actualizar_*.py`) todavía describen la conexión
+como "serverless de Neon" — quedan por actualizar.
 
 ## Estructura del proyecto
 
