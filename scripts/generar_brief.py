@@ -14,14 +14,16 @@ Requiere la variable de entorno:
 
 import os
 import sys
+import time
 from datetime import date, datetime, timedelta
 
 sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
 
 import pandas as pd
 from google import genai
-from models import get_session, get_engine, Noticia, BriefDiario
+from models import get_session, get_engine, Noticia, BriefDiario, ErrorActualizacion
 from market_data import calcular_resumen_mercado, calcular_atribucion_ipsa, VENTANA_ATRIBUCION_IPSA
+from retry_utils import ESPERAS_REINTENTO_SEGUNDOS
 from scripts.actualizar_noticias import FUENTES_RSS
 
 MODELO_GEMINI = "gemini-3.6-flash"
@@ -158,6 +160,97 @@ def obtener_titulares_recientes(session) -> list[dict]:
     return [{"fuente": n.fuente, "titulo": n.titulo} for n in noticias]
 
 
+class BriefBloqueadoError(RuntimeError):
+    """Gemini devolvió una respuesta sin texto utilizable (safety filter,
+    recitation, etc.). Reintentar el mismo prompt no sirve."""
+
+
+def _clasificar_error_gemini(exc: Exception) -> str:
+    """Clasifica un fallo de la llamada a Gemini en una categoría accionable:
+    "cuota" | "transitorio" | "bloqueo" | "otro". Ver ErrorActualizacion."""
+    if isinstance(exc, BriefBloqueadoError):
+        return "bloqueo"
+
+    codigo = getattr(exc, "code", None) or getattr(exc, "status_code", None)
+    texto = str(exc).lower()
+
+    if codigo == 429 or any(k in texto for k in ("resource_exhausted", "quota", "rate limit", "too many requests")):
+        return "cuota"
+    if codigo in (500, 502, 503, 504) or any(
+        k in texto for k in ("timeout", "timed out", "deadline", "unavailable", "503", "502", "504", "internal error")
+    ):
+        return "transitorio"
+    if any(k in texto for k in ("safety", "blocked", "block_reason", "recitation", "prohibited")):
+        return "bloqueo"
+    return "otro"
+
+
+def _registrar_error_actualizacion(fuente: str, categoria: str, tipo: str, mensaje: str) -> None:
+    """Best-effort: deja el detalle del error en la tabla errores_actualizacion
+    para poder diagnosticar sin el log de Railway. Usa su propia sesión (la
+    del paso puede estar en rollback) y NUNCA propaga: si esto falla, no debe
+    tapar el error real."""
+    try:
+        s = get_session()
+        try:
+            s.add(ErrorActualizacion(
+                fuente=fuente,
+                ocurrido_en=datetime.now(),
+                categoria=categoria,
+                tipo_excepcion=tipo,
+                mensaje=(mensaje or "")[:4000],
+            ))
+            s.commit()
+        finally:
+            s.close()
+        print(f"  [errores_actualizacion] {fuente}: {categoria} / {tipo}")
+    except Exception as e:
+        print(f"  (no se pudo registrar el error en errores_actualizacion: {e})")
+
+
+def _texto_de_respuesta_gemini(respuesta) -> str:
+    """Extrae el texto de la respuesta de Gemini; si viene vacía o bloqueada,
+    lanza BriefBloqueadoError con el motivo (no se reintenta el mismo prompt)."""
+    texto = getattr(respuesta, "text", None)
+    if texto and texto.strip():
+        return texto
+
+    motivo = "respuesta sin texto"
+    try:
+        candidatos = getattr(respuesta, "candidates", None) or []
+        if candidatos:
+            fr = getattr(candidatos[0], "finish_reason", None)
+            motivo = f"finish_reason={getattr(fr, 'name', fr)}"
+        feedback = getattr(respuesta, "prompt_feedback", None)
+        if feedback is not None and getattr(feedback, "block_reason", None):
+            motivo = f"block_reason={getattr(feedback.block_reason, 'name', feedback.block_reason)}"
+    except Exception:
+        pass
+    raise BriefBloqueadoError(f"Gemini no devolvió texto ({motivo})")
+
+
+def _generar_contenido_brief(cliente, prompt: str) -> str:
+    """Llama a Gemini. Reintenta con backoff SOLO los fallos transitorios
+    (timeout / 5xx); cuota agotada y respuestas bloqueadas se relanzan de
+    inmediato porque reintentar no sirve."""
+    ultimo_error = None
+    for intento in range(len(ESPERAS_REINTENTO_SEGUNDOS) + 1):
+        try:
+            respuesta = cliente.models.generate_content(model=MODELO_GEMINI, contents=prompt)
+            return _texto_de_respuesta_gemini(respuesta)
+        except BriefBloqueadoError:
+            raise  # el prompt no va a pasar por reintentar
+        except Exception as e:
+            if _clasificar_error_gemini(e) != "transitorio" or intento == len(ESPERAS_REINTENTO_SEGUNDOS):
+                raise
+            ultimo_error = e
+            espera = ESPERAS_REINTENTO_SEGUNDOS[intento]
+            print(f"  Gemini falló transitoriamente ({type(e).__name__}: {e}) — "
+                  f"reintento {intento + 1}/{len(ESPERAS_REINTENTO_SEGUNDOS)} en {espera}s...")
+            time.sleep(espera)
+    raise ultimo_error  # inalcanzable (el loop retorna o relanza), solo para el linter
+
+
 def generar_brief_diario():
     session = get_session()
 
@@ -200,8 +293,21 @@ def generar_brief_diario():
 
         print(f"Llamando a Gemini ({MODELO_GEMINI}) con {len(titulares)} titulares y {len(indicadores)} indicadores...")
         cliente = genai.Client(api_key=api_key)
-        respuesta = cliente.models.generate_content(model=MODELO_GEMINI, contents=prompt)
-        contenido = respuesta.text
+        try:
+            contenido = _generar_contenido_brief(cliente, prompt)
+        except Exception as e:
+            categoria = _clasificar_error_gemini(e)
+            if categoria == "cuota":
+                print("Brief NO generado hoy: cuota de Gemini agotada "
+                      f"({type(e).__name__}: {e}). No se reintenta hoy; brief_diario "
+                      "queda sin fila para hoy.")
+            elif categoria == "bloqueo":
+                print("Brief NO generado hoy: Gemini bloqueó la respuesta "
+                      f"({type(e).__name__}: {e}). No se reintenta el mismo prompt.")
+            elif categoria == "transitorio":
+                print("Brief NO generado hoy: Gemini falló de forma transitoria y "
+                      f"agotó los reintentos ({type(e).__name__}: {e}).")
+            raise
 
         hoy = date.today()
         existente = session.query(BriefDiario).filter_by(fecha=hoy).first()
@@ -216,6 +322,8 @@ def generar_brief_diario():
 
     except Exception as e:
         session.rollback()
+        # Deja el detalle en la BD para diagnosticar sin el log de Railway.
+        _registrar_error_actualizacion("brief", _clasificar_error_gemini(e), type(e).__name__, str(e))
         print(f"Error generando el brief diario: {e}")
         raise
     finally:

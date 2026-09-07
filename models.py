@@ -76,6 +76,28 @@ class BriefDiario(Base):
     generado_en = Column(DateTime, nullable=False)
 
 
+class ErrorActualizacion(Base):
+    """Registro del último error de cada paso del cron (actualizar_todo.py),
+    para diagnosticar sin depender del log de Railway. Se escribe best-effort:
+    si esta tabla no existe o el insert falla, el paso igual reporta su error
+    por el camino normal.
+
+    `categoria` es la clasificación accionable del fallo:
+      - "cuota"       -> límite/cuota del proveedor agotado (no reintentar hoy)
+      - "transitorio" -> timeout / 5xx (se reintenta con backoff)
+      - "bloqueo"     -> respuesta filtrada por safety (no reintentar el prompt)
+      - "otro"        -> no clasificado (se relanza para que quede visible)
+    """
+    __tablename__ = "errores_actualizacion"
+
+    id = Column(Integer, primary_key=True)
+    fuente = Column(String, nullable=False)          # "brief", "bcch", "noticias", ...
+    ocurrido_en = Column(DateTime, nullable=False)
+    categoria = Column(String, nullable=False)
+    tipo_excepcion = Column(String, nullable=False)  # type(exc).__name__
+    mensaje = Column(Text, nullable=False)
+
+
 class CuadraturaMesaDinero(Base):
     """Historial de "snapshots" guardados manualmente desde la pestaña
     Simulación Mesa de Dinero del dashboard. No es un dato de mercado real
