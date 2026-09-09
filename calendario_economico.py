@@ -1,14 +1,20 @@
 """
 Calendario de eventos económicos relevantes para 2026: RPM del Banco Central de
-Chile, FOMC de la Reserva Federal, publicación de IPC (INE) e IMACEC (BCCh), y
-reuniones ministeriales de la OPEP+. Vive fuera de app/dashboard.py (igual que
-market_data.py) para que sea reutilizable sin depender de un contexto de
-Streamlit.
+Chile, IPoM (Informe de Política Monetaria) del BCCh, FOMC de la Reserva
+Federal, publicación de IPC (INE) e IMACEC (BCCh), y reuniones ministeriales de
+la OPEP+. Vive fuera de app/dashboard.py (igual que market_data.py) para que
+sea reutilizable sin depender de un contexto de Streamlit.
 
 Fuentes y fecha de verificación: ver CALENDARIO_VERIFICADO_AL más abajo. Cada
 fecha fue verificada contra la fuente oficial correspondiente (bcentral.cl,
 federalreserve.gov, ine.gob.cl) salvo donde se indica explícitamente que es
 una fecha estimada (ver notas en EVENTOS_2026).
+
+El IPoM NO se hardcodea: se deriva de _RPM_2026. El Banco Central publica el
+IPoM cuatro veces al año, la mañana siguiente a la RPM de marzo, junio,
+septiembre y diciembre (las RPM "ampliadas"). Derivarlo de las fechas de RPM
+—en vez de listar las 4 fechas aparte— evita que se desincronice cuando el
+BCCh publique el calendario de RPM del año siguiente.
 """
 
 from dataclasses import dataclass
@@ -30,6 +36,7 @@ NOTA_VIGENCIA = (
 # de asignación fija que usa el resto del dashboard.
 INDICADOR_POR_TIPO = {
     "RPM": {"color": "#2a78d6", "etiqueta": "RPM", "organismo": "Banco Central de Chile"},
+    "IPoM": {"color": "#e87ba4", "etiqueta": "IPoM", "organismo": "Banco Central de Chile"},
     "FOMC": {"color": "#eb6834", "etiqueta": "FOMC", "organismo": "Reserva Federal (EEUU)"},
     "IPC": {"color": "#1baf7a", "etiqueta": "IPC", "organismo": "INE Chile"},
     "IMACEC": {"color": "#eda100", "etiqueta": "IMACEC", "organismo": "Banco Central de Chile"},
@@ -44,6 +51,7 @@ class EventoCalendario:
     tipo: str  # clave de INDICADOR_POR_TIPO
     descripcion: str
     confirmado: bool  # False = estimado (ver nota), no publicado explícitamente por la fuente
+    hora: str = ""  # hora de Chile "HH:MM" si es un evento con hora conocida; "" si no
 
 
 # --- RPM (Banco Central de Chile) 2026 ---------------------------------
@@ -62,6 +70,18 @@ _RPM_2026 = [
     (date(2026, 10, 26), date(2026, 10, 27)),
     (date(2026, 12, 15), date(2026, 12, 15)),
 ]
+
+# --- IPoM (Banco Central de Chile) -------------------------------------
+# Se deriva de _RPM_2026: la mañana siguiente (día calendario) a la RPM de
+# marzo, junio, septiembre y diciembre, a las 09:00 hora de Chile
+# (publicación del documento en bcentral.cl; ese mismo día hay presentación
+# ante el Senado y conferencia de prensa, no modeladas aquí). La regla
+# "mes de la RPM en {3, 6, 9, 12}" identifica sin ambigüedad las 4 RPM
+# ampliadas: en _RPM_2026 hay exactamente una reunión en cada uno de esos
+# meses. Verificado contra bcentral.cl el 09-09-2026 (IPoM de septiembre:
+# RPM el martes 08, IPoM el miércoles 09 a las 09:00).
+_MESES_RPM_AMPLIADA = {3, 6, 9, 12}
+_HORA_IPOM = "09:00"
 
 # --- FOMC (Reserva Federal de EEUU) 2026 --------------------------------
 # Fuente: federalreserve.gov/monetarypolicy/fomccalendars.htm (verificado
@@ -128,6 +148,13 @@ def _construir_eventos() -> list[EventoCalendario]:
     eventos = []
     for inicio, fin in _RPM_2026:
         eventos.append(EventoCalendario(inicio, fin, "RPM", "Reunión de Política Monetaria", True))
+        # RPM ampliada -> IPoM la mañana siguiente
+        if fin.month in _MESES_RPM_AMPLIADA:
+            fecha_ipom = fin + timedelta(days=1)
+            eventos.append(EventoCalendario(
+                fecha_ipom, fecha_ipom, "IPoM",
+                "Publicación del Informe de Política Monetaria (IPoM)", True, hora=_HORA_IPOM,
+            ))
     for inicio, fin in _FOMC_2026:
         eventos.append(EventoCalendario(inicio, fin, "FOMC", "Reunión del FOMC (decisión de tasas Fed)", True))
     for fecha, periodo in _IPC_2026:

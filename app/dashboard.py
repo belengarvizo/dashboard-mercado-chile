@@ -2255,11 +2255,13 @@ ETIQUETA_EN_POR_ES = {
 }
 
 ORGANISMO_EN_POR_TIPO = {
-    "RPM": "Central Bank of Chile", "FOMC": "US Federal Reserve", "IPC": "INE Chile",
+    "RPM": "Central Bank of Chile", "IPoM": "Central Bank of Chile",
+    "FOMC": "US Federal Reserve", "IPC": "INE Chile",
     "IMACEC": "Central Bank of Chile", "OPEP+": "OPEC+",
 }
 DESCRIPCION_EN_POR_TIPO = {
     "RPM": "Monetary Policy Meeting",
+    "IPoM": "Monetary Policy Report (IPoM) publication",
     "FOMC": "FOMC Meeting (Fed rate decision)",
     "OPEP+": "OPEC+ ministerial meeting",
 }
@@ -2473,6 +2475,8 @@ def generar_pdf_brief_premercado() -> bytes:
                     fecha_texto = evento.fecha_inicio.strftime("%Y-%m-%d")
                 else:
                     fecha_texto = f"{evento.fecha_inicio.strftime('%b %d')} to {evento.fecha_fin.strftime('%Y-%m-%d')}"
+                if evento.hora:
+                    fecha_texto += f" · {evento.hora} CLT"
                 nota_estimado = "" if evento.confirmado else " (estimated date, not confirmed)"
                 organismo = ORGANISMO_EN_POR_TIPO.get(evento.tipo, indicador["organismo"])
                 items.append(ListItem(
@@ -2759,6 +2763,8 @@ with tab_premercado:
                         f"{evento.fecha_inicio.strftime('%b %d')} to "
                         f"{evento.fecha_fin.strftime('%Y-%m-%d')}"
                     )
+                if evento.hora:
+                    fecha_texto += f" · {evento.hora} CLT"
                 nota_estimado = "" if evento.confirmado else " *(estimated date, not explicitly confirmed)*"
                 st.markdown(
                     f"<span style='background-color:{indicador['color']}; color:white; "
