@@ -2279,6 +2279,24 @@ def _evento_en_ingles(evento) -> str:
     return DESCRIPCION_EN_POR_TIPO.get(evento.tipo, evento.descripcion)
 
 
+_MESES_EN = [
+    "", "January", "February", "March", "April", "May", "June",
+    "July", "August", "September", "October", "November", "December",
+]
+
+
+def _texto_fecha_indicador(ind: dict) -> str:
+    """Texto de fecha para un indicador de Key indicators. Para los mensuales
+    (IPC, Imacec, desempleo) la fecha guardada es el PERÍODO que cubre el dato
+    (siempre día 1), no la fecha de publicación — mostrar "as of 2026-08-01"
+    daba impresión de estar desactualizado, así que se muestra el nombre del
+    período ("August 2026"). Los diarios siguen con "as of YYYY-MM-DD"."""
+    fecha = pd.Timestamp(ind["resultado"][2])
+    if ind.get("cadencia") == "mensual":
+        return f"{_MESES_EN[fecha.month]} {fecha.year}"
+    return f"as of {fecha.strftime('%Y-%m-%d')}"
+
+
 _MD_BOLD = re.compile(r"\*\*(.+?)\*\*")
 
 
@@ -2406,15 +2424,16 @@ def generar_pdf_brief_premercado() -> bytes:
                 valor, cambio_pct, fecha, cambio_absoluto = ind["resultado"]
                 unidad_en = ind["unidad"].replace("barril", "barrel")
                 valor_texto = f"{valor:,.2f}" + (f" {unidad_en}" if unidad_en else "")
+                fecha_texto = _texto_fecha_indicador(ind)
                 if ind["badge_visible"]:
                     delta_num = cambio_absoluto if ind["unidad"] == "%" else cambio_pct
                     delta_texto = f"{cambio_absoluto:+.2f} pp" if ind["unidad"] == "%" else f"{cambio_pct:+.2f}%"
-                    filas.append([etiqueta_en, valor_texto, delta_texto, pd.Timestamp(fecha).strftime("%Y-%m-%d")])
+                    filas.append([etiqueta_en, valor_texto, delta_texto, fecha_texto])
                     colores_delta.append((len(filas) - 1, _PDF_POSITIVO if delta_num >= 0 else _PDF_NEGATIVO))
                 else:
                     # Serie diaria atrasada: badge oculto (ver Key indicators
-                    # en la pestaña). Se deja el "as of" con la fecha vieja.
-                    filas.append([etiqueta_en, valor_texto, "—", pd.Timestamp(fecha).strftime("%Y-%m-%d")])
+                    # en la pestaña). Se deja la fecha vieja, que ya avisa.
+                    filas.append([etiqueta_en, valor_texto, "—", fecha_texto])
             else:
                 filas.append([etiqueta_en, "—", "—", "—"])
 
@@ -2714,7 +2733,7 @@ with tab_premercado:
                             # cambio"). Se muestra solo el valor; el "as of" con
                             # la fecha vieja ya avisa del atraso.
                             st.metric(etiqueta_en, valor_texto)
-                        st.caption(f"as of {pd.Timestamp(fecha).strftime('%Y-%m-%d')}")
+                        st.caption(_texto_fecha_indicador(ind))
                     else:
                         st.metric(etiqueta_en, "—")
                         st.caption("not enough data")

@@ -83,6 +83,14 @@ _RPM_2026 = [
 _MESES_RPM_AMPLIADA = {3, 6, 9, 12}
 _HORA_IPOM = "09:00"
 
+# El comunicado de la RPM se publica "a partir de las 18:00 horas" (nota de
+# prensa del Banco Central). El IPC del INE se publica a las 08:00 horas del
+# día 8 de cada mes, o el día hábil ANTERIOR si el 8 cae en fin de semana o
+# feriado (ver _IPC_2026: las 5 fechas ajustadas van hacia atrás). El Imacec
+# no tiene hora publicada de forma oficial, así que queda sin hora.
+_HORA_RPM = "18:00"
+_HORA_IPC = "08:00"
+
 # --- FOMC (Reserva Federal de EEUU) 2026 --------------------------------
 # Fuente: federalreserve.gov/monetarypolicy/fomccalendars.htm (verificado
 # con fetch directo a la fuente oficial).
@@ -147,7 +155,9 @@ _OPEP_2026 = [
 def _construir_eventos() -> list[EventoCalendario]:
     eventos = []
     for inicio, fin in _RPM_2026:
-        eventos.append(EventoCalendario(inicio, fin, "RPM", "Reunión de Política Monetaria", True))
+        eventos.append(EventoCalendario(
+            inicio, fin, "RPM", "Reunión de Política Monetaria", True, hora=_HORA_RPM,
+        ))
         # RPM ampliada -> IPoM la mañana siguiente
         if fin.month in _MESES_RPM_AMPLIADA:
             fecha_ipom = fin + timedelta(days=1)
@@ -158,7 +168,9 @@ def _construir_eventos() -> list[EventoCalendario]:
     for inicio, fin in _FOMC_2026:
         eventos.append(EventoCalendario(inicio, fin, "FOMC", "Reunión del FOMC (decisión de tasas Fed)", True))
     for fecha, periodo in _IPC_2026:
-        eventos.append(EventoCalendario(fecha, fecha, "IPC", f"Publicación IPC ({periodo})", True))
+        eventos.append(EventoCalendario(
+            fecha, fecha, "IPC", f"Publicación IPC ({periodo})", True, hora=_HORA_IPC,
+        ))
     for fecha, periodo, confirmado in _IMACEC_2026:
         eventos.append(EventoCalendario(fecha, fecha, "IMACEC", f"Publicación IMACEC ({periodo})", confirmado))
     for fecha, confirmado in _OPEP_2026:
