@@ -2500,36 +2500,56 @@ def generar_pdf_brief_premercado() -> bytes:
                 f"for {pd.Timestamp(fila_brief['fecha']).strftime('%Y-%m-%d')}.",
                 estilo_italic,
             ))
-            for bloque in str(fila_brief["contenido"]).split("\n\n"):
-                bloque = bloque.strip()
-                if not bloque:
+            # El brief usa "## " para secciones (Global Overview, etc.), "### "
+            # para subgrupos dentro de una sección (ej. Chile/Global dentro de
+            # "Political & Geopolitical Events") y "- "/"* " para viñetas. Se
+            # procesa LÍNEA POR LÍNEA, no por bloques separados por línea en
+            # blanco: la IA no siempre deja una línea en blanco entre un "###"
+            # y su primera viñeta, y con el enfoque por bloques ese "###" +
+            # sus viñetas terminaban renderizados como un solo párrafo en
+            # negrita (ver el bug de la sección geopolítica).
+            buffer_vinetas = []
+            buffer_parrafo = []
+
+            def _emitir_vinetas(story=story, buf=buffer_vinetas):
+                if buf:
+                    story.append(ListFlowable(
+                        [ListItem(Paragraph(_md_a_reportlab(x), estilo_bullet), bulletColor=c_gold) for x in buf],
+                        bulletType="bullet", leftIndent=12,
+                    ))
+                    buf.clear()
+
+            def _emitir_parrafo(story=story, buf=buffer_parrafo):
+                if buf:
+                    story.append(Paragraph(_md_a_reportlab(" ".join(buf)), estilo_bullet))
+                    buf.clear()
+
+            for linea in str(fila_brief["contenido"]).splitlines():
+                linea = linea.strip()
+                if not linea:
+                    _emitir_vinetas()
+                    _emitir_parrafo()
                     continue
-                # El brief usa "## " para secciones (Global Overview, etc.) y
-                # "### " para subgrupos dentro de una sección (ej. Chile/Global
-                # dentro de "Political & Geopolitical Events") -- cualquier
-                # cantidad de "#" al inicio se trata como encabezado, con
-                # "###" (o más) en un estilo más chico que "##".
-                if bloque.startswith("#"):
-                    nivel = len(bloque) - len(bloque.lstrip("#"))
-                    texto_encabezado = bloque[nivel:].strip()
+                if linea.startswith("#"):
+                    _emitir_vinetas()
+                    _emitir_parrafo()
+                    nivel = len(linea) - len(linea.lstrip("#"))
+                    texto_encabezado = linea[nivel:].strip()
                     if nivel <= 2:
                         _agregar_titulo_seccion(story, texto_encabezado)
                     else:
                         story.append(Paragraph(_md_a_reportlab(texto_encabezado), estilo_subseccion))
                     continue
-                # El brief de IA a veces usa "- " y a veces "* " para viñetas
-                # (ambos son markdown válido) -- reconocer solo "- " dejaba los
-                # bloques con "* " sin detectar como lista, y el asterisco
-                # literal quedaba visible en el PDF en vez de una viñeta real.
-                lineas_bullet = [l.strip() for l in bloque.split("\n") if l.strip()[:2] in ("- ", "* ")]
-                if lineas_bullet:
-                    items = [
-                        ListItem(Paragraph(_md_a_reportlab(l[2:].strip()), estilo_bullet), bulletColor=c_gold)
-                        for l in lineas_bullet
-                    ]
-                    story.append(ListFlowable(items, bulletType="bullet", leftIndent=12))
-                else:
-                    story.append(Paragraph(_md_a_reportlab(bloque), estilo_bullet))
+                if linea[:2] in ("- ", "* "):
+                    _emitir_parrafo()
+                    buffer_vinetas.append(linea[2:].strip())
+                    continue
+                # línea normal: ni encabezado ni viñeta
+                _emitir_vinetas()
+                buffer_parrafo.append(linea)
+
+            _emitir_vinetas()
+            _emitir_parrafo()
             story.append(Spacer(1, 4))
             story.append(HRFlowable(width="100%", thickness=0.4, color=c_rule, spaceBefore=2, spaceAfter=5))
             story.append(Paragraph(
