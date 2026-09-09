@@ -333,6 +333,18 @@ al...") y recuerda cuándo hay que actualizarlo: el Banco Central publica el
 calendario de RPM del año siguiente en septiembre, y la Fed publica el
 calendario de FOMC del año siguiente en diciembre.
 
+El **IPoM** no se lista aparte: se deriva de las fechas de RPM (la mañana
+siguiente a la RPM de marzo, junio, septiembre y diciembre), así que se
+recalcula solo cuando se actualiza el calendario de RPM.
+
+**Deuda de vencimiento anual (pendiente):** varias listas con año fijo se
+vuelven incorrectas el 1 de enero de 2027 sin que nada avise —
+`_RPM_2026` / `_FOMC_2026` / `_IPC_2026` / `_IMACEC_2026` / `_OPEP_2026` en
+`calendario_economico.py`, y `FERIADOS_EEUU_2026` en `market_data.py` (usada
+para la regla de frescura del badge de "Key indicators"). Idealmente
+derivarlas de una fuente más estable, como ya se hizo con el IPoM, o al
+menos automatizar el recordatorio de actualización.
+
 ### CMF "Hechos Esenciales": evaluado, no implementado
 
 Se investigó si `cmfchile.cl/institucional/hechos/hechos.php` se podía
