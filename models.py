@@ -73,6 +73,11 @@ class BriefDiario(Base):
 
     fecha = Column(Date, primary_key=True)
     contenido = Column(Text, nullable=False)
+    # Versión bilingüe EN/ES + glosario para el PDF (ver
+    # generar_traduccion_y_glosario en scripts/generar_brief.py). Nullable:
+    # es un paso NO crítico que puede fallar sin tumbar el brief en inglés;
+    # cuando falta, el PDF sale solo en inglés desde `contenido`.
+    contenido_bilingue = Column(Text, nullable=True)
     generado_en = Column(DateTime, nullable=False)
 
 

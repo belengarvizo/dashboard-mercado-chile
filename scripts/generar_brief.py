@@ -90,6 +90,60 @@ copper, the exchange rate (USD/CLP), or the local market (IPSA). Always use \
 cautious language ("could", "it's possible that", "eventually") — never \
 categorical causal claims or guarantees about future price movements."""
 
+# Prompt de la traducción bilingüe + glosario dinámico para el PDF (paso NO
+# crítico, ver generar_traduccion_y_glosario). Toma el brief en inglés YA
+# generado y devuelve el mismo Markdown con la traducción al español pegada
+# en la misma línea tras el token <<<ES>>>, más una sección "## Glossary" al
+# final con solo los términos técnicos que aparecieron ese día.
+PROMPT_TRADUCCION_TEMPLATE = """You are turning a finished English financial brief \
+into a bilingual English-Spanish document, in the exact style of a Bloomberg \
+class study guide.
+
+Here is today's brief (Markdown):
+
+---
+{contenido}
+---
+
+Produce a NEW Markdown document following these rules EXACTLY:
+
+1. Keep the SAME structure and the SAME Markdown markers as the original: `## ` \
+for sections, `### ` for subsections, `- ` for bullets, blank lines between \
+blocks. Keep the sections in the same order. Do NOT add, remove, merge, split \
+or reorder any bullet or paragraph — one English item maps to exactly one \
+output line.
+
+2. For every heading, bullet and paragraph, keep the original English text and \
+append its Spanish translation ON THE SAME LINE, separated by the literal token \
+`<<<ES>>>` (three '<', the letters ES, three '>'). Examples:
+`## Global Overview <<<ES>>> Panorama Global`
+`- The IMF projects Chile's GDP to grow 1.9% in 2026, weighed down by a \
+slowdown in mining investment. <<<ES>>> El FMI proyecta que el PIB de Chile \
+(Producto Interno Bruto) crecerá 1,9% en 2026, presionado a la baja por una \
+desaceleración en la inversión minera (mining investment).`
+
+3. In the Spanish text, keep technical / financial / Bloomberg terms in English \
+and put their Spanish rendering in parentheses right after, e.g. "spread \
+(diferencial)", "guidance (proyección de resultados)", "earnings (resultados \
+corporativos)". Use Chilean Spanish conventions: comma as decimal separator \
+(1,9%), and keep tickers, proper nouns and figures unchanged.
+
+4. After translating everything, add ONE final section, exactly:
+`## Glossary <<<ES>>> Glosario`
+Then one bullet per term, listing ONLY the financial / economic / Bloomberg \
+terms that ACTUALLY appear in today's brief above (a dynamic glossary, not a \
+fixed list). Each line in this EXACT format — three parts separated by ` — ` \
+(space, em dash U+2014, space):
+`- **Term (full English form)** — término en español — short definition in \
+Spanish, max 20 words.`
+Example:
+`- **GDP (Gross Domestic Product)** — PIB — Valor total de bienes y servicios \
+producidos en un país durante un período.`
+Do NOT use Markdown table syntax (no `|`). Typically 5 to 15 terms.
+
+Output ONLY the Markdown document, nothing before or after it."""
+
+
 # Se agrega al prompt SOLO cuando el residual de la atribución multi-factor
 # de hoy (ver market_data.calcular_atribucion_ipsa) tiene |z| > 2 — un
 # movimiento del IPSA que copper/S&P 500/USDCLP no explican, y que podría
@@ -251,6 +305,16 @@ def _generar_contenido_brief(cliente, prompt: str) -> str:
     raise ultimo_error  # inalcanzable (el loop retorna o relanza), solo para el linter
 
 
+def generar_traduccion_y_glosario(cliente, contenido_en: str) -> str:
+    """Devuelve el brief en inglés YA generado, con la traducción al español
+    intercalada línea por línea (token <<<ES>>>) y una sección "## Glossary"
+    dinámica al final. Reutiliza _generar_contenido_brief (mismo retry y misma
+    clasificación de errores que el brief). Paso NO crítico: quien lo llama
+    debe atrapar la excepción y seguir -- el PDF sabe caer al inglés solo."""
+    prompt = PROMPT_TRADUCCION_TEMPLATE.format(contenido=contenido_en)
+    return _generar_contenido_brief(cliente, prompt)
+
+
 def generar_brief_diario():
     session = get_session()
 
@@ -319,6 +383,30 @@ def generar_brief_diario():
 
         session.commit()
         print("Brief diario generado y guardado.")
+
+        # --- Traducción bilingüe + glosario (paso NO crítico) ---
+        # El brief en inglés ya está commiteado arriba. Si la traducción falla
+        # (cuota de Gemini, error transitorio agotado, respuesta bloqueada),
+        # se registra en errores_actualizacion y se sigue: contenido_bilingue
+        # queda NULL y el PDF sale solo en inglés desde `contenido`. Nunca
+        # re-lanza -- un fallo acá no debe tumbar el paso "brief".
+        try:
+            print("Generando traducción bilingüe + glosario...")
+            contenido_bilingue = generar_traduccion_y_glosario(cliente, contenido)
+            fila = session.query(BriefDiario).filter_by(fecha=hoy).first()
+            if fila is not None:
+                fila.contenido_bilingue = contenido_bilingue
+                session.commit()
+                print("Traducción bilingüe + glosario guardados.")
+        except Exception as e:
+            session.rollback()
+            categoria = _clasificar_error_gemini(e)
+            _registrar_error_actualizacion(
+                "brief_traduccion", categoria, type(e).__name__, str(e)
+            )
+            print(f"Traducción bilingüe NO generada hoy ({categoria}: "
+                  f"{type(e).__name__}: {e}). El brief en inglés queda igual; "
+                  "el PDF saldrá solo en inglés.")
 
     except Exception as e:
         session.rollback()

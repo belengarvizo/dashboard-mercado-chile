@@ -9,36 +9,56 @@ import numpy as np
 import pandas as pd
 from scipy import stats
 
-# (etiqueta, tipo de tabla de origen, nombre/ticker, unidad a mostrar, cadencia)
+# (etiqueta, tipo de tabla de origen, nombre/ticker, unidad a mostrar, cadencia,
+#  menor_es_mejor)
 # `cadencia` ("diaria" | "mensual") controla la regla de frescura del badge de
 # cambio (ver calcular_resumen_mercado): una serie DIARIA que quedó más de un
 # día hábil detrás del resto tiene su badge oculto (el "+0.00%" ahí significa
 # "no llegó dato nuevo", no "sin cambio"); una serie MENSUAL siempre muestra el
 # badge, porque su atraso frente a las diarias es de diseño, no una falla.
+# `menor_es_mejor` invierte el color/flecha del badge: para desempleo, VIX, la
+# inflación anual (IPC) y el petróleo WTI un delta positivo es un EMPEORAMIENTO
+# (más desocupación, mercado más nervioso, más inflación, petróleo más caro
+# para Chile que es importador neto), así que debe salir en rojo y un delta
+# negativo en verde -- al revés que un índice bursátil o el precio del cobre
+# (Chile es exportador: cobre más caro es la buena noticia). USD/CLP se deja
+# con la lógica directa a propósito: un peso más débil ayuda a exportadores y
+# golpea a consumidores en magnitud comparable, no hay una dirección "buena".
 INDICADORES_PREMERCADO = [
-    ("S&P 500", "accion", "^GSPC", "", "diaria"),
-    ("Dow Jones", "accion", "^DJI", "", "diaria"),
-    ("Nasdaq", "accion", "^IXIC", "", "diaria"),
-    ("VIX", "accion", "^VIX", "", "diaria"),
+    ("S&P 500", "accion", "^GSPC", "", "diaria", False),
+    ("Dow Jones", "accion", "^DJI", "", "diaria", False),
+    ("Nasdaq", "accion", "^IXIC", "", "diaria", False),
+    # VIX ("índice del miedo"): un alza es lectura de mercado MÁS nervioso, no
+    # más tranquilo -> subir es la mala noticia (menor_es_mejor=True).
+    ("VIX", "accion", "^VIX", "", "diaria", True),
     # Etiqueta corregida: decía "USD/oz troy" pero el valor guardado
     # (~6.5 en 2026) es US$/libra -- confirmado contra cobre LME y COMEX
     # convertidos a la misma unidad (ver comentario en actualizar_bcch.py).
-    ("Cobre", "macro", "Precio del cobre (USD/lb)", "US$/lb", "diaria"),
-    ("Petróleo WTI", "accion", "CL=F", "US$/barril", "diaria"),
-    ("Bono UST 10 años", "macro", "Bono del Tesoro de EEUU a 10 años (UST10Y)", "%", "diaria"),
-    ("TPM EEUU", "macro", "Tasa de política monetaria de EEUU (Effective Federal Funds Rate)", "%", "diaria"),
-    ("IPSA (proxy ECH)", "accion", "ECH", "", "diaria"),
-    ("USD/CLP", "macro", "Tipo de cambio observado", "CLP", "diaria"),
-    ("UF", "macro", "Unidad de fomento (UF)", "CLP", "diaria"),
-    ("TPM Chile", "macro", "Tasa de política monetaria (TPM)", "%", "diaria"),
-    ("IPC (inflación anual)", "macro", "IPC variación 12 meses (inflación anual, empalme base 2023=100)", "%", "mensual"),
+    ("Cobre", "macro", "Precio del cobre (USD/lb)", "US$/lb", "diaria", False),
+    # Chile es importador neto de petróleo: un alza del WTI es un
+    # empeoramiento (más costo de importación, presión inflacionaria) ->
+    # misma vara que el cobre pero al revés (menor_es_mejor=True).
+    ("Petróleo WTI", "accion", "CL=F", "US$/barril", "diaria", True),
+    ("Bono UST 10 años", "macro", "Bono del Tesoro de EEUU a 10 años (UST10Y)", "%", "diaria", False),
+    ("TPM EEUU", "macro", "Tasa de política monetaria de EEUU (Effective Federal Funds Rate)", "%", "diaria", False),
+    ("IPSA (proxy ECH)", "accion", "ECH", "", "diaria", False),
+    ("USD/CLP", "macro", "Tipo de cambio observado", "CLP", "diaria", False),
+    ("UF", "macro", "Unidad de fomento (UF)", "CLP", "diaria", False),
+    ("TPM Chile", "macro", "Tasa de política monetaria (TPM)", "%", "diaria", False),
+    # Inflación anual: un alza es la mala noticia (aleja del objetivo de 3%
+    # del Banco Central) -> menor_es_mejor=True. En el nivel actual (~4%) no
+    # hay riesgo de deflación que haría discutible "bajar = bueno".
+    ("IPC (inflación anual)", "macro", "IPC variación 12 meses (inflación anual, empalme base 2023=100)", "%", "mensual", True),
     # Serie de variación a 12 meses, no el nivel del índice (ver comentario
     # en scripts/actualizar_bcch.py) -- el nivel del índice hacía que esta
     # tarjeta mostrara un cambio mes a mes sin desestacionalizar (ej. -3,29%
     # en julio 2026) en vez de la variación interanual que efectivamente se
     # reporta como "el Imacec" (-1,5% ese mismo mes).
-    ("Imacec", "macro", "IMACEC variación 12 meses", "%", "mensual"),
-    ("Tasa de desempleo", "macro", "Tasa de desocupación nacional (INE, desestacionalizada)", "%", "mensual"),
+    ("Imacec", "macro", "IMACEC variación 12 meses", "%", "mensual", False),
+    ("Tasa de desempleo", "macro", "Tasa de desocupación nacional (INE, desestacionalizada)", "%", "mensual", True),
+    # Misma tasa sin ajuste estacional: es la que titula la prensa y el
+    # Boletín ENE del INE (ej. 9,5% may-jul 2026 vs. 9,3% desestacionalizada).
+    ("Tasa de desempleo (sin ajuste)", "macro", "Tasa de desocupación nacional (INE, sin ajuste estacional)", "%", "mensual", True),
 ]
 
 # Feriados de EEUU 2026 (calendario de la Reserva Federal) — para medir
@@ -232,12 +252,14 @@ def _badge_visible(item: dict, fecha_referencia) -> bool:
 
 def calcular_resumen_mercado(df_macro: pd.DataFrame, df_acciones: pd.DataFrame) -> list[dict]:
     """Para cada indicador de INDICADORES_PREMERCADO, devuelve
-    {etiqueta, unidad, cadencia, resultado, badge_visible} donde `resultado`
-    es lo que devuelve calcular_cambio_reciente (o None si no hay datos
-    suficientes) y `badge_visible` aplica la regla de frescura del badge de
-    cambio (ver _badge_visible)."""
+    {etiqueta, unidad, cadencia, menor_es_mejor, resultado, badge_visible,
+    delta_sin_direccion} donde `resultado` es lo que devuelve
+    calcular_cambio_reciente (o None si no hay datos suficientes),
+    `badge_visible` aplica la regla de frescura del badge de cambio (ver
+    _badge_visible) y `menor_es_mejor` indica que el color/flecha del badge
+    va invertido (un delta positivo es la mala noticia)."""
     resultados = []
-    for etiqueta, tipo, clave, unidad, cadencia in INDICADORES_PREMERCADO:
+    for etiqueta, tipo, clave, unidad, cadencia, menor_es_mejor in INDICADORES_PREMERCADO:
         if tipo == "accion":
             serie = (
                 df_acciones[df_acciones["ticker"] == clave]
@@ -254,6 +276,7 @@ def calcular_resumen_mercado(df_macro: pd.DataFrame, df_acciones: pd.DataFrame) 
             "etiqueta": etiqueta,
             "unidad": unidad,
             "cadencia": cadencia,
+            "menor_es_mejor": menor_es_mejor,
             "resultado": calcular_cambio_reciente(serie),
         })
 

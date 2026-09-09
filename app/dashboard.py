@@ -181,8 +181,16 @@ def cargar_brief_diario():
     # El más reciente disponible, no estrictamente "hoy": si el cron todavía no
     # corrió hoy (ej. antes de las 6 AM) es mejor mostrar el último brief real
     # que no mostrar nada.
-    query = "SELECT fecha, contenido, generado_en FROM brief_diario ORDER BY fecha DESC LIMIT 1"
-    return pd.read_sql(query, engine)
+    # `contenido_bilingue` (versión EN/ES + glosario para el PDF) puede no
+    # existir todavía como columna si el ALTER TABLE en Railway aún no se
+    # corrió: se pide aparte y se degrada a NULL en vez de romper el brief.
+    base = "SELECT fecha, contenido, {extra}generado_en FROM brief_diario ORDER BY fecha DESC LIMIT 1"
+    try:
+        return pd.read_sql(base.format(extra="contenido_bilingue, "), engine)
+    except Exception:
+        df = pd.read_sql(base.format(extra=""), engine)
+        df["contenido_bilingue"] = None
+        return df
 
 
 def calcular_cambios_periodo(serie: pd.Series) -> dict:
@@ -2251,7 +2259,8 @@ ETIQUETA_EN_POR_ES = {
     "TPM Chile": "Chile Policy Rate",
     "IPC (inflación anual)": "CPI (annual inflation)",
     "Imacec": "Imacec (economic activity index)",
-    "Tasa de desempleo": "Unemployment rate",
+    "Tasa de desempleo": "Unemployment rate (seasonally adjusted)",
+    "Tasa de desempleo (sin ajuste)": "Unemployment rate (raw)",
 }
 
 ORGANISMO_EN_POR_TIPO = {
@@ -2433,7 +2442,11 @@ def generar_pdf_brief_premercado() -> bytes:
                         color_delta = _PDF_MUTED                     # gris, no verde/rojo
                     else:
                         delta_texto = f"{delta_num:+.2f}{sufijo_delta}"
-                        color_delta = _PDF_POSITIVO if delta_num > 0 else _PDF_NEGATIVO
+                        # menor_es_mejor (desempleo, VIX): un delta positivo es
+                        # el empeoramiento -> rojo; negativo -> verde. Invertido
+                        # respecto al resto (ver INDICADORES_PREMERCADO).
+                        mejoro = delta_num < 0 if ind["menor_es_mejor"] else delta_num > 0
+                        color_delta = _PDF_POSITIVO if mejoro else _PDF_NEGATIVO
                     filas.append([etiqueta_en, valor_texto, delta_texto, fecha_texto])
                     colores_delta.append((len(filas) - 1, color_delta))
                 else:
@@ -2542,23 +2555,49 @@ def generar_pdf_brief_premercado() -> bytes:
             # y su primera viñeta, y con el enfoque por bloques ese "###" +
             # sus viñetas terminaban renderizados como un solo párrafo en
             # negrita (ver el bug de la sección geopolítica).
-            buffer_vinetas = []
+            #
+            # Versión bilingüe: si existe `contenido_bilingue`, cada línea trae
+            # el texto en inglés y su traducción al español separados por el
+            # token <<<ES>>> (ver PROMPT_TRADUCCION_TEMPLATE). El español se
+            # renderiza en itálica gris, y en las viñetas EN+ES van en el MISMO
+            # ListItem (dos Paragraph apilados) para que la traducción nunca se
+            # despegue del bullet. Termina con "## Glossary", que se arma como
+            # tabla de 3 columnas con Paragraph en cada celda (word-wrap).
+            bilingue = fila_brief["contenido_bilingue"]
+            contenido_brief = bilingue if isinstance(bilingue, str) and bilingue.strip() else fila_brief["contenido"]
+
+            def _partir_es(texto):
+                """(inglés, español|None) a partir del token <<<ES>>>."""
+                partes = re.split(r"<<<\s*ES\s*>>>", texto, maxsplit=1)
+                if len(partes) == 2:
+                    return partes[0].strip(), partes[1].strip()
+                return texto.strip(), None
+
+            buffer_vinetas = []   # lista de (en, es|None)
             buffer_parrafo = []
+            filas_glosario = []   # lista de (termino, es, definicion)
+            en_glosario = False
 
             def _emitir_vinetas(story=story, buf=buffer_vinetas):
                 if buf:
-                    story.append(ListFlowable(
-                        [ListItem(Paragraph(_md_a_reportlab(x), estilo_bullet), bulletColor=c_gold) for x in buf],
-                        bulletType="bullet", leftIndent=12,
-                    ))
+                    items = []
+                    for en, es in buf:
+                        flowables = [Paragraph(_md_a_reportlab(en), estilo_bullet)]
+                        if es:
+                            flowables.append(Paragraph(_md_a_reportlab(es), estilo_italic))
+                        items.append(ListItem(flowables, bulletColor=c_gold))
+                    story.append(ListFlowable(items, bulletType="bullet", leftIndent=12))
                     buf.clear()
 
             def _emitir_parrafo(story=story, buf=buffer_parrafo):
                 if buf:
-                    story.append(Paragraph(_md_a_reportlab(" ".join(buf)), estilo_bullet))
+                    en, es = _partir_es(" ".join(buf))
+                    story.append(Paragraph(_md_a_reportlab(en), estilo_bullet))
+                    if es:
+                        story.append(Paragraph(_md_a_reportlab(es), estilo_italic))
                     buf.clear()
 
-            for linea in str(fila_brief["contenido"]).splitlines():
+            for linea in str(contenido_brief).splitlines():
                 linea = linea.strip()
                 if not linea:
                     _emitir_vinetas()
@@ -2568,15 +2607,26 @@ def generar_pdf_brief_premercado() -> bytes:
                     _emitir_vinetas()
                     _emitir_parrafo()
                     nivel = len(linea) - len(linea.lstrip("#"))
-                    texto_encabezado = linea[nivel:].strip()
+                    en_h, es_h = _partir_es(linea[nivel:].strip())
+                    en_glosario = en_h.lower().startswith("glossary")
                     if nivel <= 2:
-                        _agregar_titulo_seccion(story, texto_encabezado)
+                        _agregar_titulo_seccion(story, en_h)
                     else:
-                        story.append(Paragraph(_md_a_reportlab(texto_encabezado), estilo_subseccion))
+                        story.append(Paragraph(_md_a_reportlab(en_h), estilo_subseccion))
+                    if es_h:
+                        story.append(Paragraph(_md_a_reportlab(es_h), estilo_italic))
+                    continue
+                if en_glosario:
+                    entrada = linea[2:].strip() if linea[:2] in ("- ", "* ") else linea
+                    partes = re.split(r"\s+[—–]\s+", entrada, maxsplit=2)
+                    if len(partes) < 3 and "|" in entrada:
+                        partes = [p.strip() for p in entrada.strip("|").split("|")]
+                    if len(partes) >= 3:
+                        filas_glosario.append((partes[0].strip(), partes[1].strip(), partes[2].strip()))
                     continue
                 if linea[:2] in ("- ", "* "):
                     _emitir_parrafo()
-                    buffer_vinetas.append(linea[2:].strip())
+                    buffer_vinetas.append(_partir_es(linea[2:].strip()))
                     continue
                 # línea normal: ni encabezado ni viñeta
                 _emitir_vinetas()
@@ -2584,6 +2634,30 @@ def generar_pdf_brief_premercado() -> bytes:
 
             _emitir_vinetas()
             _emitir_parrafo()
+            if filas_glosario:
+                filas_tabla = [["EN", "ES", "Definition"]]
+                for termino, es_t, definicion in filas_glosario:
+                    filas_tabla.append([
+                        Paragraph(_md_a_reportlab(termino), estilo_bullet),
+                        Paragraph(_md_a_reportlab(es_t), estilo_bullet),
+                        Paragraph(_md_a_reportlab(definicion), estilo_italic),
+                    ])
+                tabla_glosario = Table(filas_tabla, colWidths=[4.6 * cm, 3.0 * cm, 8.2 * cm], hAlign="LEFT")
+                tabla_glosario.setStyle(TableStyle([
+                    ("BACKGROUND", (0, 0), (-1, 0), c_navy),
+                    ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+                    ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+                    ("FONTSIZE", (0, 0), (-1, 0), 8.5),
+                    ("LINEBELOW", (0, 0), (-1, 0), 1.0, c_navy),
+                    ("LINEBELOW", (0, 1), (-1, -1), 0.3, c_rule),
+                    ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor(_PDF_ROW_ALT)]),
+                    ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                    ("TOPPADDING", (0, 0), (-1, -1), 4),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+                    ("LEFTPADDING", (0, 0), (-1, -1), 6),
+                    ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+                ]))
+                story.append(tabla_glosario)
             story.append(Spacer(1, 4))
             story.append(HRFlowable(width="100%", thickness=0.4, color=c_rule, spaceBefore=2, spaceAfter=5))
             story.append(Paragraph(
@@ -2734,7 +2808,11 @@ with tab_premercado:
                             # es confuso, lo esperable es el cambio en pp (-0,82 pp).
                             valor_delta = cambio_absoluto if ind["unidad"] == "%" else cambio_pct
                             sufijo_delta = " pp" if ind["unidad"] == "%" else "%"
-                            st.metric(etiqueta_en, valor_texto, f"{valor_delta:+.2f}{sufijo_delta}")
+                            # Para desempleo / VIX un delta positivo es la MALA
+                            # noticia: "inverse" hace que suba salga en rojo y
+                            # baje en verde (al revés que S&P, cobre, IPSA...).
+                            color_delta = "inverse" if ind["menor_es_mejor"] else "normal"
+                            st.metric(etiqueta_en, valor_texto, f"{valor_delta:+.2f}{sufijo_delta}", delta_color=color_delta)
                         else:
                             # Sin argumento delta: sin flecha ni color. Cubre
                             # dos casos -> serie diaria atrasada (el badge sería
@@ -2984,7 +3062,7 @@ with tab_macro:
         # mismo formato nombre/fecha/valor para que todos los indicadores de
         # esa sección también se puedan explorar en este selector.
         df_acciones_indicadores = cargar_precios_acciones()
-        for etiqueta, tipo, clave, _unidad, _cadencia in INDICADORES_PREMERCADO:
+        for etiqueta, tipo, clave, _unidad, _cadencia, _menor in INDICADORES_PREMERCADO:
             if tipo != "accion":
                 continue
             serie_accion = (

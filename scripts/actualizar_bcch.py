@@ -95,6 +95,13 @@ SERIES_A_DESCARGAR = {
     # calcular_inflacion_breakeven en app/dashboard.py).
     "F022.BUF.TIS.AN10.UF.Z.D": {"nombre": "Bono BCCh en UF (BCU) a 10 años - tasa mercado secundario", "frecuencia": "diaria"},
     "F049.DES.TAS.INE.10.M": {"nombre": "Tasa de desocupación nacional (INE, desestacionalizada)", "frecuencia": "mensual"},
+    # Misma tasa de desocupación nacional pero SIN ajuste estacional ("No
+    # Ajustada" en el catálogo del BCCh) -- es la cifra que titula la prensa
+    # y el Boletín ENE del INE. Encontrada vía SearchSeries (MONTHLY): el
+    # código con "INE9" es la serie cruda, el "INE" es la desestacionalizada.
+    # Verificada contra el Boletín ENE N°334: trimestre may-jul 2026 da
+    # 9.53% acá (-> 9,5% publicado) vs. 9,3% de la desestacionalizada.
+    "F049.DES.TAS.INE9.10.M": {"nombre": "Tasa de desocupación nacional (INE, sin ajuste estacional)", "frecuencia": "mensual"},
 }
 
 BCCH_URL = "https://si3.bcentral.cl/SieteRestWS/SieteRestWS.ashx"

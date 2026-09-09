@@ -31,8 +31,8 @@ def _serie_diaria(nombre, ultima_fecha, n=6, valor=3.63):
     return _macro(nombre, [(f.date(), valor) for f in fechas])
 
 
-NOMBRE = {et: clave for et, tipo, clave, u, c in INDICADORES_PREMERCADO}
-CAD = {et: c for et, tipo, clave, u, c in INDICADORES_PREMERCADO}
+NOMBRE = {et: clave for et, tipo, clave, u, c, m in INDICADORES_PREMERCADO}
+CAD = {et: c for et, tipo, clave, u, c, m in INDICADORES_PREMERCADO}
 
 REF = date(2026, 9, 8)  # martes
 
@@ -169,10 +169,75 @@ def test_render_sin_argumento_delta_cuando_no_hay_cambio():
     )
 
 
+def test_menor_es_mejor_invierte_el_color_del_badge():
+    """Para desempleo, VIX, IPC (inflación anual) y WTI un delta positivo es un
+    EMPEORAMIENTO: debe salir en rojo (flecha abajo en pestaña), y un delta
+    negativo en verde -- al revés que S&P / cobre / IPSA. USD/CLP se queda con
+    la lógica directa a propósito. Se chequea el flag en el resumen y el color
+    renderizado en la pestaña (AppTest, datos reales de la BD).
+
+    MetricColor: RED=0, GREEN=1, GRAY=2."""
+    from streamlit.testing.v1 import AppTest
+
+    # 1) el flag se propaga desde INDICADORES_PREMERCADO al resumen
+    df = pd.concat([
+        _serie_diaria(NOMBRE["USD/CLP"], REF, valor=940.0),
+        pd.DataFrame([
+            {"nombre": NOMBRE["Tasa de desempleo"], "fecha": date(2026, 6, 1), "valor": 8.9},
+            {"nombre": NOMBRE["Tasa de desempleo"], "fecha": date(2026, 7, 1), "valor": 9.2},
+        ]),
+    ], ignore_index=True)
+    r = _correr(df)
+    assert r["Tasa de desempleo"]["menor_es_mejor"] is True
+    assert r["Tasa de desempleo (sin ajuste)"]["menor_es_mejor"] is True
+    assert r["VIX"]["menor_es_mejor"] is True
+    assert r["IPC (inflación anual)"]["menor_es_mejor"] is True
+    assert r["Petróleo WTI"]["menor_es_mejor"] is True
+    assert r["USD/CLP"]["menor_es_mejor"] is False   # bidireccional a propósito
+    assert r["Cobre"]["menor_es_mejor"] is False     # Chile exportador: subir es bueno
+    assert r["S&P 500"]["menor_es_mejor"] is False
+
+    # 2) color renderizado en la pestaña con los datos reales de hoy:
+    #    desempleo cruda subió (+) -> ROJO ; desestacionalizada bajó (-) -> VERDE
+    dash = os.path.join(os.path.dirname(__file__), "..", "app", "dashboard.py")
+    at = AppTest.from_file(dash, default_timeout=420)
+    at.run(timeout=420)
+    assert not at.exception, [str(e) for e in at.exception]
+    por_label = {m.label: m for m in at.get("metric")}
+
+    cruda = por_label.get("Unemployment rate (raw)")
+    ajust = por_label.get("Unemployment rate (seasonally adjusted)")
+    assert cruda is not None and ajust is not None
+
+    if cruda.proto.delta and cruda.proto.delta.lstrip()[0] == "+":
+        assert cruda.proto.color == 0, (
+            f"desempleo cruda subió ({cruda.proto.delta!r}) -> debe ser ROJO, es color={cruda.proto.color}"
+        )
+    if ajust.proto.delta and ajust.proto.delta.lstrip()[0] == "-":
+        assert ajust.proto.color == 1, (
+            f"desempleo desestacionalizada bajó ({ajust.proto.delta!r}) -> debe ser VERDE, es color={ajust.proto.color}"
+        )
+
+    # un indicador normal (cobre) conserva la lógica directa: subir -> verde
+    cobre = por_label.get("Copper")
+    if cobre is not None and cobre.proto.delta and cobre.proto.delta.lstrip()[0] == "+":
+        assert cobre.proto.color == 1, f"cobre subió pero no salió verde: color={cobre.proto.color}"
+
+    # IPC y WTI invertidos: un delta positivo (más inflación / petróleo más
+    # caro para Chile) sale en ROJO
+    for label in ("CPI (annual inflation)", "WTI Oil"):
+        m = por_label.get(label)
+        if m is not None and m.proto.delta and m.proto.delta.lstrip()[0] == "+":
+            assert m.proto.color == 0, (
+                f"{label} subió ({m.proto.delta!r}) -> debe ser ROJO, es color={m.proto.color}"
+            )
+
+
 if __name__ == "__main__":
     test_diaria_fresca_muestra_badge_y_diaria_atrasada_lo_oculta()
     test_umbral_de_un_dia_habil()
     test_mensuales_siempre_muestran_badge_aunque_tengan_meses_de_atraso()
     test_delta_sin_direccion_cuando_el_cambio_mostrado_es_0()
     test_render_sin_argumento_delta_cuando_no_hay_cambio()
-    print("OK: las cinco pruebas pasaron.")
+    test_menor_es_mejor_invierte_el_color_del_badge()
+    print("OK: las seis pruebas pasaron.")
