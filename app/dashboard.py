@@ -2726,27 +2726,26 @@ with tab_premercado:
                     if ind["resultado"]:
                         valor, cambio_pct, fecha, cambio_absoluto = ind["resultado"]
                         valor_texto = f"{valor:,.2f}" + (f" {unidad_en}" if unidad_en else "")
-                        if ind["badge_visible"]:
+                        nota_sin_cambio = False
+                        if ind["badge_visible"] and not ind["delta_sin_direccion"]:
                             # Si el indicador ya es una tasa/porcentaje (ej. TPM,
                             # inflación anual), mostrar puntos porcentuales: el "%
                             # de cambio" de una tasa (ej. de 4,34% a 3,52% = -18,8%)
                             # es confuso, lo esperable es el cambio en pp (-0,82 pp).
                             valor_delta = cambio_absoluto if ind["unidad"] == "%" else cambio_pct
                             sufijo_delta = " pp" if ind["unidad"] == "%" else "%"
-                            if ind["delta_sin_direccion"]:
-                                # Sin cambio real (ej. TPM Chile / UF sin moverse):
-                                # gris, sin flecha, sin signo — el color y la flecha
-                                # de st.metric implican una dirección que no existe.
-                                st.metric(etiqueta_en, valor_texto, f"0.00{sufijo_delta}", delta_color="off")
-                            else:
-                                st.metric(etiqueta_en, valor_texto, f"{valor_delta:+.2f}{sufijo_delta}")
+                            st.metric(etiqueta_en, valor_texto, f"{valor_delta:+.2f}{sufijo_delta}")
                         else:
-                            # Serie diaria atrasada respecto al resto: el badge
-                            # sería engañoso ("+0.00%" = no llegó dato, no "sin
-                            # cambio"). Se muestra solo el valor; el "as of" con
-                            # la fecha vieja ya avisa del atraso.
+                            # Sin argumento delta: sin flecha ni color. Cubre
+                            # dos casos -> serie diaria atrasada (el badge sería
+                            # "no llegó dato", no "sin cambio"), y cambio que se
+                            # muestra 0.00 (TPM Chile / UF sin moverse). Este
+                            # último se anota como "no change" en el caption,
+                            # visualmente distinto de un cambio real chico.
                             st.metric(etiqueta_en, valor_texto)
-                        st.caption(_texto_fecha_indicador(ind))
+                            nota_sin_cambio = ind["badge_visible"] and ind["delta_sin_direccion"]
+                        fecha_txt = _texto_fecha_indicador(ind)
+                        st.caption(f"{fecha_txt} · no change" if nota_sin_cambio else fecha_txt)
                     else:
                         st.metric(etiqueta_en, "—")
                         st.caption("not enough data")
@@ -2774,20 +2773,20 @@ with tab_premercado:
             valor_actual = float(breakeven.iloc[-1])
             cambio_pp = valor_actual - float(breakeven.iloc[-2])
             fecha_breakeven = pd.Timestamp(breakeven.index[-1]).strftime("%Y-%m-%d")
-            if round(cambio_pp, 2) == 0:
-                st.metric(
-                    "Breakeven inflation (BCP 10Y − BCU 10Y)",
-                    f"{valor_actual:.2f} pp", "0.00 pp", delta_color="off",
-                )
+            breakeven_sin_cambio = round(cambio_pp, 2) == 0
+            if breakeven_sin_cambio:
+                # Sin argumento delta: sin flecha ni color (ver Key indicators).
+                st.metric("Breakeven inflation (BCP 10Y − BCU 10Y)", f"{valor_actual:.2f} pp")
             else:
                 st.metric(
                     "Breakeven inflation (BCP 10Y − BCU 10Y)",
                     f"{valor_actual:.2f} pp", f"{cambio_pp:+.2f} pp",
                 )
             st.caption(
-                f"as of {fecha_breakeven}. This is the inflation the market has priced into "
-                "both bonds (nominal BCP rate minus real BCU rate, same issuer and tenor) — "
-                "not an official forecast from anyone."
+                f"as of {fecha_breakeven}{' · no change' if breakeven_sin_cambio else ''}. "
+                "This is the inflation the market has priced into both bonds (nominal BCP "
+                "rate minus real BCU rate, same issuer and tenor) — not an official "
+                "forecast from anyone."
             )
 
     except Exception as e:

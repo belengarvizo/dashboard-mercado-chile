@@ -133,9 +133,46 @@ def test_delta_sin_direccion_cuando_el_cambio_mostrado_es_0():
     assert r["USD/CLP"]["badge_visible"] is True
 
 
+def test_render_sin_argumento_delta_cuando_no_hay_cambio():
+    """En la pestaña (AppTest): un indicador fresco cuyo cambio se muestra
+    0.00 se renderiza SIN argumento delta en st.metric — el proto no trae
+    delta, así que no hay flecha ni color — y el caption lleva "· no change".
+    Un cambio real conserva su delta. Usa datos reales de la BD; la TPM Chile
+    está plana entre reuniones, así que es el caso estable a chequear."""
+    from streamlit.testing.v1 import AppTest
+
+    dash = os.path.join(os.path.dirname(__file__), "..", "app", "dashboard.py")
+    at = AppTest.from_file(dash, default_timeout=420)
+    at.run(timeout=420)
+    assert not at.exception, [str(e) for e in at.exception]
+
+    por_label = {m.label: m for m in at.get("metric")}
+
+    tpm = por_label.get("Chile Policy Rate")
+    assert tpm is not None, "falta la métrica 'Chile Policy Rate'"
+    assert tpm.proto.delta == "", (
+        f"TPM Chile (plana entre RPM) no debería pasar delta a st.metric, tiene {tpm.proto.delta!r}"
+    )
+
+    con_delta = [m for m in at.get("metric") if m.proto.delta]
+    assert con_delta, "debería haber al menos un indicador con cambio real (delta no vacío)"
+    for m in con_delta:
+        # un delta no vacío nunca debería ser un "0.00" sin signo (ese caso
+        # va sin delta); siempre trae signo + o -
+        assert m.proto.delta.lstrip()[0] in "+-", (
+            f"{m.label}: un delta mostrado debe llevar signo, tiene {m.proto.delta!r}"
+        )
+
+    caps = [c.value for c in at.caption]
+    assert any(c.startswith("as of ") and "· no change" in c for c in caps), (
+        "el caption del caso sin cambio debe anotar '· no change'"
+    )
+
+
 if __name__ == "__main__":
     test_diaria_fresca_muestra_badge_y_diaria_atrasada_lo_oculta()
     test_umbral_de_un_dia_habil()
     test_mensuales_siempre_muestran_badge_aunque_tengan_meses_de_atraso()
     test_delta_sin_direccion_cuando_el_cambio_mostrado_es_0()
-    print("OK: las cuatro pruebas pasaron.")
+    test_render_sin_argumento_delta_cuando_no_hay_cambio()
+    print("OK: las cinco pruebas pasaron.")
