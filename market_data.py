@@ -202,6 +202,14 @@ def calcular_capm_regresion(exceso_portafolio: pd.Series, exceso_mercado: pd.Ser
     }
 
 
+def _delta_mostrado(item: dict) -> float:
+    """El número de cambio que efectivamente se muestra en el badge: puntos
+    porcentuales si el indicador ya es una tasa (unidad "%"), o % de cambio
+    si no."""
+    _valor, cambio_pct, _fecha, cambio_absoluto = item["resultado"]
+    return cambio_absoluto if item["unidad"] == "%" else cambio_pct
+
+
 def _badge_visible(item: dict, fecha_referencia) -> bool:
     """Regla de frescura del badge de cambio. Una serie MENSUAL siempre lo
     muestra (su atraso frente a las diarias es esperado); una serie DIARIA
@@ -257,6 +265,13 @@ def calcular_resumen_mercado(df_macro: pd.DataFrame, df_acciones: pd.DataFrame) 
     fecha_referencia = max(fechas_diarias) if fechas_diarias else None
     for item in resultados:
         item["badge_visible"] = _badge_visible(item, fecha_referencia)
+        # `delta_sin_direccion`: el cambio, redondeado a los 2 decimales que
+        # se muestran, es 0.00 -> no hay dirección real (ej. TPM Chile o UF
+        # sin moverse). Quien renderiza usa esto para no ponerle color
+        # verde/rojo ni flecha ni signo "+" a un "0.00".
+        item["delta_sin_direccion"] = (
+            item["resultado"] is not None and round(_delta_mostrado(item), 2) == 0
+        )
     return resultados
 
 

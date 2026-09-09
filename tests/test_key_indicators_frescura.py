@@ -105,8 +105,37 @@ def test_mensuales_siempre_muestran_badge_aunque_tengan_meses_de_atraso():
         assert r[et]["badge_visible"] is True, f"{et} (mensual) siempre muestra el badge"
 
 
+def test_delta_sin_direccion_cuando_el_cambio_mostrado_es_0():
+    """Un indicador fresco cuyo cambio, redondeado a 2 decimales, es 0.00 se
+    marca delta_sin_direccion=True (para que quien renderiza no le ponga
+    color/flecha/"+"). Un cambio real -aunque sea chico- se marca False."""
+    # TPM Chile: valor plano (0.00 pp exacto) -> sin dirección
+    # UF: se mueve +0.003% -> muestra "0.00%" -> sin dirección
+    # USD/CLP: se mueve -0.74% -> con dirección
+    df = pd.concat([
+        _serie_diaria(NOMBRE["TPM Chile"], REF, valor=4.5),  # todos iguales
+        pd.DataFrame([
+            {"nombre": NOMBRE["UF"], "fecha": date(2026, 9, 7), "valor": 40884.32},
+            {"nombre": NOMBRE["UF"], "fecha": REF, "valor": 40885.63},  # +0.0032%
+        ]),
+        pd.DataFrame([
+            {"nombre": NOMBRE["USD/CLP"], "fecha": date(2026, 9, 7), "valor": 940.0},
+            {"nombre": NOMBRE["USD/CLP"], "fecha": REF, "valor": 933.06},  # -0.74%
+        ]),
+    ], ignore_index=True)
+    r = _correr(df)
+
+    assert r["TPM Chile"]["delta_sin_direccion"] is True, "TPM Chile plana -> sin dirección"
+    assert r["UF"]["delta_sin_direccion"] is True, "UF +0.003% se muestra 0.00% -> sin dirección"
+    assert r["USD/CLP"]["delta_sin_direccion"] is False, "un cambio real de -0.74% SÍ tiene dirección"
+
+    # el cambio real no se rompe: sigue teniendo su badge_visible normal
+    assert r["USD/CLP"]["badge_visible"] is True
+
+
 if __name__ == "__main__":
     test_diaria_fresca_muestra_badge_y_diaria_atrasada_lo_oculta()
     test_umbral_de_un_dia_habil()
     test_mensuales_siempre_muestran_badge_aunque_tengan_meses_de_atraso()
-    print("OK: las tres pruebas pasaron.")
+    test_delta_sin_direccion_cuando_el_cambio_mostrado_es_0()
+    print("OK: las cuatro pruebas pasaron.")

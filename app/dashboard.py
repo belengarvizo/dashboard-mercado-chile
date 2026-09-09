@@ -2427,9 +2427,15 @@ def generar_pdf_brief_premercado() -> bytes:
                 fecha_texto = _texto_fecha_indicador(ind)
                 if ind["badge_visible"]:
                     delta_num = cambio_absoluto if ind["unidad"] == "%" else cambio_pct
-                    delta_texto = f"{cambio_absoluto:+.2f} pp" if ind["unidad"] == "%" else f"{cambio_pct:+.2f}%"
+                    sufijo_delta = " pp" if ind["unidad"] == "%" else "%"
+                    if ind["delta_sin_direccion"]:
+                        delta_texto = f"0.00{sufijo_delta}"          # sin signo
+                        color_delta = _PDF_MUTED                     # gris, no verde/rojo
+                    else:
+                        delta_texto = f"{delta_num:+.2f}{sufijo_delta}"
+                        color_delta = _PDF_POSITIVO if delta_num > 0 else _PDF_NEGATIVO
                     filas.append([etiqueta_en, valor_texto, delta_texto, fecha_texto])
-                    colores_delta.append((len(filas) - 1, _PDF_POSITIVO if delta_num >= 0 else _PDF_NEGATIVO))
+                    colores_delta.append((len(filas) - 1, color_delta))
                 else:
                     # Serie diaria atrasada: badge oculto (ver Key indicators
                     # en la pestaña). Se deja la fecha vieja, que ya avisa.
@@ -2725,8 +2731,15 @@ with tab_premercado:
                             # inflación anual), mostrar puntos porcentuales: el "%
                             # de cambio" de una tasa (ej. de 4,34% a 3,52% = -18,8%)
                             # es confuso, lo esperable es el cambio en pp (-0,82 pp).
-                            delta_texto = f"{cambio_absoluto:+.2f} pp" if ind["unidad"] == "%" else f"{cambio_pct:+.2f}%"
-                            st.metric(etiqueta_en, valor_texto, delta_texto)
+                            valor_delta = cambio_absoluto if ind["unidad"] == "%" else cambio_pct
+                            sufijo_delta = " pp" if ind["unidad"] == "%" else "%"
+                            if ind["delta_sin_direccion"]:
+                                # Sin cambio real (ej. TPM Chile / UF sin moverse):
+                                # gris, sin flecha, sin signo — el color y la flecha
+                                # de st.metric implican una dirección que no existe.
+                                st.metric(etiqueta_en, valor_texto, f"0.00{sufijo_delta}", delta_color="off")
+                            else:
+                                st.metric(etiqueta_en, valor_texto, f"{valor_delta:+.2f}{sufijo_delta}")
                         else:
                             # Serie diaria atrasada respecto al resto: el badge
                             # sería engañoso ("+0.00%" = no llegó dato, no "sin
@@ -2761,11 +2774,16 @@ with tab_premercado:
             valor_actual = float(breakeven.iloc[-1])
             cambio_pp = valor_actual - float(breakeven.iloc[-2])
             fecha_breakeven = pd.Timestamp(breakeven.index[-1]).strftime("%Y-%m-%d")
-            st.metric(
-                "Breakeven inflation (BCP 10Y − BCU 10Y)",
-                f"{valor_actual:.2f} pp",
-                f"{cambio_pp:+.2f} pp",
-            )
+            if round(cambio_pp, 2) == 0:
+                st.metric(
+                    "Breakeven inflation (BCP 10Y − BCU 10Y)",
+                    f"{valor_actual:.2f} pp", "0.00 pp", delta_color="off",
+                )
+            else:
+                st.metric(
+                    "Breakeven inflation (BCP 10Y − BCU 10Y)",
+                    f"{valor_actual:.2f} pp", f"{cambio_pp:+.2f} pp",
+                )
             st.caption(
                 f"as of {fecha_breakeven}. This is the inflation the market has priced into "
                 "both bonds (nominal BCP rate minus real BCU rate, same issuer and tenor) — "
