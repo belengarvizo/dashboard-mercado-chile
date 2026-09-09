@@ -9,31 +9,56 @@ import numpy as np
 import pandas as pd
 from scipy import stats
 
-# (etiqueta, tipo de tabla de origen, nombre/ticker, unidad a mostrar)
+# (etiqueta, tipo de tabla de origen, nombre/ticker, unidad a mostrar, cadencia)
+# `cadencia` ("diaria" | "mensual") controla la regla de frescura del badge de
+# cambio (ver calcular_resumen_mercado): una serie DIARIA que quedó más de un
+# día hábil detrás del resto tiene su badge oculto (el "+0.00%" ahí significa
+# "no llegó dato nuevo", no "sin cambio"); una serie MENSUAL siempre muestra el
+# badge, porque su atraso frente a las diarias es de diseño, no una falla.
 INDICADORES_PREMERCADO = [
-    ("S&P 500", "accion", "^GSPC", ""),
-    ("Dow Jones", "accion", "^DJI", ""),
-    ("Nasdaq", "accion", "^IXIC", ""),
-    ("VIX", "accion", "^VIX", ""),
+    ("S&P 500", "accion", "^GSPC", "", "diaria"),
+    ("Dow Jones", "accion", "^DJI", "", "diaria"),
+    ("Nasdaq", "accion", "^IXIC", "", "diaria"),
+    ("VIX", "accion", "^VIX", "", "diaria"),
     # Etiqueta corregida: decía "USD/oz troy" pero el valor guardado
     # (~6.5 en 2026) es US$/libra -- confirmado contra cobre LME y COMEX
     # convertidos a la misma unidad (ver comentario en actualizar_bcch.py).
-    ("Cobre", "macro", "Precio del cobre (USD/lb)", "US$/lb"),
-    ("Petróleo WTI", "accion", "CL=F", "US$/barril"),
-    ("Bono UST 10 años", "macro", "Bono del Tesoro de EEUU a 10 años (UST10Y)", "%"),
-    ("TPM EEUU", "macro", "Tasa de política monetaria de EEUU (Effective Federal Funds Rate)", "%"),
-    ("IPSA (proxy ECH)", "accion", "ECH", ""),
-    ("USD/CLP", "macro", "Tipo de cambio observado", "CLP"),
-    ("UF", "macro", "Unidad de fomento (UF)", "CLP"),
-    ("TPM Chile", "macro", "Tasa de política monetaria (TPM)", "%"),
-    ("IPC (inflación anual)", "macro", "IPC variación 12 meses (inflación anual, empalme base 2023=100)", "%"),
+    ("Cobre", "macro", "Precio del cobre (USD/lb)", "US$/lb", "diaria"),
+    ("Petróleo WTI", "accion", "CL=F", "US$/barril", "diaria"),
+    ("Bono UST 10 años", "macro", "Bono del Tesoro de EEUU a 10 años (UST10Y)", "%", "diaria"),
+    ("TPM EEUU", "macro", "Tasa de política monetaria de EEUU (Effective Federal Funds Rate)", "%", "diaria"),
+    ("IPSA (proxy ECH)", "accion", "ECH", "", "diaria"),
+    ("USD/CLP", "macro", "Tipo de cambio observado", "CLP", "diaria"),
+    ("UF", "macro", "Unidad de fomento (UF)", "CLP", "diaria"),
+    ("TPM Chile", "macro", "Tasa de política monetaria (TPM)", "%", "diaria"),
+    ("IPC (inflación anual)", "macro", "IPC variación 12 meses (inflación anual, empalme base 2023=100)", "%", "mensual"),
     # Serie de variación a 12 meses, no el nivel del índice (ver comentario
     # en scripts/actualizar_bcch.py) -- el nivel del índice hacía que esta
     # tarjeta mostrara un cambio mes a mes sin desestacionalizar (ej. -3,29%
     # en julio 2026) en vez de la variación interanual que efectivamente se
     # reporta como "el Imacec" (-1,5% ese mismo mes).
-    ("Imacec", "macro", "IMACEC variación 12 meses", "%"),
-    ("Tasa de desempleo", "macro", "Tasa de desocupación nacional (INE, desestacionalizada)", "%"),
+    ("Imacec", "macro", "IMACEC variación 12 meses", "%", "mensual"),
+    ("Tasa de desempleo", "macro", "Tasa de desocupación nacional (INE, desestacionalizada)", "%", "mensual"),
+]
+
+# Feriados de EEUU 2026 (calendario de la Reserva Federal) — para medir
+# "días hábiles detrás" en las series de fuente estadounidense (ej. la
+# Effective Federal Funds Rate de FRED, que no publica dato nuevo en
+# feriado). Lista mínima a propósito: se usa solo para np.busday_count en la
+# regla de frescura del badge, no vale la pena una librería de calendarios.
+# Actualizar en enero de 2027.
+FERIADOS_EEUU_2026 = [
+    "2026-01-01",  # New Year's Day
+    "2026-01-19",  # Martin Luther King Jr. Day
+    "2026-02-16",  # Presidents' Day
+    "2026-05-25",  # Memorial Day
+    "2026-06-19",  # Juneteenth
+    "2026-07-03",  # Independence Day (observado; el 4 cae sábado)
+    "2026-09-07",  # Labor Day
+    "2026-10-12",  # Columbus Day
+    "2026-11-11",  # Veterans Day
+    "2026-11-26",  # Thanksgiving
+    "2026-12-25",  # Christmas
 ]
 
 
@@ -177,12 +202,34 @@ def calcular_capm_regresion(exceso_portafolio: pd.Series, exceso_mercado: pd.Ser
     }
 
 
+def _badge_visible(item: dict, fecha_referencia) -> bool:
+    """Regla de frescura del badge de cambio. Una serie MENSUAL siempre lo
+    muestra (su atraso frente a las diarias es esperado); una serie DIARIA
+    lo oculta si su último dato quedó más de un día hábil detrás de
+    `fecha_referencia` (la fecha más reciente entre los indicadores diarios)
+    — ahí "+0.00%" significa "no llegó dato nuevo", no "sin cambio". Los
+    días hábiles se cuentan con el calendario de feriados de EEUU (cubre el
+    caso de la Effective Federal Funds Rate, que no publica en feriado
+    estadounidense)."""
+    if item["resultado"] is None:
+        return False
+    if item["cadencia"] == "mensual":
+        return True
+    if fecha_referencia is None:
+        return True
+    fecha_dato = pd.Timestamp(item["resultado"][2]).date()
+    dias_habiles_detras = int(np.busday_count(fecha_dato, fecha_referencia, holidays=FERIADOS_EEUU_2026))
+    return dias_habiles_detras <= 1
+
+
 def calcular_resumen_mercado(df_macro: pd.DataFrame, df_acciones: pd.DataFrame) -> list[dict]:
     """Para cada indicador de INDICADORES_PREMERCADO, devuelve
-    {etiqueta, unidad, resultado} donde resultado es lo que devuelve
-    calcular_cambio_reciente (o None si no hay datos suficientes)."""
+    {etiqueta, unidad, cadencia, resultado, badge_visible} donde `resultado`
+    es lo que devuelve calcular_cambio_reciente (o None si no hay datos
+    suficientes) y `badge_visible` aplica la regla de frescura del badge de
+    cambio (ver _badge_visible)."""
     resultados = []
-    for etiqueta, tipo, clave, unidad in INDICADORES_PREMERCADO:
+    for etiqueta, tipo, clave, unidad, cadencia in INDICADORES_PREMERCADO:
         if tipo == "accion":
             serie = (
                 df_acciones[df_acciones["ticker"] == clave]
@@ -198,8 +245,18 @@ def calcular_resumen_mercado(df_macro: pd.DataFrame, df_acciones: pd.DataFrame) 
         resultados.append({
             "etiqueta": etiqueta,
             "unidad": unidad,
+            "cadencia": cadencia,
             "resultado": calcular_cambio_reciente(serie),
         })
+
+    fechas_diarias = [
+        pd.Timestamp(item["resultado"][2]).date()
+        for item in resultados
+        if item["cadencia"] == "diaria" and item["resultado"] is not None
+    ]
+    fecha_referencia = max(fechas_diarias) if fechas_diarias else None
+    for item in resultados:
+        item["badge_visible"] = _badge_visible(item, fecha_referencia)
     return resultados
 
 

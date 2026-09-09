@@ -2406,10 +2406,15 @@ def generar_pdf_brief_premercado() -> bytes:
                 valor, cambio_pct, fecha, cambio_absoluto = ind["resultado"]
                 unidad_en = ind["unidad"].replace("barril", "barrel")
                 valor_texto = f"{valor:,.2f}" + (f" {unidad_en}" if unidad_en else "")
-                delta_num = cambio_absoluto if ind["unidad"] == "%" else cambio_pct
-                delta_texto = f"{cambio_absoluto:+.2f} pp" if ind["unidad"] == "%" else f"{cambio_pct:+.2f}%"
-                filas.append([etiqueta_en, valor_texto, delta_texto, pd.Timestamp(fecha).strftime("%Y-%m-%d")])
-                colores_delta.append((len(filas) - 1, _PDF_POSITIVO if delta_num >= 0 else _PDF_NEGATIVO))
+                if ind["badge_visible"]:
+                    delta_num = cambio_absoluto if ind["unidad"] == "%" else cambio_pct
+                    delta_texto = f"{cambio_absoluto:+.2f} pp" if ind["unidad"] == "%" else f"{cambio_pct:+.2f}%"
+                    filas.append([etiqueta_en, valor_texto, delta_texto, pd.Timestamp(fecha).strftime("%Y-%m-%d")])
+                    colores_delta.append((len(filas) - 1, _PDF_POSITIVO if delta_num >= 0 else _PDF_NEGATIVO))
+                else:
+                    # Serie diaria atrasada: badge oculto (ver Key indicators
+                    # en la pestaña). Se deja el "as of" con la fecha vieja.
+                    filas.append([etiqueta_en, valor_texto, "—", pd.Timestamp(fecha).strftime("%Y-%m-%d")])
             else:
                 filas.append([etiqueta_en, "—", "—", "—"])
 
@@ -2696,12 +2701,19 @@ with tab_premercado:
                     if ind["resultado"]:
                         valor, cambio_pct, fecha, cambio_absoluto = ind["resultado"]
                         valor_texto = f"{valor:,.2f}" + (f" {unidad_en}" if unidad_en else "")
-                        # Si el indicador ya es una tasa/porcentaje (ej. TPM,
-                        # inflación anual), mostrar puntos porcentuales: el "%
-                        # de cambio" de una tasa (ej. de 4,34% a 3,52% = -18,8%)
-                        # es confuso, lo esperable es el cambio en pp (-0,82 pp).
-                        delta_texto = f"{cambio_absoluto:+.2f} pp" if ind["unidad"] == "%" else f"{cambio_pct:+.2f}%"
-                        st.metric(etiqueta_en, valor_texto, delta_texto)
+                        if ind["badge_visible"]:
+                            # Si el indicador ya es una tasa/porcentaje (ej. TPM,
+                            # inflación anual), mostrar puntos porcentuales: el "%
+                            # de cambio" de una tasa (ej. de 4,34% a 3,52% = -18,8%)
+                            # es confuso, lo esperable es el cambio en pp (-0,82 pp).
+                            delta_texto = f"{cambio_absoluto:+.2f} pp" if ind["unidad"] == "%" else f"{cambio_pct:+.2f}%"
+                            st.metric(etiqueta_en, valor_texto, delta_texto)
+                        else:
+                            # Serie diaria atrasada respecto al resto: el badge
+                            # sería engañoso ("+0.00%" = no llegó dato, no "sin
+                            # cambio"). Se muestra solo el valor; el "as of" con
+                            # la fecha vieja ya avisa del atraso.
+                            st.metric(etiqueta_en, valor_texto)
                         st.caption(f"as of {pd.Timestamp(fecha).strftime('%Y-%m-%d')}")
                     else:
                         st.metric(etiqueta_en, "—")
@@ -2936,7 +2948,7 @@ with tab_macro:
         # mismo formato nombre/fecha/valor para que todos los indicadores de
         # esa sección también se puedan explorar en este selector.
         df_acciones_indicadores = cargar_precios_acciones()
-        for etiqueta, tipo, clave, _unidad in INDICADORES_PREMERCADO:
+        for etiqueta, tipo, clave, _unidad, _cadencia in INDICADORES_PREMERCADO:
             if tipo != "accion":
                 continue
             serie_accion = (
