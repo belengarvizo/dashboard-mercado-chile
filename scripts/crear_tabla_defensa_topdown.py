@@ -30,6 +30,13 @@ COLUMNAS_RESOLUCION = {
     "verificado_en": "TIMESTAMP",
 }
 
+# Rediseño: cada pregunta guarda un widget de decisión estructurado
+# (decision_valor) + una nota corta (nota), en vez de los 3 textos largos.
+COLUMNAS_DECISION = {
+    "decision_valor": "TEXT",
+    "nota": "TEXT",
+}
+
 
 def main() -> None:
     engine = get_engine()
@@ -43,11 +50,14 @@ def main() -> None:
     with engine.begin() as conn:
         for col, tipo in COLUMNAS_RESOLUCION.items():
             conn.execute(text(f"ALTER TABLE defensa_topdown_predicciones ADD COLUMN IF NOT EXISTS {col} {tipo}"))
+        for col, tipo in COLUMNAS_DECISION.items():
+            conn.execute(text(f"ALTER TABLE defensa_topdown_respuestas ADD COLUMN IF NOT EXISTS {col} {tipo}"))
 
     insp = inspect(engine)
     esperado = {
         "defensa_topdown_respuestas": {
-            "id", "pregunta_id", "ticker", "respuesta_i", "respuesta_ii", "respuesta_iii", "fecha",
+            "id", "pregunta_id", "ticker", "respuesta_i", "respuesta_ii", "respuesta_iii",
+            "decision_valor", "nota", "fecha",
         },
         "defensa_topdown_predicciones": {
             "id", "pregunta_id", "ticker", "texto", "tipo", "valor_objetivo",

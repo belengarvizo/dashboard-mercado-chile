@@ -134,17 +134,25 @@ class DefensaTopdownRespuesta(Base):
     poder retomarlo y volcarlo al informe real que hay que entregar.
 
     `pregunta_id` es "q1".."q16" para las preguntas y "cat_1".."cat_4" para
-    los campos del calendario de catalizadores (que usan solo respuesta_i).
-    Cada "Guardar borrador" inserta un snapshot completo con la misma
-    `fecha`; el más reciente es el que se recupera al volver."""
+    los campos del calendario de catalizadores (que usan solo `nota`).
+    Cada "Guardar decisiones" inserta un snapshot completo con la misma
+    `fecha`; el más reciente es el que se recupera al volver.
+
+    Rediseño: en vez de 3 campos de texto largo (respuesta_i/ii/iii, ahora
+    en desuso) cada pregunta guarda `decision_valor` — el valor del widget
+    de decisión (string para radio/selectbox/número simple, JSON para las
+    que tienen 2 widgets: q7, q9, q13, q16) — y `nota`, una nota corta
+    opcional de 1-2 líneas."""
     __tablename__ = "defensa_topdown_respuestas"
 
     id = Column(Integer, primary_key=True)
     pregunta_id = Column(String, nullable=False)
     ticker = Column(String)
-    respuesta_i = Column(Text)
-    respuesta_ii = Column(Text)
-    respuesta_iii = Column(Text)
+    respuesta_i = Column(Text)    # en desuso (rediseño a widgets de decisión)
+    respuesta_ii = Column(Text)   # en desuso
+    respuesta_iii = Column(Text)  # en desuso
+    decision_valor = Column(Text)
+    nota = Column(Text)
     fecha = Column(DateTime, nullable=False)
 
 

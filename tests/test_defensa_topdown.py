@@ -98,7 +98,7 @@ def test_16_preguntas_exactas_del_pdf():
     # No ejecutamos dashboard.py entero (levanta Streamlit); leemos el AST del
     # constante en su lugar.
     fuente = open(ruta, encoding="utf-8").read()
-    ns: dict = {}
+    ns: dict = {"_SIN_DECIDIR": "— sin decidir —"}
     inicio = fuente.index("PREGUNTAS_DEFENSA_TOPDOWN = [")
     fin = fuente.index("\n]\n", inicio) + 3
     exec(fuente[inicio:fin], ns)
@@ -114,6 +114,22 @@ def test_16_preguntas_exactas_del_pdf():
             f"  módulo: {p['escenario']!r}\n  PDF:    {ESCENARIOS_PDF[n]!r}"
         )
         assert len(p["partes"]) == 2 and p["partes"][0].startswith("(a)") and p["partes"][1].startswith("(b)")
+        assert "decision" in p, f"pregunta {n}: falta el widget de decisión"
+
+    # Q1: EXACTO 4 fases del deck de Renta Variable (sin división temprana/tardía)
+    q1_ops = [o for o in preguntas[1]["decision"]["opciones"] if o != "— sin decidir —"]
+    assert q1_ops == ["Recession", "Recovery", "Expansion", "Slowdown"], q1_ops
+    # Q10: incluye la opción "Ambas"
+    assert any(o == "Ambas" for o in preguntas[10]["decision"]["opciones"]), preguntas[10]["decision"]["opciones"]
+    # los 4 tipos de widget aparecen al menos una vez
+    _tipos = set()
+    for p in preguntas.values():
+        d = p["decision"]
+        if d["tipo"] == "compuesto":
+            _tipos.update(c["tipo"] for c in d["campos"])
+        else:
+            _tipos.add(d["tipo"])
+    assert {"selectbox", "radio", "number", "slider"}.issubset(_tipos), _tipos
 
     # Chequeo adicional contra el PDF real del repo (docs/Tarea_Inversiones_
     # TopDown.pdf), si hay una librería para leerlo. No es una dependencia dura
@@ -152,11 +168,54 @@ def test_16_preguntas_exactas_del_pdf():
         assert _norm(esc) in texto_pdf, f"pregunta {n}: el escenario NO aparece en el PDF del repo"
 
 
-def test_modulo_gateado_por_boton():
-    """El módulo pesado NO se renderiza hasta apretar "Cargar Defensa
-    Top-Down" (mismo patrón lazy que el resto del dashboard): así abrir
-    cualquier otra pestaña no espera a las consultas / Yahoo Finance de este
-    módulo."""
+def test_sliders_defensa_sin_porcentaje_suelto_en_format():
+    """Guarda contra el bug del `st.slider(format="%d %")`: un "%" literal sin
+    escapar en el format string de un slider numérico no lo agarra un test de
+    Python normal (revienta recién en el front del navegador). Acá se arma el
+    format string de cada spec de slider con la MISMA función que producción
+    (_dtd_slider_format) y se verifica que no quede ningún "%" que no sea "%%"
+    ni un placeholder printf válido."""
+    import re
+
+    ruta = os.path.join(os.path.dirname(__file__), "..", "app", "dashboard.py")
+    fuente = open(ruta, encoding="utf-8").read()
+
+    ns: dict = {"_SIN_DECIDIR": "— sin decidir —"}
+    _ini = fuente.index("PREGUNTAS_DEFENSA_TOPDOWN = [")
+    _fin = fuente.index("\n]\n", _ini) + 3
+    exec(fuente[_ini:_fin], ns)
+
+    _fi = fuente.index("def _dtd_slider_format(")
+    _ff = fuente.index("\n\n\n", _fi)
+    exec(fuente[_fi:_ff], ns)
+    _fmt_fn = ns["_dtd_slider_format"]
+
+    # specs de slider: sliders simples + campos de tipo slider en las compuestas
+    _specs = []
+    for _p in ns["PREGUNTAS_DEFENSA_TOPDOWN"]:
+        _d = _p["decision"]
+        if _d["tipo"] == "slider":
+            _specs.append((_p["id"], _d))
+        elif _d["tipo"] == "compuesto":
+            _specs.extend((f"{_p['id']}.{_c['clave']}", _c) for _c in _d["campos"] if _c["tipo"] == "slider")
+
+    assert _specs, "no se encontró ningún slider en PREGUNTAS_DEFENSA_TOPDOWN"
+
+    # borra "%%" y los placeholders printf válidos; si sobra un "%", está suelto
+    _placeholder = re.compile(r"%%|%[-+ #0-9.]*[diouxXeEfFgGcrs]")
+    for _qid, _spec in _specs:
+        _fmt = _fmt_fn(_spec.get("sufijo", ""))
+        _resto = _placeholder.sub("", _fmt)
+        assert "%" not in _resto, (
+            f"slider {_qid}: el format {_fmt!r} tiene un '%' sin escapar "
+            f"(sufijo={_spec.get('sufijo', '')!r}). Usa '%%' para un '%' literal."
+        )
+
+
+def test_pestana_propia_sin_boton():
+    """El módulo vive en su propia pestaña de nivel superior y renderiza
+    directo, sin botón de "Cargar": las 16 preguntas (agrupadas por capa) y
+    el comparador están presentes tras el primer render."""
     from streamlit.testing.v1 import AppTest
 
     dash = os.path.join(os.path.dirname(__file__), "..", "app", "dashboard.py")
@@ -164,53 +223,26 @@ def test_modulo_gateado_por_boton():
     at.run(timeout=600)
     assert not at.exception, [str(e) for e in at.exception]
 
-    # sin apretar el botón: el subheader "7. Defensa Top-Down" y el botón de
-    # carga están, pero NINGUNA de las 16 preguntas ni el comparador.
-    textos0 = "\n".join(str(m.value) for m in at.markdown)
-    assert not any(esc in textos0 for esc in ESCENARIOS_PDF.values()), \
-        "el módulo se está renderizando sin apretar el botón (regresión de lazy-load)"
-    assert not any("Comparador de decisión" in s.value for s in at.subheader)
-    botones = [b for b in at.button if "Cargar Defensa Top-Down" in b.label]
-    assert botones, "falta el botón 'Cargar Defensa Top-Down'"
-
-    botones[0].click()
-    at.run(timeout=600)
-    assert not at.exception, [str(e) for e in at.exception]
+    assert not any("Cargar Defensa Top-Down" in b.label for b in at.button), \
+        "el botón de 'Cargar' debería haber desaparecido (pestaña propia)"
 
     textos = "\n".join(str(m.value) for m in at.markdown)
     for n, esc in ESCENARIOS_PDF.items():
-        assert esc in textos, f"falta el escenario EXACTO de la pregunta {n} tras cargar el módulo"
-    assert any("Comparador de decisión" in s.value for s in at.subheader)
+        assert esc in textos, f"falta el escenario EXACTO de la pregunta {n} en el render"
 
-    # comparador: dos tickers de prueba, sus columnas no deben mezclar datos
-    cmp_inputs = [w for w in at.text_input if (w.label or "").startswith("Candidato")]
-    assert len(cmp_inputs) == 3
-    cmp_inputs[0].set_value("AAPL")
-    cmp_inputs[1].set_value("MSFT")
-    at.run(timeout=600)
-    assert not at.exception, [str(e) for e in at.exception]
-    render2 = "\n".join(str(m.value) for m in at.markdown)
-    assert "### AAPL" in render2 and "### MSFT" in render2
+    # el comparador de decisión está presente (dentro de su expander): AppTest
+    # renderiza el contenido de los expanders aunque estén colapsados.
+    caps = "\n".join(str(c.value) for c in at.caption)
+    assert "Exploración PREVIA para elegir entre candidatos" in caps, \
+        "falta el comparador de decisión"
+    assert sum(1 for w in at.text_input if (w.label or "").startswith("Candidato")) == 3
 
-    # con el módulo cargado aparece el botón "Descargar" (punto 1): permite
-    # apagarlo sin recargar la página. Al apretarlo, el módulo deja de
-    # renderizarse (el costo por rerun desaparece hasta que se vuelva a cargar).
-    descargar = [b for b in at.button if "Descargar Defensa Top-Down" in b.label]
-    assert descargar, "falta el botón 'Descargar Defensa Top-Down' con el módulo cargado"
-    descargar[0].click()
-    at.run(timeout=600)
-    assert not at.exception, [str(e) for e in at.exception]
-    textos2 = "\n".join(str(m.value) for m in at.markdown)
-    assert not any(esc in textos2 for esc in ESCENARIOS_PDF.values()), \
-        "tras 'Descargar', el módulo no debería seguir renderizándose"
+    # el ticker del equipo está siempre visible (arriba de todo)
+    assert any((w.label or "").startswith("¿Qué empresa/ticker") for w in at.text_input)
 
 
 def _cargar_modulo(at):
-    """AppTest con el módulo Defensa Top-Down ya cargado (apretando su botón)."""
-    from streamlit.testing.v1 import AppTest  # noqa: F401
-    at.run(timeout=600)
-    assert not at.exception, [str(e) for e in at.exception]
-    [b for b in at.button if "Cargar Defensa Top-Down" in b.label][0].click()
+    """AppTest con la pestaña Defensa Top-Down renderizada (sin botón)."""
     at.run(timeout=600)
     assert not at.exception, [str(e) for e in at.exception]
     return at
@@ -347,6 +379,50 @@ def test_comparador_checklist_preparacion():
         "marcar 'dirección clara' debe abrir el campo ¿por qué?"
 
 
+def test_export_resumen_compacto_con_datos():
+    """El "📋 Exportar resumen de decisiones" arma una tabla compacta
+    (Sección | Ítem | Decisión / valor clave | Nota rápida) en el orden de la
+    Estructura mínima del Informe del PDF, con un download_button de CSV. Al
+    fijar un widget de decisión, su valor legible aparece en la tabla."""
+    from streamlit.testing.v1 import AppTest
+
+    dash = os.path.join(os.path.dirname(__file__), "..", "app", "dashboard.py")
+    at = _cargar_modulo(AppTest.from_file(dash, default_timeout=600))
+
+    at.text_input(key="dtd_ticker").set_value("TESTQA US Equity")
+    # Q1 selectbox "Fase del ciclo global"
+    at.selectbox(key="dtd_dec_q1").set_value("Expansion")
+    # Q6 radio
+    at.radio(key="dtd_dec_q6").set_value("Reducir")
+    at.text_input(key="dtd_nota_q6").set_value("flujo saliendo del sector")
+    at.run(timeout=600)
+    assert not at.exception, [str(e) for e in at.exception]
+
+    # el dataframe del export: 4 columnas exactas
+    dfs = [d for d in at.dataframe]
+    export = None
+    for d in dfs:
+        cols = list(getattr(d.value, "columns", []))
+        if cols == ["Sección", "Ítem", "Decisión / valor clave", "Nota rápida"]:
+            export = d.value
+            break
+    assert export is not None, "no se encontró la tabla del export con las 4 columnas"
+
+    secciones = list(export["Sección"])
+    for esperado in ("1. Resumen Ejecutivo", "2. Análisis Macroeconómico",
+                     "5. Análisis Técnico", "6. Estrategia y Gestión de Riesgo",
+                     "7. Conclusión"):
+        assert esperado in secciones, f"falta la sección {esperado!r} en el export"
+
+    texto = export.to_csv(index=False)
+    assert "TESTQA US Equity" in texto, "el ticker no llegó al export"
+    assert "Expansion" in texto, "la decisión de Q1 no llegó al export"
+    assert "flujo saliendo del sector" in texto, "la nota de Q6 no llegó al export"
+
+    assert any("Exportar resumen (CSV)" in (b.label or "")
+               for b in at.download_button), "falta el download_button del CSV"
+
+
 if __name__ == "__main__":
     test_prediccion_pendiente()
     test_acierto_dentro_de_tolerancia()
@@ -354,8 +430,10 @@ if __name__ == "__main__":
     test_fallo_solo_si_la_direccion_es_la_contraria()
     test_prediccion_sin_datos()
     test_16_preguntas_exactas_del_pdf()
-    test_modulo_gateado_por_boton()
+    test_sliders_defensa_sin_porcentaje_suelto_en_format()
+    test_pestana_propia_sin_boton()
     test_calculadoras_recalculan_en_vivo()
     test_sectoriales_y_tecnicas_sin_calculo_inventado()
     test_comparador_checklist_preparacion()
+    test_export_resumen_compacto_con_datos()
     print("OK: defensa top-down — todas las pruebas pasaron.")
