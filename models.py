@@ -126,6 +126,62 @@ class CuadraturaMesaDinero(Base):
     brief = Column(Text)
 
 
+class DefensaTopdownRespuesta(Base):
+    """Borrador de las respuestas del módulo "Defensa Top-Down" del dashboard
+    (Simulación Mesa de Dinero): las 16 preguntas de sensibilidad de mercado
+    de la Tarea de Inversiones de la FEN + el calendario de catalizadores.
+    No es un dato de mercado: es el trabajo del propio usuario, guardado para
+    poder retomarlo y volcarlo al informe real que hay que entregar.
+
+    `pregunta_id` es "q1".."q16" para las preguntas y "cat_1".."cat_4" para
+    los campos del calendario de catalizadores (que usan solo respuesta_i).
+    Cada "Guardar borrador" inserta un snapshot completo con la misma
+    `fecha`; el más reciente es el que se recupera al volver."""
+    __tablename__ = "defensa_topdown_respuestas"
+
+    id = Column(Integer, primary_key=True)
+    pregunta_id = Column(String, nullable=False)
+    ticker = Column(String)
+    respuesta_i = Column(Text)
+    respuesta_ii = Column(Text)
+    respuesta_iii = Column(Text)
+    fecha = Column(DateTime, nullable=False)
+
+
+class DefensaTopdownPrediccion(Base):
+    """Predicciones verificables que el usuario deja en el campo "(iii)
+    impacto en la estrategia" de una pregunta de la Defensa Top-Down (ej.
+    "+5% en 3 semanas" o un target price). Al cumplirse el plazo, el
+    dashboard compara `precio_base` contra el precio real del ticker (Yahoo
+    Finance) y muestra acierto/fallo, sin que nadie lo juzgue a mano.
+
+    `tipo`: "pct" (valor_objetivo es un % de variación, ej. +5.0) o "target"
+    (valor_objetivo es un precio objetivo absoluto). `precio_base` es el
+    precio del ticker en el momento de registrar la predicción (None si
+    Yahoo Finance no lo devolvió)."""
+    __tablename__ = "defensa_topdown_predicciones"
+
+    id = Column(Integer, primary_key=True)
+    pregunta_id = Column(String, nullable=False)
+    ticker = Column(String, nullable=False)
+    texto = Column(Text)
+    tipo = Column(String, nullable=False)
+    valor_objetivo = Column(Numeric, nullable=False)
+    horizonte_dias = Column(Integer, nullable=False)
+    precio_base = Column(Numeric)
+    fecha_hecha = Column(DateTime, nullable=False)
+
+    # Resolución CONGELADA: se calcula UNA sola vez, cuando el plazo vence,
+    # contra el precio histórico de la fecha objetivo (no el precio en vivo de
+    # hoy). Una vez escrito `estado_resuelto`, no se vuelve a recalcular.
+    precio_verificacion = Column(Numeric)   # cierre del ticker en la fecha objetivo (o día hábil previo más cercano)
+    fecha_verificacion = Column(DateTime)   # la fecha efectiva a la que corresponde ese precio
+    estado_resuelto = Column(String)        # "acierto" | "mal_calibrado" | "fallo" | "sin_datos"
+    detalle_resuelto = Column(Text)
+    error_pp = Column(Numeric)              # (variación real − variación predicha), en puntos porcentuales
+    verificado_en = Column(DateTime)        # cuándo se congeló la resolución
+
+
 def get_engine():
     database_url = os.environ["DATABASE_URL"]
     # pool_pre_ping: antes de reusar una conexión del pool, hace un chequeo
