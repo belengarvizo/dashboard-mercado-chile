@@ -4995,10 +4995,28 @@ def render_defensa_topdown():
             if not any(k in _series12m for k in ("vix", "spread_2s10s", "recesion")):
                 st.caption("No hay series macro disponibles en este momento.")
 
+        st.info(
+            "**Este puntaje no decide por ustedes** — organiza lo que ya deberían estar "
+            "verificando en Bloomberg antes de comprometerse con un ticker. Cada columna se "
+            "puntúa por separado; no hay ranking automático entre candidatos."
+        )
+
+        # Ítems del mini-checklist de preparación (clave, etiqueta). El primero
+        # se pre-marca solo si ese ticker ya tiene catalizadores registrados.
+        _PREP_ITEMS = [
+            ("cat", "Tiene catalizador con fecha en los próximos 6 meses"),
+            ("fa", "FA con historial limpio (verificado en Bloomberg)"),
+            ("anr", "Cobertura de analistas suficiente (ANR)"),
+            ("omon", "Opciones listadas (OMON)"),
+            ("si", "Dato de interés corto disponible (SI)"),
+            ("dir", "Puedo argumentar una dirección clara (largo/corto)"),
+        ]
+
         _cols = st.columns(len(_cmp_tickers))
         for _col, _tk in zip(_cols, _cmp_tickers):
             with _col:
                 st.markdown(f"### {_tk}")
+                _ksafe = re.sub(r"\W+", "_", _tk) or "x"
                 _serie = _precio_yf_serie(_tk, meses=12)
                 if _serie is None:
                     st.warning("Yahoo Finance no devolvió datos confiables para este ticker.")
@@ -5007,6 +5025,40 @@ def render_defensa_topdown():
                         _fig_defensa_topdown(_serie, "Precio — 12 meses (Yahoo Finance)", "precio"),
                         use_container_width=True,
                     )
+
+                # --- Mini-checklist de preparación (recálculo en vivo, sin botón) ---
+                try:
+                    _cat_rows = pd.read_sql(
+                        text(
+                            "SELECT respuesta_i FROM defensa_topdown_respuestas "
+                            "WHERE ticker = :tk AND pregunta_id IN ('cat_1','cat_2','cat_3','cat_4') "
+                            "AND respuesta_i IS NOT NULL AND respuesta_i <> '' "
+                            "AND fecha = (SELECT MAX(fecha) FROM defensa_topdown_respuestas WHERE ticker = :tk)"
+                        ),
+                        engine, params={"tk": _tk},
+                    )
+                    _cat_premarca = not _cat_rows.empty
+                except Exception:
+                    _cat_premarca = False
+
+                _prep_val = {}
+                for _pk, _plabel in _PREP_ITEMS:
+                    _prep_val[_pk] = st.checkbox(
+                        _plabel,
+                        value=(_cat_premarca if _pk == "cat" else False),
+                        key=f"dtd_prep_{_ksafe}_{_pk}",
+                    )
+                if _cat_premarca:
+                    st.caption(
+                        f"☑ 1er ítem pre-marcado: hay catalizadores registrados para **{_tk}** — "
+                        "verificá que la fecha caiga dentro de 6 meses."
+                    )
+                if _prep_val["dir"]:
+                    st.text_input(
+                        "¿Por qué? (opcional)", key=f"dtd_prep_{_ksafe}_dir_txt",
+                        placeholder="largo/corto y el motivo en una línea",
+                    )
+                st.metric("Puntaje de preparación", f"{sum(1 for _v in _prep_val.values() if _v)}/6")
 
                 try:
                     _dfr = pd.read_sql(

@@ -276,6 +276,65 @@ def test_sectoriales_y_tecnicas_sin_calculo_inventado():
     assert len(enlaces) >= 8, f"esperaba >=8 enlaces a calculadoras, hay {len(enlaces)}"
 
 
+_PREP_LABELS = [
+    "Tiene catalizador con fecha en los próximos 6 meses",
+    "FA con historial limpio (verificado en Bloomberg)",
+    "Cobertura de analistas suficiente (ANR)",
+    "Opciones listadas (OMON)",
+    "Dato de interés corto disponible (SI)",
+    "Puedo argumentar una dirección clara (largo/corto)",
+]
+
+
+def test_comparador_checklist_preparacion():
+    """El mini-checklist de preparación: 6 ítems por candidato, recálculo en
+    vivo del puntaje al hacer click (sin botón), dos candidatos se puntúan
+    independiente (puntajes distintos) y NO hay ranking automático."""
+    from streamlit.testing.v1 import AppTest
+
+    dash = os.path.join(os.path.dirname(__file__), "..", "app", "dashboard.py")
+    at = _cargar_modulo(AppTest.from_file(dash, default_timeout=600))
+
+    cmp_inputs = [w for w in at.text_input if (w.label or "").startswith("Candidato")]
+    cmp_inputs[0].set_value("AAPL")
+    cmp_inputs[1].set_value("MSFT")
+    at.run(timeout=600)
+    assert not at.exception, [str(e) for e in at.exception]
+
+    infos = " ".join(str(i.value) for i in at.info)
+    assert "no decide por ustedes" in infos, "falta el aviso arriba del widget"
+    assert "no hay ranking automático" in infos, "el aviso debe dejar claro que no hay ranking"
+
+    prep = [c for c in at.checkbox if c.label in _PREP_LABELS]
+    assert len(prep) == 12, f"esperaba 6 checkboxes x 2 candidatos, hay {len(prep)}"
+
+    def puntajes():
+        return sorted(m.value for m in at.metric if m.label == "Puntaje de preparación")
+
+    p0 = puntajes()
+    assert len(p0) == 2 and all(v.endswith("/6") for v in p0)
+
+    # marcar 3 ítems del 1er candidato y 1 del 2º -> recalcula en vivo, distintos
+    for c in prep[1:4]:   # fa/anr/omon del candidato 1 (evita 'cat', que puede venir premarcado)
+        c.check()
+    prep[7].check()       # fa del candidato 2
+    at.run(timeout=600)
+    assert not at.exception, [str(e) for e in at.exception]
+    p1 = puntajes()
+    assert p1 != p0, "el puntaje no recalculó al hacer click"
+    assert p1[0] != p1[1], f"los dos candidatos deberían puntuar distinto: {p1}"
+
+    # marcar el ítem de dirección (re-consultando los widgets tras el rerun)
+    # abre el campo de texto "¿por qué?"
+    dir_cbs = [c for c in at.checkbox
+               if c.label == "Puedo argumentar una dirección clara (largo/corto)"]
+    dir_cbs[0].check()
+    at.run(timeout=600)
+    assert not at.exception, [str(e) for e in at.exception]
+    assert any((w.label or "").startswith("¿Por qué?") for w in at.text_input), \
+        "marcar 'dirección clara' debe abrir el campo ¿por qué?"
+
+
 if __name__ == "__main__":
     test_prediccion_pendiente()
     test_acierto_dentro_de_tolerancia()
@@ -286,4 +345,5 @@ if __name__ == "__main__":
     test_modulo_gateado_por_boton()
     test_calculadoras_recalculan_en_vivo()
     test_sectoriales_y_tecnicas_sin_calculo_inventado()
+    test_comparador_checklist_preparacion()
     print("OK: defensa top-down — todas las pruebas pasaron.")
