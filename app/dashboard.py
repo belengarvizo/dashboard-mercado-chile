@@ -4537,12 +4537,71 @@ def _defensa_topdown_borrador_sintesis(ticker: str, respuestas: list[dict], cata
         return None, f"No se pudo generar el borrador ({type(e).__name__}: {e})."
 
 
+@st.cache_data(ttl=45, show_spinner=False)
+def _dtd_datos_ticker(ticker: str, cache_version: int) -> dict:
+    """Predicciones + último snapshot de respuestas de un ticker, en UNA sola
+    ida a la BD. Cacheado (ttl 45 s): el loop de 16 preguntas y el comparador
+    filtran en memoria en vez de hacer decenas de round-trips a Railway en
+    CADA rerun del script (medido: ~14 s de esos round-trips por rerun con
+    el módulo activo). `cache_version` es un contador en session_state que se
+    incrementa al registrar una predicción o guardar el borrador, para que el
+    dato nuevo aparezca de inmediato sin esperar a que venza el ttl."""
+    tk = (ticker or "").strip()
+    out = {"predicciones": pd.DataFrame(), "respuestas": pd.DataFrame()}
+    if not tk:
+        return out
+    try:
+        out["predicciones"] = pd.read_sql(
+            text(
+                "SELECT id, ticker, pregunta_id, texto, tipo, valor_objetivo, horizonte_dias, "
+                "precio_base, fecha_hecha, estado_resuelto, detalle_resuelto, error_pp "
+                "FROM defensa_topdown_predicciones WHERE ticker = :tk ORDER BY fecha_hecha DESC"
+            ),
+            engine, params={"tk": tk},
+        )
+    except Exception:
+        pass
+    try:
+        out["respuestas"] = pd.read_sql(
+            text(
+                "SELECT pregunta_id, respuesta_i, respuesta_ii, respuesta_iii, fecha "
+                "FROM defensa_topdown_respuestas WHERE ticker = :tk "
+                "AND fecha = (SELECT MAX(fecha) FROM defensa_topdown_respuestas WHERE ticker = :tk)"
+            ),
+            engine, params={"tk": tk},
+        )
+    except Exception:
+        pass
+    return out
+
+
+def _dtd_bump_cache():
+    """Invalida la caché de _dtd_datos_ticker: se llama tras registrar una
+    predicción o guardar el borrador para que el cambio se vea sin esperar
+    al ttl."""
+    st.session_state["dtd_cache_version"] = st.session_state.get("dtd_cache_version", 0) + 1
+
+
 def render_defensa_topdown():
     """Módulo Defensa Top-Down: 16 preguntas + trayectorias con datos
     reales + verificación de predicciones (Yahoo Finance) + comparador de
     candidatos. Se llama SOLO tras apretar el botón de carga en la pestaña
-    Simulación Mesa de Dinero — hace varias consultas a la BD y llamadas a
-    Yahoo Finance, así que no debe correr en cada rerun del script."""
+    Simulación Mesa de Dinero.
+
+    Costo por rerun: las lecturas a la BD (predicciones + respuestas por
+    ticker) van por _dtd_datos_ticker(), cacheado, así que un rerun del
+    script completo (ej. un clic en otra pestaña) ya no vuelve a pagar las
+    ~16 idas a Railway del loop — bajó de ~15 s a ~1 s. Ver también el
+    botón "Descargar Defensa Top-Down" en la pestaña, que apaga el módulo
+    sin recargar la página.
+
+    MEJORA FUTURA OPCIONAL (no hecha): envolver este render en @st.fragment
+    haría que las interacciones INTERNAS del módulo (sliders de las
+    calculadoras, checkboxes del comparador) re-ejecuten solo el fragment y
+    no las otras 8 pestañas. NO sirve para el caso cross-tab: un rerun
+    completo del script re-ejecuta todos los fragments igual, así que un
+    clic en otra pestaña seguiría entrando acá — por eso el fix real fue la
+    caché, no el fragment."""
     dtd_ticker = st.text_input(
         "¿Qué empresa/ticker eligió tu equipo?",
         key="dtd_ticker",
@@ -4591,6 +4650,12 @@ def render_defensa_topdown():
 
     _datos_reales = _defensa_topdown_datos_reales()
     _series12m = _defensa_topdown_series_12m()
+
+    # UNA sola lectura cacheada de la BD para el ticker oficial (predicciones
+    # + respuestas), en vez de 16+ round-trips a Railway por rerun.
+    _dtd_cv = st.session_state.get("dtd_cache_version", 0)
+    _datos_tk = _dtd_datos_ticker(dtd_ticker, _dtd_cv)
+    _pred_all = _datos_tk["predicciones"]
 
     def _dtd_referencia_macro(qid):
         """Trayectoria de 12 meses (no un número congelado) para las
@@ -4736,22 +4801,20 @@ def render_defensa_topdown():
                                             "fecha_hecha": datetime.now(),
                                         },
                                     )
+                                _dtd_bump_cache()
+                                # refetch inmediato: la predicción recién
+                                # registrada aparece en este mismo render, sin
+                                # esperar a que venza el ttl de la caché.
+                                _datos_tk = _dtd_datos_ticker(dtd_ticker, st.session_state["dtd_cache_version"])
+                                _pred_all = _datos_tk["predicciones"]
                                 st.success("Predicción registrada.")
                             except Exception as e:
                                 st.error(f"No se pudo registrar (¿falta correr scripts/crear_tabla_defensa_topdown.py?): {e}")
 
-                    try:
-                        _dfp = pd.read_sql(
-                            text(
-                                "SELECT id, ticker, texto, tipo, valor_objetivo, horizonte_dias, precio_base, "
-                                "fecha_hecha, estado_resuelto, detalle_resuelto, error_pp "
-                                "FROM defensa_topdown_predicciones "
-                                "WHERE pregunta_id = :pid AND ticker = :tk ORDER BY fecha_hecha DESC"
-                            ),
-                            engine, params={"pid": _pregunta["id"], "tk": (dtd_ticker or "").strip()},
-                        )
-                    except Exception:
-                        _dfp = pd.DataFrame()
+                    _dfp = (
+                        _pred_all[_pred_all["pregunta_id"] == _pregunta["id"]]
+                        if not _pred_all.empty else pd.DataFrame()
+                    )
                     for _, _p in _dfp.iterrows():
                         _res = _resolver_prediccion(_p.to_dict())
                         _icono = _DTD_ICONO_PRED[_res["estado"]]
@@ -4938,6 +5001,7 @@ def render_defensa_topdown():
                     ),
                     _filas,
                 )
+            _dtd_bump_cache()
             st.success(f"Borrador guardado ({_ahora.strftime('%Y-%m-%d %H:%M')}).")
         except Exception as e:
             st.error(f"No se pudo guardar (¿falta correr scripts/crear_tabla_defensa_topdown.py?): {e}")
@@ -5026,20 +5090,21 @@ def render_defensa_topdown():
                         use_container_width=True,
                     )
 
+                # UNA lectura cacheada por candidato (predicciones + respuestas),
+                # misma que el ticker oficial — nada de queries por columna en
+                # cada rerun.
+                _dc = _dtd_datos_ticker(_tk, _dtd_cv)
+                _dfr = _dc["respuestas"]
+                _dfp = _dc["predicciones"]
+
                 # --- Mini-checklist de preparación (recálculo en vivo, sin botón) ---
-                try:
-                    _cat_rows = pd.read_sql(
-                        text(
-                            "SELECT respuesta_i FROM defensa_topdown_respuestas "
-                            "WHERE ticker = :tk AND pregunta_id IN ('cat_1','cat_2','cat_3','cat_4') "
-                            "AND respuesta_i IS NOT NULL AND respuesta_i <> '' "
-                            "AND fecha = (SELECT MAX(fecha) FROM defensa_topdown_respuestas WHERE ticker = :tk)"
-                        ),
-                        engine, params={"tk": _tk},
-                    )
-                    _cat_premarca = not _cat_rows.empty
-                except Exception:
-                    _cat_premarca = False
+                _cat_premarca = (
+                    not _dfr.empty
+                    and _dfr[
+                        _dfr["pregunta_id"].isin(("cat_1", "cat_2", "cat_3", "cat_4"))
+                        & _dfr["respuesta_i"].astype("string").str.strip().fillna("").ne("")
+                    ].shape[0] > 0
+                )
 
                 _prep_val = {}
                 for _pk, _plabel in _PREP_ITEMS:
@@ -5060,17 +5125,6 @@ def render_defensa_topdown():
                     )
                 st.metric("Puntaje de preparación", f"{sum(1 for _v in _prep_val.values() if _v)}/6")
 
-                try:
-                    _dfr = pd.read_sql(
-                        text(
-                            "SELECT pregunta_id, respuesta_i, respuesta_ii, respuesta_iii "
-                            "FROM defensa_topdown_respuestas WHERE ticker = :tk "
-                            "AND fecha = (SELECT MAX(fecha) FROM defensa_topdown_respuestas WHERE ticker = :tk)"
-                        ),
-                        engine, params={"tk": _tk},
-                    )
-                except Exception:
-                    _dfr = pd.DataFrame()
                 _qids = {p["id"] for p in PREGUNTAS_DEFENSA_TOPDOWN}
                 _respondidas = sum(
                     1 for _, _row in _dfr.iterrows()
@@ -5082,17 +5136,6 @@ def render_defensa_topdown():
                     with st.expander("ver respuestas"):
                         st.dataframe(_dfr, hide_index=True, use_container_width=True)
 
-                try:
-                    _dfp = pd.read_sql(
-                        text(
-                            "SELECT id, ticker, pregunta_id, texto, tipo, valor_objetivo, horizonte_dias, "
-                            "precio_base, fecha_hecha, estado_resuelto, detalle_resuelto, error_pp "
-                            "FROM defensa_topdown_predicciones WHERE ticker = :tk ORDER BY fecha_hecha DESC"
-                        ),
-                        engine, params={"tk": _tk},
-                    )
-                except Exception:
-                    _dfp = pd.DataFrame()
                 if _dfp.empty:
                     st.markdown("**Predicciones:** ninguna registrada.")
                 else:
@@ -6064,9 +6107,10 @@ with tab_mesa_dinero:
     )
 
     st.session_state.setdefault("cargar_defensa_topdown", False)
-    if st.button("🎯 Cargar Defensa Top-Down (16 preguntas, trayectorias y comparador)", key="dtd_cargar_modulo"):
-        st.session_state["cargar_defensa_topdown"] = True
     if not st.session_state["cargar_defensa_topdown"]:
+        if st.button("🎯 Cargar Defensa Top-Down (16 preguntas, trayectorias y comparador)", key="dtd_cargar_modulo"):
+            st.session_state["cargar_defensa_topdown"] = True
+            st.rerun()
         st.info(
             "Este módulo hace varias consultas a la base de datos, calcula "
             "trayectorias con datos reales del dashboard y verifica predicciones "
@@ -6074,5 +6118,8 @@ with tab_mesa_dinero:
             "resto del dashboard. Apretá el botón de arriba para cargarlo."
         )
     else:
+        if st.button("🔽 Descargar Defensa Top-Down (liberar el dashboard)", key="dtd_descargar_modulo"):
+            st.session_state["cargar_defensa_topdown"] = False
+            st.rerun()
         render_defensa_topdown()
 

@@ -192,6 +192,18 @@ def test_modulo_gateado_por_boton():
     render2 = "\n".join(str(m.value) for m in at.markdown)
     assert "### AAPL" in render2 and "### MSFT" in render2
 
+    # con el módulo cargado aparece el botón "Descargar" (punto 1): permite
+    # apagarlo sin recargar la página. Al apretarlo, el módulo deja de
+    # renderizarse (el costo por rerun desaparece hasta que se vuelva a cargar).
+    descargar = [b for b in at.button if "Descargar Defensa Top-Down" in b.label]
+    assert descargar, "falta el botón 'Descargar Defensa Top-Down' con el módulo cargado"
+    descargar[0].click()
+    at.run(timeout=600)
+    assert not at.exception, [str(e) for e in at.exception]
+    textos2 = "\n".join(str(m.value) for m in at.markdown)
+    assert not any(esc in textos2 for esc in ESCENARIOS_PDF.values()), \
+        "tras 'Descargar', el módulo no debería seguir renderizándose"
+
 
 def _cargar_modulo(at):
     """AppTest con el módulo Defensa Top-Down ya cargado (apretando su botón)."""
