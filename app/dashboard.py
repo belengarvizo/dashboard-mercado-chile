@@ -4346,7 +4346,12 @@ def _precio_yf_serie(ticker: str, meses: int = 12):
         return None
     try:
         import yfinance as yf
-        hist = yf.Ticker(ticker).history(period=f"{max(meses, 1)}mo", auto_adjust=True)
+        # timeout explícito y corto: esta pestaña corre en cada rerun (es de
+        # nivel superior, sin botón de carga), así que una llamada a Yahoo que
+        # se cuelga congelaría toda la app hasta el timeout. 6 s es suficiente
+        # para una respuesta normal y acota el peor caso; el cron usa 30 s
+        # porque ahí no hay un usuario esperando.
+        hist = yf.Ticker(ticker).history(period=f"{max(meses, 1)}mo", auto_adjust=True, timeout=6)
         if hist is None or hist.empty or "Close" not in hist:
             return None
         df = hist.reset_index()[["Date", "Close"]].rename(columns={"Date": "fecha", "Close": "valor"})
@@ -4386,6 +4391,7 @@ def _precio_yf_en_fecha(ticker: str, fecha_objetivo_iso: str):
             start=(obj - pd.Timedelta(days=8)).strftime("%Y-%m-%d"),
             end=(obj + pd.Timedelta(days=2)).strftime("%Y-%m-%d"),
             auto_adjust=True,
+            timeout=6,  # ver nota en _precio_yf_serie
         )
         if hist is None or hist.empty or "Close" not in hist:
             return None
@@ -4446,10 +4452,79 @@ def _resolver_prediccion(pred: dict) -> dict:
 
 
 # Íconos por estado de una predicción verificable (calibración, no solo dirección).
+# "sin_resolver": venció el plazo pero todavía no se comparó contra Yahoo (esa
+# comparación solo se hace bajo el botón "Resolver predicciones vencidas", no
+# automáticamente en cada rerun).
 _DTD_ICONO_PRED = {
     "acierto": "✅", "mal_calibrado": "🟡", "fallo": "❌",
-    "pendiente": "⏳", "sin_datos": "⚠️",
+    "pendiente": "⏳", "sin_datos": "⚠️", "sin_resolver": "🔍",
 }
+
+
+def _dtd_pred_estado_sin_yahoo(pred: dict) -> dict:
+    """Veredicto de una predicción SIN tocar la red. Igual que
+    _resolver_prediccion pero, cuando el plazo venció y todavía no hay
+    resultado congelado, devuelve 'sin_resolver' en vez de ir a Yahoo Finance.
+    Así el loop de las 16 preguntas y el comparador no pegan a Yahoo en cada
+    rerun (lo hace solo el botón 'Resolver predicciones vencidas')."""
+    if pred.get("estado_resuelto"):
+        return {
+            "estado": pred["estado_resuelto"],
+            "detalle": pred.get("detalle_resuelto") or "",
+            "error_pp": float(pred["error_pp"]) if pred.get("error_pp") is not None else None,
+            "congelado": True,
+        }
+    hecha = pd.Timestamp(pred["fecha_hecha"])
+    objetivo = hecha + pd.Timedelta(days=int(pred["horizonte_dias"]))
+    if pd.Timestamp.now() < objetivo:
+        r = _verificar_prediccion(pred, None)  # "pendiente"
+        r["congelado"] = False
+        return r
+    return {
+        "estado": "sin_resolver", "error_pp": None, "congelado": False,
+        "detalle": (f"venció el {objetivo.strftime('%Y-%m-%d')} — pulsa "
+                    "«🔄 Resolver predicciones vencidas» para compararla contra Yahoo Finance"),
+    }
+
+
+def _dtd_resolver_vencidas(tickers) -> tuple[int, int]:
+    """Resuelve (contra Yahoo Finance, una vez, congelando en la BD) todas las
+    predicciones vencidas y sin resolver de los `tickers` dados. Es el ÚNICO
+    punto del módulo que llama a Yahoo para verificar predicciones, y solo
+    corre bajo su botón. Devuelve (n_resueltas, n_sin_datos)."""
+    tks = sorted({(t or "").strip() for t in tickers if t and t.strip()})
+    if not tks:
+        return 0, 0
+    _frames = []
+    for _tk in tks:
+        try:
+            _frames.append(pd.read_sql(
+                text(
+                    "SELECT id, ticker, pregunta_id, texto, tipo, valor_objetivo, horizonte_dias, "
+                    "precio_base, fecha_hecha, estado_resuelto, detalle_resuelto, error_pp "
+                    "FROM defensa_topdown_predicciones WHERE ticker = :tk"
+                ),
+                engine, params={"tk": _tk},
+            ))
+        except Exception:
+            pass
+    if not _frames:
+        return 0, 0
+    df = pd.concat(_frames, ignore_index=True)
+    n_ok = n_fail = 0
+    for _, _p in df.iterrows():
+        if _p.get("estado_resuelto"):
+            continue
+        _row = _p.to_dict()
+        _venc = pd.Timestamp(_row["fecha_hecha"]) + pd.Timedelta(days=int(_row["horizonte_dias"]))
+        if pd.Timestamp.now() < _venc:
+            continue
+        _res = _resolver_prediccion(_row)  # hace la llamada a Yahoo + el UPDATE
+        if _res["estado"] == "sin_datos":
+            n_fail += 1
+        else:
+            n_ok += 1
+    return n_ok, n_fail
 
 
 def _defensa_topdown_borrador_sintesis(ticker: str, respuestas: list[dict], catalizadores: list[dict],
@@ -4807,7 +4882,7 @@ def _dtd_comparador(_series12m, _dtd_cv):
                 else:
                     _lineas = []
                     for _, _p in _dfp.iterrows():
-                        _res = _resolver_prediccion(_p.to_dict())
+                        _res = _dtd_pred_estado_sin_yahoo(_p.to_dict())
                         _icono = _DTD_ICONO_PRED[_res["estado"]]
                         _lineas.append(f"{_icono} {_p['texto'] or _p['tipo']} — {_res['detalle']}")
                     st.markdown("**Predicciones:**\n\n" + "\n\n".join(_lineas))
@@ -5065,6 +5140,25 @@ def render_defensa_topdown():
             pass  # tabla aún no migrada en esta BD: se trabaja sin snapshot previo
         st.session_state["dtd_borrador_cargado"] = True
 
+    # Mini-gate del único camino que pega a Yahoo Finance automáticamente: la
+    # verificación de predicciones vencidas. En cada rerun el módulo solo
+    # MUESTRA el estado (sin red); comparar contra Yahoo y congelar el
+    # resultado se hace acá, bajo demanda, para que un Yahoo lento no cuelgue
+    # la pestaña (que ahora es de nivel superior y corre en cada rerun).
+    _dtd_tks_pred = [dtd_ticker] + [st.session_state.get(f"dtd_cmp_{_i}") for _i in (1, 2, 3)]
+    if any((_t or "").strip() for _t in _dtd_tks_pred):
+        if st.button("🔄 Resolver predicciones vencidas", key="dtd_resolver_vencidas"):
+            with st.spinner("Comparando contra Yahoo Finance…"):
+                _n_ok, _n_fail = _dtd_resolver_vencidas(_dtd_tks_pred)
+            _dtd_bump_cache()
+            if _n_ok or _n_fail:
+                _msg = f"{_n_ok} predicción(es) resuelta(s) y congelada(s)."
+                if _n_fail:
+                    _msg += f" {_n_fail} sin datos de Yahoo Finance ahora — reintenta más tarde."
+                st.success(_msg)
+            else:
+                st.info("No hay predicciones vencidas pendientes de resolver.")
+
     with st.container(border=True):
         st.markdown("**📅 Calendario de catalizadores**")
         st.caption(
@@ -5244,7 +5338,7 @@ def render_defensa_topdown():
                             if not _pred_all.empty else pd.DataFrame()
                         )
                         for _, _p in _dfp.iterrows():
-                            _res = _resolver_prediccion(_p.to_dict())
+                            _res = _dtd_pred_estado_sin_yahoo(_p.to_dict())
                             _icono = _DTD_ICONO_PRED[_res["estado"]]
                             _sello = " · resultado congelado" if _res.get("congelado") else ""
                             st.markdown(

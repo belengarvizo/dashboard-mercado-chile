@@ -423,6 +423,90 @@ def test_export_resumen_compacto_con_datos():
                for b in at.download_button), "falta el download_button del CSV"
 
 
+def test_yahoo_timeout_no_cuelga_la_pestana():
+    """Con Yahoo Finance caído/lento, la pestaña Defensa Top-Down igual
+    renderiza (sin excepción, con las 16 preguntas) y las secciones que
+    dependen de Yahoo avisan en vez de colgar:
+
+      - los history() del módulo pasan timeout=6 explícito (peor caso acotado);
+      - _precio_yf_serie / _precio_yf_en_fecha degradan a None -> aviso;
+      - el loop de las 16 preguntas y el comparador NO llaman a Yahoo por su
+        cuenta: solo muestran estado (predicción vencida -> 'sin_resolver');
+        la comparación real va bajo el botón 'Resolver predicciones vencidas'.
+    """
+    from unittest.mock import patch
+    from datetime import datetime, timedelta
+    import yfinance
+    from sqlalchemy import text as _text
+    from streamlit.testing.v1 import AppTest
+    from models import get_engine
+
+    dash = os.path.join(os.path.dirname(__file__), "..", "app", "dashboard.py")
+    tk_test = "ZZZQA US Equity"
+    eng = get_engine()
+
+    # una predicción YA VENCIDA y sin resolver para el ticker de prueba, así el
+    # botón "Resolver predicciones vencidas" tiene algo que mandar a Yahoo.
+    with eng.begin() as c:
+        c.execute(_text(
+            "INSERT INTO defensa_topdown_predicciones "
+            "(pregunta_id, ticker, texto, tipo, valor_objetivo, horizonte_dias, precio_base, fecha_hecha) "
+            "VALUES ('q1', :tk, 'prueba timeout', 'pct', 5.0, 7, 100.0, :hecha)"
+        ), {"tk": tk_test, "hecha": datetime.now() - timedelta(days=30)})
+
+    llamadas = []
+
+    def _history_falla(self, *a, **kw):
+        llamadas.append(kw)
+        raise TimeoutError("simulación: Yahoo Finance no responde")
+
+    try:
+        with patch.object(yfinance.Ticker, "history", _history_falla):
+            at = AppTest.from_file(dash, default_timeout=600)
+            at.run(timeout=600)
+            assert not at.exception, [str(e) for e in at.exception]
+
+            at.text_input(key="dtd_ticker").set_value(tk_test)
+            cand = [w for w in at.text_input if (w.label or "").startswith("Candidato")]
+            cand[0].set_value("ZZZQA")
+            at.run(timeout=600)
+            assert not at.exception, [str(e) for e in at.exception]
+
+            textos = "\n".join(str(m.value) for m in at.markdown)
+            for n, esc in ESCENARIOS_PDF.items():
+                assert esc in textos, f"con Yahoo caído falta el escenario {n}"
+
+            warns = " ".join(str(w.value) for w in at.warning)
+            assert "Yahoo Finance no devolvió datos confiables" in warns, \
+                "el comparador debería avisar cuando Yahoo no responde"
+
+            # el loop de preguntas NO fue a Yahoo por su cuenta: la predicción
+            # vencida se muestra como 'sin_resolver', apuntando al botón.
+            assert "Resolver predicciones vencidas" in textos or \
+                any("Resolver predicciones vencidas" in str(m.value) for m in at.markdown), \
+                "la predicción vencida debería mostrarse como 'sin_resolver'"
+            n_antes = len(llamadas)
+
+            # ahora sí: el botón del mini-gate dispara la comparación con Yahoo
+            btns = [b for b in at.button if "Resolver predicciones vencidas" in (b.label or "")]
+            assert btns, "falta el botón 'Resolver predicciones vencidas'"
+            btns[0].click()
+            at.run(timeout=600)
+            assert not at.exception, [str(e) for e in at.exception]
+            assert len(llamadas) > n_antes, "el botón no llegó a llamar a Yahoo"
+            # con Yahoo caído, el resultado es 'sin datos', avisado, sin colgar
+            info_txt = " ".join(str(i.value) for i in at.info) + " ".join(str(s.value) for s in at.success)
+            assert "sin datos de Yahoo" in info_txt or "No hay predicciones vencidas" in info_txt
+
+        assert llamadas, "no se interceptó ninguna llamada a Yahoo"
+        assert all(kw.get("timeout") == 6 for kw in llamadas), \
+            f"algún history() no pasó timeout=6: {llamadas}"
+    finally:
+        with eng.begin() as c:
+            c.execute(_text("DELETE FROM defensa_topdown_predicciones WHERE ticker = :tk"),
+                      {"tk": tk_test})
+
+
 if __name__ == "__main__":
     test_prediccion_pendiente()
     test_acierto_dentro_de_tolerancia()
@@ -436,4 +520,5 @@ if __name__ == "__main__":
     test_sectoriales_y_tecnicas_sin_calculo_inventado()
     test_comparador_checklist_preparacion()
     test_export_resumen_compacto_con_datos()
+    test_yahoo_timeout_no_cuelga_la_pestana()
     print("OK: defensa top-down — todas las pruebas pasaron.")
