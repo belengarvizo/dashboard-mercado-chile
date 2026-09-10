@@ -152,7 +152,11 @@ def test_16_preguntas_exactas_del_pdf():
         assert _norm(esc) in texto_pdf, f"pregunta {n}: el escenario NO aparece en el PDF del repo"
 
 
-def test_render_y_comparador_apptest():
+def test_modulo_gateado_por_boton():
+    """El módulo pesado NO se renderiza hasta apretar "Cargar Defensa
+    Top-Down" (mismo patrón lazy que el resto del dashboard): así abrir
+    cualquier otra pestaña no espera a las consultas / Yahoo Finance de este
+    módulo."""
     from streamlit.testing.v1 import AppTest
 
     dash = os.path.join(os.path.dirname(__file__), "..", "app", "dashboard.py")
@@ -160,13 +164,23 @@ def test_render_y_comparador_apptest():
     at.run(timeout=600)
     assert not at.exception, [str(e) for e in at.exception]
 
+    # sin apretar el botón: el subheader "7. Defensa Top-Down" y el botón de
+    # carga están, pero NINGUNA de las 16 preguntas ni el comparador.
+    textos0 = "\n".join(str(m.value) for m in at.markdown)
+    assert not any(esc in textos0 for esc in ESCENARIOS_PDF.values()), \
+        "el módulo se está renderizando sin apretar el botón (regresión de lazy-load)"
+    assert not any("Comparador de decisión" in s.value for s in at.subheader)
+    botones = [b for b in at.button if "Cargar Defensa Top-Down" in b.label]
+    assert botones, "falta el botón 'Cargar Defensa Top-Down'"
+
+    botones[0].click()
+    at.run(timeout=600)
+    assert not at.exception, [str(e) for e in at.exception]
+
     textos = "\n".join(str(m.value) for m in at.markdown)
     for n, esc in ESCENARIOS_PDF.items():
-        assert esc in textos, f"falta el escenario EXACTO de la pregunta {n} en el render"
-
-    subs = [s.value for s in at.subheader]
-    assert any("Defensa Top-Down" in s for s in subs)
-    assert any("Comparador de decisión" in s for s in subs)
+        assert esc in textos, f"falta el escenario EXACTO de la pregunta {n} tras cargar el módulo"
+    assert any("Comparador de decisión" in s.value for s in at.subheader)
 
     # comparador: dos tickers de prueba, sus columnas no deben mezclar datos
     cmp_inputs = [w for w in at.text_input if (w.label or "").startswith("Candidato")]
@@ -186,5 +200,5 @@ if __name__ == "__main__":
     test_fallo_solo_si_la_direccion_es_la_contraria()
     test_prediccion_sin_datos()
     test_16_preguntas_exactas_del_pdf()
-    test_render_y_comparador_apptest()
+    test_modulo_gateado_por_boton()
     print("OK: defensa top-down — todas las pruebas pasaron.")

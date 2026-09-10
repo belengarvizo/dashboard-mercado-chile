@@ -4537,6 +4537,418 @@ def _defensa_topdown_borrador_sintesis(ticker: str, respuestas: list[dict], cata
         return None, f"No se pudo generar el borrador ({type(e).__name__}: {e})."
 
 
+def render_defensa_topdown():
+    """Módulo Defensa Top-Down: 16 preguntas + trayectorias con datos
+    reales + verificación de predicciones (Yahoo Finance) + comparador de
+    candidatos. Se llama SOLO tras apretar el botón de carga en la pestaña
+    Simulación Mesa de Dinero — hace varias consultas a la BD y llamadas a
+    Yahoo Finance, así que no debe correr en cada rerun del script."""
+    dtd_ticker = st.text_input(
+        "¿Qué empresa/ticker eligió tu equipo?",
+        key="dtd_ticker",
+        placeholder="ej. NVO US Equity, AZN LN Equity, RHHBY ...",
+    )
+
+    # Recuperar el último borrador guardado (una sola vez por sesión) y volcarlo
+    # a session_state ANTES de instanciar los widgets, para que aparezca como
+    # valor inicial de cada campo.
+    if "dtd_borrador_cargado" not in st.session_state:
+        try:
+            _df_prev = pd.read_sql(
+                text(
+                    "SELECT pregunta_id, ticker, respuesta_i, respuesta_ii, respuesta_iii "
+                    "FROM defensa_topdown_respuestas "
+                    "WHERE fecha = (SELECT MAX(fecha) FROM defensa_topdown_respuestas)"
+                ),
+                engine,
+            )
+            for _, _r in _df_prev.iterrows():
+                for _suf, _col in (("i", "respuesta_i"), ("ii", "respuesta_ii"), ("iii", "respuesta_iii")):
+                    _k = f"dtd_{_r['pregunta_id']}_{_suf}"
+                    if _k not in st.session_state and pd.notna(_r[_col]):
+                        st.session_state[_k] = _r[_col]
+            if not _df_prev.empty and "dtd_ticker" not in st.session_state:
+                _tk = _df_prev.iloc[0]["ticker"]
+                if pd.notna(_tk):
+                    st.session_state["dtd_ticker"] = _tk
+        except Exception:
+            pass  # tabla aún no creada en esta BD: se trabaja sin borrador previo
+        st.session_state["dtd_borrador_cargado"] = True
+
+    with st.container(border=True):
+        st.markdown("**📅 Calendario de catalizadores**")
+        st.caption(
+            "Específico de farmacéuticas: los catalizadores son eventos discretos con "
+            "fecha (patente, decisión regulatoria, readout de fase 3). Los llenas tú "
+            "investigando — el sistema no los autocompleta."
+        )
+        for _cid, _label in DEFENSA_TOPDOWN_CATALIZADORES:
+            st.text_area(_label, key=f"dtd_{_cid}_i", height=70)
+        st.info(
+            "Esto alimenta directo el criterio de **'Originalidad / Catalizadores' "
+            "(10% de la nota)** — sé lo más específico posible."
+        )
+
+    _datos_reales = _defensa_topdown_datos_reales()
+    _series12m = _defensa_topdown_series_12m()
+
+    def _dtd_referencia_macro(qid):
+        """Trayectoria de 12 meses (no un número congelado) para las
+        preguntas MACRO que tienen dato real. Devuelve True si dibujó algo."""
+        if qid == "q1":
+            dibujo = False
+            if "vix" in _series12m:
+                st.plotly_chart(
+                    _fig_defensa_topdown(_series12m["vix"], "VIX — últimos 12 meses (Yahoo Finance)", "índice"),
+                    use_container_width=True,
+                )
+                dibujo = True
+            if "recesion" in _series12m:
+                st.plotly_chart(
+                    _fig_defensa_topdown(_series12m["recesion"], "Probabilidad de recesión EEUU (Probit extendido) — últimos 8 trimestres", "%"),
+                    use_container_width=True,
+                )
+                dibujo = True
+            if dibujo:
+                st.caption(
+                    "El dashboard no tiene el output gap mundial de IFMO; estas son sus "
+                    "referencias de ciclo/estrés. Trayectoria, no una foto de un día."
+                )
+            return dibujo
+        if qid == "q2" and "spread_2s10s" in _series12m:
+            st.plotly_chart(
+                _fig_defensa_topdown(_series12m["spread_2s10s"], "Spread 2s10s (UST10Y − UST2Y) — últimos 12 meses", "pp", linea_cero=True),
+                use_container_width=True,
+            )
+            st.caption("Bajo cero = curva invertida. El escenario del enunciado plantea −40 pb adicionales en 2–10 años.")
+            return True
+        if qid == "q4" and "fed_funds" in _series12m:
+            st.plotly_chart(
+                _fig_defensa_topdown(_series12m["fed_funds"], "Effective Federal Funds Rate — últimos 12 meses", "%"),
+                use_container_width=True,
+            )
+            st.caption(
+                "El dashboard NO tiene la trayectoria implícita de futuros (WIRP / FF1 Comdty) — "
+                "para los +75 pb descontados a 6 meses ve a Bloomberg."
+            )
+            return True
+        return False
+
+    for _capa in ("MACRO", "SECTORIAL", "FUNDAMENTAL", "TÉCNICO"):
+        st.markdown(f"#### Capa {_capa}")
+        for _pregunta in [p for p in PREGUNTAS_DEFENSA_TOPDOWN if p["capa"] == _capa]:
+            with st.container(border=True):
+                st.markdown(f"**{_pregunta['n']}. [{_pregunta['capa']}] {_pregunta['titulo']}**")
+                st.markdown(f"_{_pregunta['escenario']}_")
+                for _parte in _pregunta["partes"]:
+                    st.markdown(_parte)
+                _fn = _pregunta["funciones"] or "el enunciado no cita una función específica"
+                st.caption(f"📟 Función Bloomberg: **{_fn}**")
+
+                if not _dtd_referencia_macro(_pregunta["id"]):
+                    if _pregunta["capa"] == "MACRO":
+                        _aviso = (
+                            "El dashboard no tiene expectativas de inflación de EE.UU./Eurozona "
+                            "(ECFC). La inflación breakeven que sí calcula es de Chile (BCP−BCU), "
+                            "otro mercado — no la uses acá. Ve a Bloomberg ECFC e IMAP."
+                        )
+                    elif _pregunta["capa"] == "TÉCNICO":
+                        _aviso = (
+                            f"Ve a la terminal Bloomberg, corre **{_pregunta['funciones']}**, y anota "
+                            "lo que encuentres abajo — el dashboard no tiene datos técnicos de un "
+                            "papel puntual."
+                        )
+                    else:  # SECTORIAL / FUNDAMENTAL
+                        _fnb = _pregunta["funciones"] or "IMAP / GRR / datos de fund flows"
+                        _aviso = (
+                            "El dashboard no tiene un indicador para esto: no hay datos de sector "
+                            "salud/farma global, y los archivos de VaR/Beta que existen son de "
+                            "acciones chilenas del IPSA (Aguas Andinas, SQM, CCU), que no aplican a "
+                            f"una farmacéutica global. Ve a Bloomberg (**{_fnb}**) y anótalo abajo."
+                        )
+                    st.info(f"📟 {_aviso}")
+
+                _ri = st.text_area("(i) Descripción de la captura Bloomberg", key=f"dtd_{_pregunta['id']}_i", height=80)
+                _rii = st.text_area("(ii) Interpretación numérica", key=f"dtd_{_pregunta['id']}_ii", height=80)
+                _riii = st.text_area("(iii) Impacto en la estrategia de inversión", key=f"dtd_{_pregunta['id']}_iii", height=80)
+
+                with st.expander("🎯 Predicción verificable (opcional)"):
+                    st.caption(
+                        "Una afirmación falsable con plazo. Al vencer, se compara UNA sola vez "
+                        "contra el precio del ticker EN la fecha objetivo (histórico de Yahoo "
+                        "Finance, no el de hoy) y el resultado queda congelado. El veredicto "
+                        "mide calibración: ✅ dentro de ±3 pp del valor predicho · 🟡 dirección "
+                        "correcta pero magnitud mal calibrada · ❌ dirección equivocada."
+                    )
+                    _pc1, _pc2, _pc3 = st.columns([2, 1, 1])
+                    _pred_texto = _pc1.text_input("Predicción", key=f"dtd_{_pregunta['id']}_pred_txt",
+                                                  placeholder="ej. +5% en 3 semanas / target 120")
+                    _pred_tipo = _pc2.selectbox("Tipo", ["% de variación", "precio objetivo"],
+                                                key=f"dtd_{_pregunta['id']}_pred_tipo")
+                    _pred_valor = _pc3.number_input("Valor", value=0.0, step=0.5,
+                                                    key=f"dtd_{_pregunta['id']}_pred_val")
+                    _pred_horiz = st.number_input("Horizonte (días)", min_value=1, value=21, step=1,
+                                                  key=f"dtd_{_pregunta['id']}_pred_dias")
+                    if st.button("Registrar predicción", key=f"dtd_{_pregunta['id']}_pred_btn"):
+                        _tk = (dtd_ticker or "").strip()
+                        if not _tk:
+                            st.warning("Primero indica el ticker de tu equipo arriba.")
+                        elif _pred_valor == 0.0:
+                            st.warning("El valor de la predicción no puede ser 0.")
+                        else:
+                            _pb = _precio_yf_actual(_tk)
+                            if _pb is None:
+                                st.warning(
+                                    f"Yahoo Finance no devolvió un precio confiable para «{_tk}». "
+                                    "Se registra igual, pero sin precio base no se podrá verificar un % de variación."
+                                )
+                            try:
+                                with engine.begin() as _conn:
+                                    _conn.execute(
+                                        text(
+                                            "INSERT INTO defensa_topdown_predicciones "
+                                            "(pregunta_id, ticker, texto, tipo, valor_objetivo, horizonte_dias, precio_base, fecha_hecha) "
+                                            "VALUES (:pregunta_id, :ticker, :texto, :tipo, :valor_objetivo, :horizonte_dias, :precio_base, :fecha_hecha)"
+                                        ),
+                                        {
+                                            "pregunta_id": _pregunta["id"], "ticker": _tk,
+                                            "texto": _pred_texto or None,
+                                            "tipo": "pct" if _pred_tipo == "% de variación" else "target",
+                                            "valor_objetivo": float(_pred_valor),
+                                            "horizonte_dias": int(_pred_horiz),
+                                            "precio_base": _pb[0] if _pb else None,
+                                            "fecha_hecha": datetime.now(),
+                                        },
+                                    )
+                                st.success("Predicción registrada.")
+                            except Exception as e:
+                                st.error(f"No se pudo registrar (¿falta correr scripts/crear_tabla_defensa_topdown.py?): {e}")
+
+                    try:
+                        _dfp = pd.read_sql(
+                            text(
+                                "SELECT id, ticker, texto, tipo, valor_objetivo, horizonte_dias, precio_base, "
+                                "fecha_hecha, estado_resuelto, detalle_resuelto, error_pp "
+                                "FROM defensa_topdown_predicciones "
+                                "WHERE pregunta_id = :pid AND ticker = :tk ORDER BY fecha_hecha DESC"
+                            ),
+                            engine, params={"pid": _pregunta["id"], "tk": (dtd_ticker or "").strip()},
+                        )
+                    except Exception:
+                        _dfp = pd.DataFrame()
+                    for _, _p in _dfp.iterrows():
+                        _res = _resolver_prediccion(_p.to_dict())
+                        _icono = _DTD_ICONO_PRED[_res["estado"]]
+                        _sello = " · resultado congelado" if _res.get("congelado") else ""
+                        st.markdown(
+                            f"{_icono} **{_p['texto'] or _p['tipo']}** "
+                            f"(registrada {pd.Timestamp(_p['fecha_hecha']).strftime('%Y-%m-%d')}) — "
+                            f"{_res['detalle']}{_sello}"
+                        )
+
+                if st.button("🥊 Reto de la defensa cruzada", key=f"dtd_{_pregunta['id']}_reto"):
+                    if not any(v and v.strip() for v in (_ri, _rii, _riii)):
+                        st.warning("Responde al menos un campo antes de pedir el reto.")
+                    else:
+                        with st.spinner("El equipo rival está buscando huecos en tu respuesta…"):
+                            _txt, _err = _defensa_topdown_reto_cruzado(_pregunta, dtd_ticker, _ri, _rii, _riii)
+                        if _err:
+                            st.session_state.pop(f"dtd_{_pregunta['id']}_reto_txt", None)
+                            st.error(_err)
+                        else:
+                            st.session_state[f"dtd_{_pregunta['id']}_reto_txt"] = _txt
+                _reto_txt = st.session_state.get(f"dtd_{_pregunta['id']}_reto_txt")
+                if _reto_txt:
+                    st.markdown("**🥊 Objeciones del equipo rival:**")
+                    st.markdown(_reto_txt)
+
+    if st.button("💾 Guardar borrador de la defensa", key="dtd_guardar", type="primary"):
+        try:
+            _ahora = datetime.now()
+            _filas = []
+            for _pregunta in PREGUNTAS_DEFENSA_TOPDOWN:
+                _filas.append({
+                    "pregunta_id": _pregunta["id"],
+                    "ticker": (dtd_ticker or "").strip() or None,
+                    "respuesta_i": st.session_state.get(f"dtd_{_pregunta['id']}_i") or None,
+                    "respuesta_ii": st.session_state.get(f"dtd_{_pregunta['id']}_ii") or None,
+                    "respuesta_iii": st.session_state.get(f"dtd_{_pregunta['id']}_iii") or None,
+                    "fecha": _ahora,
+                })
+            for _cid, _label in DEFENSA_TOPDOWN_CATALIZADORES:
+                _filas.append({
+                    "pregunta_id": _cid,
+                    "ticker": (dtd_ticker or "").strip() or None,
+                    "respuesta_i": st.session_state.get(f"dtd_{_cid}_i") or None,
+                    "respuesta_ii": None,
+                    "respuesta_iii": None,
+                    "fecha": _ahora,
+                })
+            with engine.begin() as conn:
+                conn.execute(
+                    text(
+                        "INSERT INTO defensa_topdown_respuestas "
+                        "(pregunta_id, ticker, respuesta_i, respuesta_ii, respuesta_iii, fecha) "
+                        "VALUES (:pregunta_id, :ticker, :respuesta_i, :respuesta_ii, :respuesta_iii, :fecha)"
+                    ),
+                    _filas,
+                )
+            st.success(f"Borrador guardado ({_ahora.strftime('%Y-%m-%d %H:%M')}).")
+        except Exception as e:
+            st.error(f"No se pudo guardar (¿falta correr scripts/crear_tabla_defensa_topdown.py?): {e}")
+
+    with st.expander("📄 Ver / descargar el último borrador guardado"):
+        try:
+            _df_borrador = pd.read_sql(
+                text(
+                    "SELECT pregunta_id, ticker, respuesta_i, respuesta_ii, respuesta_iii, fecha "
+                    "FROM defensa_topdown_respuestas "
+                    "WHERE fecha = (SELECT MAX(fecha) FROM defensa_topdown_respuestas) "
+                    "ORDER BY pregunta_id"
+                ),
+                engine,
+            )
+            if _df_borrador.empty:
+                st.caption("Todavía no hay borradores guardados.")
+            else:
+                st.caption(f"Guardado el {pd.Timestamp(_df_borrador.iloc[0]['fecha']).strftime('%Y-%m-%d %H:%M')}.")
+                st.dataframe(_df_borrador, hide_index=True, use_container_width=True)
+                st.download_button(
+                    "⬇️ Descargar borrador (CSV)",
+                    _df_borrador.to_csv(index=False),
+                    file_name=f"defensa_topdown_{date.today().isoformat()}.csv",
+                    mime="text/csv",
+                )
+        except Exception as e:
+            st.caption(f"No se pudo leer el borrador: {e}")
+
+    # ================= ⚖️ Comparador de decisión =================
+    st.divider()
+    st.subheader("⚖️ Comparador de decisión")
+    st.caption(
+        "Exploración PREVIA para elegir entre candidatos: no reemplaza el ticker "
+        "oficial de arriba. Compara lado a lado la trayectoria de precio, las "
+        "respuestas ya ingresadas y las predicciones verificables de cada uno. "
+        "El contexto macro es el mismo para todos, así que se muestra una sola vez."
+    )
+
+    _cmp_cols = st.columns(3)
+    _cmp_tickers = [
+        _cmp_cols[i].text_input(f"Candidato {i + 1}", key=f"dtd_cmp_{i + 1}", placeholder="ticker")
+        for i in range(3)
+    ]
+    _cmp_tickers = [t.strip() for t in _cmp_tickers if t and t.strip()]
+
+    if _cmp_tickers:
+        with st.expander("Contexto macro (común a todos los candidatos)", expanded=False):
+            if "vix" in _series12m:
+                st.plotly_chart(_fig_defensa_topdown(_series12m["vix"], "VIX — 12 meses", "índice"), use_container_width=True)
+            if "spread_2s10s" in _series12m:
+                st.plotly_chart(_fig_defensa_topdown(_series12m["spread_2s10s"], "Spread 2s10s — 12 meses", "pp", linea_cero=True), use_container_width=True)
+            if "recesion" in _series12m:
+                st.plotly_chart(_fig_defensa_topdown(_series12m["recesion"], "Prob. recesión EEUU (Probit) — 8 trimestres", "%"), use_container_width=True)
+            if not any(k in _series12m for k in ("vix", "spread_2s10s", "recesion")):
+                st.caption("No hay series macro disponibles en este momento.")
+
+        _cols = st.columns(len(_cmp_tickers))
+        for _col, _tk in zip(_cols, _cmp_tickers):
+            with _col:
+                st.markdown(f"### {_tk}")
+                _serie = _precio_yf_serie(_tk, meses=12)
+                if _serie is None:
+                    st.warning("Yahoo Finance no devolvió datos confiables para este ticker.")
+                else:
+                    st.plotly_chart(
+                        _fig_defensa_topdown(_serie, "Precio — 12 meses (Yahoo Finance)", "precio"),
+                        use_container_width=True,
+                    )
+
+                try:
+                    _dfr = pd.read_sql(
+                        text(
+                            "SELECT pregunta_id, respuesta_i, respuesta_ii, respuesta_iii "
+                            "FROM defensa_topdown_respuestas WHERE ticker = :tk "
+                            "AND fecha = (SELECT MAX(fecha) FROM defensa_topdown_respuestas WHERE ticker = :tk)"
+                        ),
+                        engine, params={"tk": _tk},
+                    )
+                except Exception:
+                    _dfr = pd.DataFrame()
+                _qids = {p["id"] for p in PREGUNTAS_DEFENSA_TOPDOWN}
+                _respondidas = sum(
+                    1 for _, _row in _dfr.iterrows()
+                    if _row["pregunta_id"] in _qids
+                    and any(_row[c] and str(_row[c]).strip() for c in ("respuesta_i", "respuesta_ii", "respuesta_iii"))
+                )
+                st.markdown(f"**Respuestas ingresadas:** {_respondidas}/16")
+                if not _dfr.empty:
+                    with st.expander("ver respuestas"):
+                        st.dataframe(_dfr, hide_index=True, use_container_width=True)
+
+                try:
+                    _dfp = pd.read_sql(
+                        text(
+                            "SELECT id, ticker, pregunta_id, texto, tipo, valor_objetivo, horizonte_dias, "
+                            "precio_base, fecha_hecha, estado_resuelto, detalle_resuelto, error_pp "
+                            "FROM defensa_topdown_predicciones WHERE ticker = :tk ORDER BY fecha_hecha DESC"
+                        ),
+                        engine, params={"tk": _tk},
+                    )
+                except Exception:
+                    _dfp = pd.DataFrame()
+                if _dfp.empty:
+                    st.markdown("**Predicciones:** ninguna registrada.")
+                else:
+                    _lineas = []
+                    for _, _p in _dfp.iterrows():
+                        _res = _resolver_prediccion(_p.to_dict())
+                        _icono = _DTD_ICONO_PRED[_res["estado"]]
+                        _lineas.append(f"{_icono} {_p['texto'] or _p['tipo']} — {_res['detalle']}")
+                    st.markdown("**Predicciones:**\n\n" + "\n\n".join(_lineas))
+
+        if st.button("🧭 Borrador de síntesis", key="dtd_cmp_sintesis"):
+            for _tk in _cmp_tickers:
+                try:
+                    _r = pd.read_sql(
+                        text(
+                            "SELECT pregunta_id, respuesta_i, respuesta_ii, respuesta_iii "
+                            "FROM defensa_topdown_respuestas WHERE ticker = :tk "
+                            "AND fecha = (SELECT MAX(fecha) FROM defensa_topdown_respuestas WHERE ticker = :tk) "
+                            "ORDER BY pregunta_id"
+                        ),
+                        engine, params={"tk": _tk},
+                    )
+                except Exception:
+                    _r = pd.DataFrame()
+                _qids = {p["id"] for p in PREGUNTAS_DEFENSA_TOPDOWN}
+                _cids = {c[0] for c in DEFENSA_TOPDOWN_CATALIZADORES}
+                _cat_label = dict(DEFENSA_TOPDOWN_CATALIZADORES)
+                _resp = [row.to_dict() for _, row in _r.iterrows() if row["pregunta_id"] in _qids]
+                _cat = [
+                    {"label": _cat_label[row["pregunta_id"]], "valor": row["respuesta_i"]}
+                    for _, row in _r.iterrows() if row["pregunta_id"] in _cids and row["respuesta_i"]
+                ]
+                try:
+                    _pr = pd.read_sql(
+                        text("SELECT pregunta_id, texto, fecha_hecha FROM defensa_topdown_predicciones WHERE ticker = :tk"),
+                        engine, params={"tk": _tk},
+                    )
+                    _preds = [row.to_dict() for _, row in _pr.iterrows()]
+                except Exception:
+                    _preds = []
+                with st.spinner(f"Redactando borrador para {_tk}…"):
+                    _txt, _err = _defensa_topdown_borrador_sintesis(_tk, _resp, _cat, _preds)
+                st.markdown(f"#### Borrador — {_tk}")
+                if _err:
+                    st.error(_err)
+                else:
+                    st.info(
+                        "📝 **Borrador para que el equipo edite y decida — no es una "
+                        "recomendación de inversión.** Redactado solo con lo que el equipo "
+                        "ya ingresó; no compara ni dice cuál candidato es \"el mejor\"."
+                    )
+                    st.markdown(_txt)
+
 # --- Tab 9: Simulación Mesa de Dinero ---
 with tab_mesa_dinero:
     st.header("🏦 Simulación Mesa de Dinero")
@@ -5454,408 +5866,16 @@ with tab_mesa_dinero:
         "correcto/incorrecto — no hay pauta, la tesis se defiende por juicio."
     )
 
-    dtd_ticker = st.text_input(
-        "¿Qué empresa/ticker eligió tu equipo?",
-        key="dtd_ticker",
-        placeholder="ej. NVO US Equity, AZN LN Equity, RHHBY ...",
-    )
-
-    # Recuperar el último borrador guardado (una sola vez por sesión) y volcarlo
-    # a session_state ANTES de instanciar los widgets, para que aparezca como
-    # valor inicial de cada campo.
-    if "dtd_borrador_cargado" not in st.session_state:
-        try:
-            _df_prev = pd.read_sql(
-                text(
-                    "SELECT pregunta_id, ticker, respuesta_i, respuesta_ii, respuesta_iii "
-                    "FROM defensa_topdown_respuestas "
-                    "WHERE fecha = (SELECT MAX(fecha) FROM defensa_topdown_respuestas)"
-                ),
-                engine,
-            )
-            for _, _r in _df_prev.iterrows():
-                for _suf, _col in (("i", "respuesta_i"), ("ii", "respuesta_ii"), ("iii", "respuesta_iii")):
-                    _k = f"dtd_{_r['pregunta_id']}_{_suf}"
-                    if _k not in st.session_state and pd.notna(_r[_col]):
-                        st.session_state[_k] = _r[_col]
-            if not _df_prev.empty and "dtd_ticker" not in st.session_state:
-                _tk = _df_prev.iloc[0]["ticker"]
-                if pd.notna(_tk):
-                    st.session_state["dtd_ticker"] = _tk
-        except Exception:
-            pass  # tabla aún no creada en esta BD: se trabaja sin borrador previo
-        st.session_state["dtd_borrador_cargado"] = True
-
-    with st.container(border=True):
-        st.markdown("**📅 Calendario de catalizadores**")
-        st.caption(
-            "Específico de farmacéuticas: los catalizadores son eventos discretos con "
-            "fecha (patente, decisión regulatoria, readout de fase 3). Los llenas tú "
-            "investigando — el sistema no los autocompleta."
-        )
-        for _cid, _label in DEFENSA_TOPDOWN_CATALIZADORES:
-            st.text_area(_label, key=f"dtd_{_cid}_i", height=70)
+    st.session_state.setdefault("cargar_defensa_topdown", False)
+    if st.button("🎯 Cargar Defensa Top-Down (16 preguntas, trayectorias y comparador)", key="dtd_cargar_modulo"):
+        st.session_state["cargar_defensa_topdown"] = True
+    if not st.session_state["cargar_defensa_topdown"]:
         st.info(
-            "Esto alimenta directo el criterio de **'Originalidad / Catalizadores' "
-            "(10% de la nota)** — sé lo más específico posible."
+            "Este módulo hace varias consultas a la base de datos, calcula "
+            "trayectorias con datos reales del dashboard y verifica predicciones "
+            "contra Yahoo Finance. No corre automáticamente para no ralentizar el "
+            "resto del dashboard. Apretá el botón de arriba para cargarlo."
         )
+    else:
+        render_defensa_topdown()
 
-    _datos_reales = _defensa_topdown_datos_reales()
-    _series12m = _defensa_topdown_series_12m()
-
-    def _dtd_referencia_macro(qid):
-        """Trayectoria de 12 meses (no un número congelado) para las
-        preguntas MACRO que tienen dato real. Devuelve True si dibujó algo."""
-        if qid == "q1":
-            dibujo = False
-            if "vix" in _series12m:
-                st.plotly_chart(
-                    _fig_defensa_topdown(_series12m["vix"], "VIX — últimos 12 meses (Yahoo Finance)", "índice"),
-                    use_container_width=True,
-                )
-                dibujo = True
-            if "recesion" in _series12m:
-                st.plotly_chart(
-                    _fig_defensa_topdown(_series12m["recesion"], "Probabilidad de recesión EEUU (Probit extendido) — últimos 8 trimestres", "%"),
-                    use_container_width=True,
-                )
-                dibujo = True
-            if dibujo:
-                st.caption(
-                    "El dashboard no tiene el output gap mundial de IFMO; estas son sus "
-                    "referencias de ciclo/estrés. Trayectoria, no una foto de un día."
-                )
-            return dibujo
-        if qid == "q2" and "spread_2s10s" in _series12m:
-            st.plotly_chart(
-                _fig_defensa_topdown(_series12m["spread_2s10s"], "Spread 2s10s (UST10Y − UST2Y) — últimos 12 meses", "pp", linea_cero=True),
-                use_container_width=True,
-            )
-            st.caption("Bajo cero = curva invertida. El escenario del enunciado plantea −40 pb adicionales en 2–10 años.")
-            return True
-        if qid == "q4" and "fed_funds" in _series12m:
-            st.plotly_chart(
-                _fig_defensa_topdown(_series12m["fed_funds"], "Effective Federal Funds Rate — últimos 12 meses", "%"),
-                use_container_width=True,
-            )
-            st.caption(
-                "El dashboard NO tiene la trayectoria implícita de futuros (WIRP / FF1 Comdty) — "
-                "para los +75 pb descontados a 6 meses ve a Bloomberg."
-            )
-            return True
-        return False
-
-    for _capa in ("MACRO", "SECTORIAL", "FUNDAMENTAL", "TÉCNICO"):
-        st.markdown(f"#### Capa {_capa}")
-        for _pregunta in [p for p in PREGUNTAS_DEFENSA_TOPDOWN if p["capa"] == _capa]:
-            with st.container(border=True):
-                st.markdown(f"**{_pregunta['n']}. [{_pregunta['capa']}] {_pregunta['titulo']}**")
-                st.markdown(f"_{_pregunta['escenario']}_")
-                for _parte in _pregunta["partes"]:
-                    st.markdown(_parte)
-                _fn = _pregunta["funciones"] or "el enunciado no cita una función específica"
-                st.caption(f"📟 Función Bloomberg: **{_fn}**")
-
-                if not _dtd_referencia_macro(_pregunta["id"]):
-                    if _pregunta["capa"] == "MACRO":
-                        _aviso = (
-                            "El dashboard no tiene expectativas de inflación de EE.UU./Eurozona "
-                            "(ECFC). La inflación breakeven que sí calcula es de Chile (BCP−BCU), "
-                            "otro mercado — no la uses acá. Ve a Bloomberg ECFC e IMAP."
-                        )
-                    elif _pregunta["capa"] == "TÉCNICO":
-                        _aviso = (
-                            f"Ve a la terminal Bloomberg, corre **{_pregunta['funciones']}**, y anota "
-                            "lo que encuentres abajo — el dashboard no tiene datos técnicos de un "
-                            "papel puntual."
-                        )
-                    else:  # SECTORIAL / FUNDAMENTAL
-                        _fnb = _pregunta["funciones"] or "IMAP / GRR / datos de fund flows"
-                        _aviso = (
-                            "El dashboard no tiene un indicador para esto: no hay datos de sector "
-                            "salud/farma global, y los archivos de VaR/Beta que existen son de "
-                            "acciones chilenas del IPSA (Aguas Andinas, SQM, CCU), que no aplican a "
-                            f"una farmacéutica global. Ve a Bloomberg (**{_fnb}**) y anótalo abajo."
-                        )
-                    st.info(f"📟 {_aviso}")
-
-                _ri = st.text_area("(i) Descripción de la captura Bloomberg", key=f"dtd_{_pregunta['id']}_i", height=80)
-                _rii = st.text_area("(ii) Interpretación numérica", key=f"dtd_{_pregunta['id']}_ii", height=80)
-                _riii = st.text_area("(iii) Impacto en la estrategia de inversión", key=f"dtd_{_pregunta['id']}_iii", height=80)
-
-                with st.expander("🎯 Predicción verificable (opcional)"):
-                    st.caption(
-                        "Una afirmación falsable con plazo. Al vencer, se compara UNA sola vez "
-                        "contra el precio del ticker EN la fecha objetivo (histórico de Yahoo "
-                        "Finance, no el de hoy) y el resultado queda congelado. El veredicto "
-                        "mide calibración: ✅ dentro de ±3 pp del valor predicho · 🟡 dirección "
-                        "correcta pero magnitud mal calibrada · ❌ dirección equivocada."
-                    )
-                    _pc1, _pc2, _pc3 = st.columns([2, 1, 1])
-                    _pred_texto = _pc1.text_input("Predicción", key=f"dtd_{_pregunta['id']}_pred_txt",
-                                                  placeholder="ej. +5% en 3 semanas / target 120")
-                    _pred_tipo = _pc2.selectbox("Tipo", ["% de variación", "precio objetivo"],
-                                                key=f"dtd_{_pregunta['id']}_pred_tipo")
-                    _pred_valor = _pc3.number_input("Valor", value=0.0, step=0.5,
-                                                    key=f"dtd_{_pregunta['id']}_pred_val")
-                    _pred_horiz = st.number_input("Horizonte (días)", min_value=1, value=21, step=1,
-                                                  key=f"dtd_{_pregunta['id']}_pred_dias")
-                    if st.button("Registrar predicción", key=f"dtd_{_pregunta['id']}_pred_btn"):
-                        _tk = (dtd_ticker or "").strip()
-                        if not _tk:
-                            st.warning("Primero indica el ticker de tu equipo arriba.")
-                        elif _pred_valor == 0.0:
-                            st.warning("El valor de la predicción no puede ser 0.")
-                        else:
-                            _pb = _precio_yf_actual(_tk)
-                            if _pb is None:
-                                st.warning(
-                                    f"Yahoo Finance no devolvió un precio confiable para «{_tk}». "
-                                    "Se registra igual, pero sin precio base no se podrá verificar un % de variación."
-                                )
-                            try:
-                                with engine.begin() as _conn:
-                                    _conn.execute(
-                                        text(
-                                            "INSERT INTO defensa_topdown_predicciones "
-                                            "(pregunta_id, ticker, texto, tipo, valor_objetivo, horizonte_dias, precio_base, fecha_hecha) "
-                                            "VALUES (:pregunta_id, :ticker, :texto, :tipo, :valor_objetivo, :horizonte_dias, :precio_base, :fecha_hecha)"
-                                        ),
-                                        {
-                                            "pregunta_id": _pregunta["id"], "ticker": _tk,
-                                            "texto": _pred_texto or None,
-                                            "tipo": "pct" if _pred_tipo == "% de variación" else "target",
-                                            "valor_objetivo": float(_pred_valor),
-                                            "horizonte_dias": int(_pred_horiz),
-                                            "precio_base": _pb[0] if _pb else None,
-                                            "fecha_hecha": datetime.now(),
-                                        },
-                                    )
-                                st.success("Predicción registrada.")
-                            except Exception as e:
-                                st.error(f"No se pudo registrar (¿falta correr scripts/crear_tabla_defensa_topdown.py?): {e}")
-
-                    try:
-                        _dfp = pd.read_sql(
-                            text(
-                                "SELECT id, ticker, texto, tipo, valor_objetivo, horizonte_dias, precio_base, "
-                                "fecha_hecha, estado_resuelto, detalle_resuelto, error_pp "
-                                "FROM defensa_topdown_predicciones "
-                                "WHERE pregunta_id = :pid AND ticker = :tk ORDER BY fecha_hecha DESC"
-                            ),
-                            engine, params={"pid": _pregunta["id"], "tk": (dtd_ticker or "").strip()},
-                        )
-                    except Exception:
-                        _dfp = pd.DataFrame()
-                    for _, _p in _dfp.iterrows():
-                        _res = _resolver_prediccion(_p.to_dict())
-                        _icono = _DTD_ICONO_PRED[_res["estado"]]
-                        _sello = " · resultado congelado" if _res.get("congelado") else ""
-                        st.markdown(
-                            f"{_icono} **{_p['texto'] or _p['tipo']}** "
-                            f"(registrada {pd.Timestamp(_p['fecha_hecha']).strftime('%Y-%m-%d')}) — "
-                            f"{_res['detalle']}{_sello}"
-                        )
-
-                if st.button("🥊 Reto de la defensa cruzada", key=f"dtd_{_pregunta['id']}_reto"):
-                    if not any(v and v.strip() for v in (_ri, _rii, _riii)):
-                        st.warning("Responde al menos un campo antes de pedir el reto.")
-                    else:
-                        with st.spinner("El equipo rival está buscando huecos en tu respuesta…"):
-                            _txt, _err = _defensa_topdown_reto_cruzado(_pregunta, dtd_ticker, _ri, _rii, _riii)
-                        if _err:
-                            st.session_state.pop(f"dtd_{_pregunta['id']}_reto_txt", None)
-                            st.error(_err)
-                        else:
-                            st.session_state[f"dtd_{_pregunta['id']}_reto_txt"] = _txt
-                _reto_txt = st.session_state.get(f"dtd_{_pregunta['id']}_reto_txt")
-                if _reto_txt:
-                    st.markdown("**🥊 Objeciones del equipo rival:**")
-                    st.markdown(_reto_txt)
-
-    if st.button("💾 Guardar borrador de la defensa", key="dtd_guardar", type="primary"):
-        try:
-            _ahora = datetime.now()
-            _filas = []
-            for _pregunta in PREGUNTAS_DEFENSA_TOPDOWN:
-                _filas.append({
-                    "pregunta_id": _pregunta["id"],
-                    "ticker": (dtd_ticker or "").strip() or None,
-                    "respuesta_i": st.session_state.get(f"dtd_{_pregunta['id']}_i") or None,
-                    "respuesta_ii": st.session_state.get(f"dtd_{_pregunta['id']}_ii") or None,
-                    "respuesta_iii": st.session_state.get(f"dtd_{_pregunta['id']}_iii") or None,
-                    "fecha": _ahora,
-                })
-            for _cid, _label in DEFENSA_TOPDOWN_CATALIZADORES:
-                _filas.append({
-                    "pregunta_id": _cid,
-                    "ticker": (dtd_ticker or "").strip() or None,
-                    "respuesta_i": st.session_state.get(f"dtd_{_cid}_i") or None,
-                    "respuesta_ii": None,
-                    "respuesta_iii": None,
-                    "fecha": _ahora,
-                })
-            with engine.begin() as conn:
-                conn.execute(
-                    text(
-                        "INSERT INTO defensa_topdown_respuestas "
-                        "(pregunta_id, ticker, respuesta_i, respuesta_ii, respuesta_iii, fecha) "
-                        "VALUES (:pregunta_id, :ticker, :respuesta_i, :respuesta_ii, :respuesta_iii, :fecha)"
-                    ),
-                    _filas,
-                )
-            st.success(f"Borrador guardado ({_ahora.strftime('%Y-%m-%d %H:%M')}).")
-        except Exception as e:
-            st.error(f"No se pudo guardar (¿falta correr scripts/crear_tabla_defensa_topdown.py?): {e}")
-
-    with st.expander("📄 Ver / descargar el último borrador guardado"):
-        try:
-            _df_borrador = pd.read_sql(
-                text(
-                    "SELECT pregunta_id, ticker, respuesta_i, respuesta_ii, respuesta_iii, fecha "
-                    "FROM defensa_topdown_respuestas "
-                    "WHERE fecha = (SELECT MAX(fecha) FROM defensa_topdown_respuestas) "
-                    "ORDER BY pregunta_id"
-                ),
-                engine,
-            )
-            if _df_borrador.empty:
-                st.caption("Todavía no hay borradores guardados.")
-            else:
-                st.caption(f"Guardado el {pd.Timestamp(_df_borrador.iloc[0]['fecha']).strftime('%Y-%m-%d %H:%M')}.")
-                st.dataframe(_df_borrador, hide_index=True, use_container_width=True)
-                st.download_button(
-                    "⬇️ Descargar borrador (CSV)",
-                    _df_borrador.to_csv(index=False),
-                    file_name=f"defensa_topdown_{date.today().isoformat()}.csv",
-                    mime="text/csv",
-                )
-        except Exception as e:
-            st.caption(f"No se pudo leer el borrador: {e}")
-
-    # ================= ⚖️ Comparador de decisión =================
-    st.divider()
-    st.subheader("⚖️ Comparador de decisión")
-    st.caption(
-        "Exploración PREVIA para elegir entre candidatos: no reemplaza el ticker "
-        "oficial de arriba. Compara lado a lado la trayectoria de precio, las "
-        "respuestas ya ingresadas y las predicciones verificables de cada uno. "
-        "El contexto macro es el mismo para todos, así que se muestra una sola vez."
-    )
-
-    _cmp_cols = st.columns(3)
-    _cmp_tickers = [
-        _cmp_cols[i].text_input(f"Candidato {i + 1}", key=f"dtd_cmp_{i + 1}", placeholder="ticker")
-        for i in range(3)
-    ]
-    _cmp_tickers = [t.strip() for t in _cmp_tickers if t and t.strip()]
-
-    if _cmp_tickers:
-        with st.expander("Contexto macro (común a todos los candidatos)", expanded=False):
-            if "vix" in _series12m:
-                st.plotly_chart(_fig_defensa_topdown(_series12m["vix"], "VIX — 12 meses", "índice"), use_container_width=True)
-            if "spread_2s10s" in _series12m:
-                st.plotly_chart(_fig_defensa_topdown(_series12m["spread_2s10s"], "Spread 2s10s — 12 meses", "pp", linea_cero=True), use_container_width=True)
-            if "recesion" in _series12m:
-                st.plotly_chart(_fig_defensa_topdown(_series12m["recesion"], "Prob. recesión EEUU (Probit) — 8 trimestres", "%"), use_container_width=True)
-            if not any(k in _series12m for k in ("vix", "spread_2s10s", "recesion")):
-                st.caption("No hay series macro disponibles en este momento.")
-
-        _cols = st.columns(len(_cmp_tickers))
-        for _col, _tk in zip(_cols, _cmp_tickers):
-            with _col:
-                st.markdown(f"### {_tk}")
-                _serie = _precio_yf_serie(_tk, meses=12)
-                if _serie is None:
-                    st.warning("Yahoo Finance no devolvió datos confiables para este ticker.")
-                else:
-                    st.plotly_chart(
-                        _fig_defensa_topdown(_serie, "Precio — 12 meses (Yahoo Finance)", "precio"),
-                        use_container_width=True,
-                    )
-
-                try:
-                    _dfr = pd.read_sql(
-                        text(
-                            "SELECT pregunta_id, respuesta_i, respuesta_ii, respuesta_iii "
-                            "FROM defensa_topdown_respuestas WHERE ticker = :tk "
-                            "AND fecha = (SELECT MAX(fecha) FROM defensa_topdown_respuestas WHERE ticker = :tk)"
-                        ),
-                        engine, params={"tk": _tk},
-                    )
-                except Exception:
-                    _dfr = pd.DataFrame()
-                _qids = {p["id"] for p in PREGUNTAS_DEFENSA_TOPDOWN}
-                _respondidas = sum(
-                    1 for _, _row in _dfr.iterrows()
-                    if _row["pregunta_id"] in _qids
-                    and any(_row[c] and str(_row[c]).strip() for c in ("respuesta_i", "respuesta_ii", "respuesta_iii"))
-                )
-                st.markdown(f"**Respuestas ingresadas:** {_respondidas}/16")
-                if not _dfr.empty:
-                    with st.expander("ver respuestas"):
-                        st.dataframe(_dfr, hide_index=True, use_container_width=True)
-
-                try:
-                    _dfp = pd.read_sql(
-                        text(
-                            "SELECT id, ticker, pregunta_id, texto, tipo, valor_objetivo, horizonte_dias, "
-                            "precio_base, fecha_hecha, estado_resuelto, detalle_resuelto, error_pp "
-                            "FROM defensa_topdown_predicciones WHERE ticker = :tk ORDER BY fecha_hecha DESC"
-                        ),
-                        engine, params={"tk": _tk},
-                    )
-                except Exception:
-                    _dfp = pd.DataFrame()
-                if _dfp.empty:
-                    st.markdown("**Predicciones:** ninguna registrada.")
-                else:
-                    _lineas = []
-                    for _, _p in _dfp.iterrows():
-                        _res = _resolver_prediccion(_p.to_dict())
-                        _icono = _DTD_ICONO_PRED[_res["estado"]]
-                        _lineas.append(f"{_icono} {_p['texto'] or _p['tipo']} — {_res['detalle']}")
-                    st.markdown("**Predicciones:**\n\n" + "\n\n".join(_lineas))
-
-        if st.button("🧭 Borrador de síntesis", key="dtd_cmp_sintesis"):
-            for _tk in _cmp_tickers:
-                try:
-                    _r = pd.read_sql(
-                        text(
-                            "SELECT pregunta_id, respuesta_i, respuesta_ii, respuesta_iii "
-                            "FROM defensa_topdown_respuestas WHERE ticker = :tk "
-                            "AND fecha = (SELECT MAX(fecha) FROM defensa_topdown_respuestas WHERE ticker = :tk) "
-                            "ORDER BY pregunta_id"
-                        ),
-                        engine, params={"tk": _tk},
-                    )
-                except Exception:
-                    _r = pd.DataFrame()
-                _qids = {p["id"] for p in PREGUNTAS_DEFENSA_TOPDOWN}
-                _cids = {c[0] for c in DEFENSA_TOPDOWN_CATALIZADORES}
-                _cat_label = dict(DEFENSA_TOPDOWN_CATALIZADORES)
-                _resp = [row.to_dict() for _, row in _r.iterrows() if row["pregunta_id"] in _qids]
-                _cat = [
-                    {"label": _cat_label[row["pregunta_id"]], "valor": row["respuesta_i"]}
-                    for _, row in _r.iterrows() if row["pregunta_id"] in _cids and row["respuesta_i"]
-                ]
-                try:
-                    _pr = pd.read_sql(
-                        text("SELECT pregunta_id, texto, fecha_hecha FROM defensa_topdown_predicciones WHERE ticker = :tk"),
-                        engine, params={"tk": _tk},
-                    )
-                    _preds = [row.to_dict() for _, row in _pr.iterrows()]
-                except Exception:
-                    _preds = []
-                with st.spinner(f"Redactando borrador para {_tk}…"):
-                    _txt, _err = _defensa_topdown_borrador_sintesis(_tk, _resp, _cat, _preds)
-                st.markdown(f"#### Borrador — {_tk}")
-                if _err:
-                    st.error(_err)
-                else:
-                    st.info(
-                        "📝 **Borrador para que el equipo edite y decida — no es una "
-                        "recomendación de inversión.** Redactado solo con lo que el equipo "
-                        "ya ingresó; no compara ni dice cuál candidato es \"el mejor\"."
-                    )
-                    st.markdown(_txt)
