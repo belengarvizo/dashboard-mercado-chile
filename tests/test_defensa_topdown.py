@@ -193,6 +193,89 @@ def test_modulo_gateado_por_boton():
     assert "### AAPL" in render2 and "### MSFT" in render2
 
 
+def _cargar_modulo(at):
+    """AppTest con el módulo Defensa Top-Down ya cargado (apretando su botón)."""
+    from streamlit.testing.v1 import AppTest  # noqa: F401
+    at.run(timeout=600)
+    assert not at.exception, [str(e) for e in at.exception]
+    [b for b in at.button if "Cargar Defensa Top-Down" in b.label][0].click()
+    at.run(timeout=600)
+    assert not at.exception, [str(e) for e in at.exception]
+    return at
+
+
+def test_calculadoras_recalculan_en_vivo():
+    """Las 3 calculadoras recalculan al mover un slider, sin botón de envío."""
+    from streamlit.testing.v1 import AppTest
+
+    dash = os.path.join(os.path.dirname(__file__), "..", "app", "dashboard.py")
+    at = _cargar_modulo(AppTest.from_file(dash, default_timeout=600))
+
+    def metrica(label):
+        return next(m for m in at.metric if m.label == label)
+
+    def slider(frag):
+        return next(s for s in at.slider if frag in (s.label or ""))
+
+    # --- Calc 1: mover "Shock directo al WACC" +2 pp -> WACC sube ~2 pp ---
+    wacc0 = float(metrica("WACC ponderado").value.split()[0])
+    slider("Shock directo al WACC").set_value(2.0)
+    at.run(timeout=600)
+    assert not at.exception, [str(e) for e in at.exception]
+    wacc1 = float(metrica("WACC ponderado").value.split()[0])
+    assert abs((wacc1 - wacc0) - 2.0) < 0.05, f"WACC no reaccionó al slider: {wacc0} -> {wacc1}"
+
+    # aviso cuando WACC <= g
+    slider("Shock directo al WACC").set_value(-3.0)
+    slider("Shock a Rf").set_value(-2.0)
+    slider("Shock de ERP").set_value(-3.0)
+    at.run(timeout=600)
+    assert any("crecimiento perpetuo" in str(w.value) for w in at.warning), \
+        "falta el aviso cuando WACC <= g"
+
+    # --- Calc 2: PEG = P/E / crecimiento; mover el slider cambia el PEG ---
+    peg0 = float(metrica("PEG resultante").value)
+    slider("crecimiento de EPS").set_value(20.0)
+    at.run(timeout=600)
+    peg1 = float(metrica("PEG resultante").value)
+    assert peg1 < peg0, f"PEG debería bajar al subir el crecimiento: {peg0} -> {peg1}"
+    assert abs(peg1 - 14.0 / 20.0) < 0.02
+
+    # --- Calc 3: sobrecosto 0 -> sin cambio; 15% -> margen baja ---
+    slider("% de sobrecosto").set_value(0.0)
+    at.run(timeout=600)
+    m_base = float(metrica("Nuevo margen EBIT").value.split()[0])
+    slider("% de sobrecosto").set_value(15.0)
+    at.run(timeout=600)
+    m_shock = float(metrica("Nuevo margen EBIT").value.split()[0])
+    assert m_base > m_shock, f"el margen no bajó con el sobrecosto: {m_base} -> {m_shock}"
+    # con margen 18, EBIT 100 -> ventas 555.6, costos 455.6, expuestos 30% = 136.7,
+    # sobrecosto 15% = 20.5 -> nuevo EBIT 79.5 -> nuevo margen ~14.3%
+    assert 13.5 < m_shock < 15.0, f"margen tras sobrecosto 15% fuera de rango: {m_shock}"
+
+
+def test_sectoriales_y_tecnicas_sin_calculo_inventado():
+    """Las preguntas 5-7 (SECTORIAL) y 13-16 (TÉCNICO) NO enlazan a ninguna
+    calculadora ni muestran un cálculo — se quedan narrativas."""
+    from streamlit.testing.v1 import AppTest
+
+    dash = os.path.join(os.path.dirname(__file__), "..", "app", "dashboard.py")
+    at = _cargar_modulo(AppTest.from_file(dash, default_timeout=600))
+
+    caps = [str(c.value) for c in at.caption]
+    # ninguna caption debe enlazar preguntas sectoriales 5-7 o técnicas a una calc
+    for c in caps:
+        if "🧮" in c:
+            assert not any(t in c for t in (
+                "Pulso de actividad", "Flujos sectoriales", "Condiciones financieras",
+                "Break-out", "Bollinger", "Volatilidad implícita", "Interés corto",
+            )), f"una pregunta sectorial/técnica está enlazada a una calculadora: {c!r}"
+
+    # las 8 preguntas con fórmula (2,3,4,8,9,10,11,12) sí tienen enlace 🧮
+    enlaces = [c for c in caps if c.startswith("🧮")]
+    assert len(enlaces) >= 8, f"esperaba >=8 enlaces a calculadoras, hay {len(enlaces)}"
+
+
 if __name__ == "__main__":
     test_prediccion_pendiente()
     test_acierto_dentro_de_tolerancia()
@@ -201,4 +284,6 @@ if __name__ == "__main__":
     test_prediccion_sin_datos()
     test_16_preguntas_exactas_del_pdf()
     test_modulo_gateado_por_boton()
+    test_calculadoras_recalculan_en_vivo()
+    test_sectoriales_y_tecnicas_sin_calculo_inventado()
     print("OK: defensa top-down — todas las pruebas pasaron.")

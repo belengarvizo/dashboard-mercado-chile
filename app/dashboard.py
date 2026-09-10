@@ -4645,6 +4645,22 @@ def render_defensa_topdown():
                 _fn = _pregunta["funciones"] or "el enunciado no cita una función específica"
                 st.caption(f"📟 Función Bloomberg: **{_fn}**")
 
+                _enlace_calc = {
+                    "q2": "🧮 No tiene slider propio: el impacto de una curva invertida pasa por el "
+                          "**costo de financiamiento**, el mismo mecanismo de las preguntas 3/4/8. "
+                          "Explóralo subiendo el shock de Rf o de spread en la **Calculadora 1 — "
+                          "Costo de capital** (más abajo).",
+                    "q3": "🧮 Cuantificalo con el slider **Shock de ERP** de la Calculadora 1 — Costo de capital (más abajo).",
+                    "q4": "🧮 Cuantificalo con el slider **Shock a Rf (Fed Funds/WIRP)** de la Calculadora 1 — Costo de capital (más abajo).",
+                    "q8": "🧮 Cuantificalo con el slider **Shock al spread de crédito** de la Calculadora 1 — Costo de capital (más abajo).",
+                    "q9": "🧮 Testeá si la prima se sostiene con la **Calculadora 2 — PEG** (más abajo).",
+                    "q10": "🧮 Corré los escenarios 0 % / 15 % de sobrecosto con la **Calculadora 3 — Sensibilidad de márgenes** (más abajo).",
+                    "q11": "🧮 Modelá el downgrade como un salto discreto del slider **Shock al spread de crédito** de la Calculadora 1 (más abajo).",
+                    "q12": "🧮 Usá el slider **Shock directo al WACC** de la Calculadora 1 — Costo de capital (más abajo).",
+                }
+                if _pregunta["id"] in _enlace_calc:
+                    st.caption(_enlace_calc[_pregunta["id"]])
+
                 if not _dtd_referencia_macro(_pregunta["id"]):
                     if _pregunta["capa"] == "MACRO":
                         _aviso = (
@@ -4761,6 +4777,135 @@ def render_defensa_topdown():
                 if _reto_txt:
                     st.markdown("**🥊 Objeciones del equipo rival:**")
                     st.markdown(_reto_txt)
+
+    # ---------------- Calculadoras dinámicas ----------------
+    # Solo para las preguntas que tienen una FÓRMULA real detrás. Las
+    # sectoriales 5-7 y técnicas 13-16 NO llevan cálculo: forzar una fórmula
+    # ahí sería inventar datos. Recálculo en vivo (Streamlit re-ejecuta el
+    # script en cada cambio de widget) -- sin botón, patrón de Laboratorio
+    # Financiero. Widgets definidos una sola vez; cada pregunta enlaza acá.
+    st.markdown("### 🧮 Calculadoras dinámicas")
+    st.caption(
+        "Cubren las preguntas con una fórmula real detrás (2, 3, 4, 8, 9, 10, 11, 12). "
+        "Las sectoriales 5-7 y las técnicas 13-16 se quedan narrativas a propósito."
+    )
+
+    with st.container(border=True):
+        st.markdown("#### Calculadora 1 — Costo de capital unificado")
+        st.caption("Preguntas 2, 3, 4, 8, 11 y 12. Mové los sliders: recalcula en vivo.")
+        _rf_def = 4.0
+        try:
+            _u10 = _datos_reales.get("spread_2s10s", {}).get("ust10")
+            if _u10:
+                _rf_def = round(float(_u10), 2)
+        except Exception:
+            pass
+        _b1, _b2, _b3, _b4 = st.columns(4)
+        _rf = _b1.number_input("Rf actual (%)", value=_rf_def, step=0.1, key="dtd_cc_rf",
+                               help="Precargado con el UST 10Y real del dashboard cuando está disponible.")
+        _beta = _b2.number_input("Beta de la empresa", value=1.10, step=0.05, key="dtd_cc_beta")
+        _erp = _b3.number_input("ERP base (%)", value=4.5, step=0.1, key="dtd_cc_erp")
+        _spread = _b4.number_input("Spread de crédito actual (%)", value=1.5, step=0.1, key="dtd_cc_spread")
+        _b5, _b6, _b7, _b8 = st.columns(4)
+        _wd = _b5.number_input("Peso deuda D/(D+E)", value=0.35, min_value=0.0, max_value=1.0, step=0.05, key="dtd_cc_wd")
+        _tax = _b6.number_input("Tasa de impuesto (%)", value=21.0, step=1.0, key="dtd_cc_tax")
+        _flujo = _b7.number_input("Flujo / valor base", value=100.0, step=1.0, key="dtd_cc_flujo")
+        _g = _b8.number_input("Crecimiento terminal g (%)", value=2.5, step=0.1, key="dtd_cc_g")
+
+        _s1, _s2 = st.columns(2)
+        _sh_erp = _s1.slider("Shock de ERP (pp) — pregunta 3", -3.0, 5.0, 0.0, 0.1, key="dtd_cc_sh_erp")
+        _sh_rf = _s2.slider("Shock a Rf vía Fed Funds/WIRP (pp) — pregunta 4", -2.0, 3.0, 0.0, 0.05, key="dtd_cc_sh_rf")
+        _s3, _s4 = st.columns(2)
+        _sh_spread = _s3.slider("Shock al spread de crédito (pp) — preguntas 8 y 11", -1.0, 4.0, 0.0, 0.05, key="dtd_cc_sh_spread")
+        _sh_wacc = _s4.slider("Shock directo al WACC (pp) — pregunta 12", -3.0, 5.0, 0.0, 0.1, key="dtd_cc_sh_wacc")
+        st.caption(
+            "Pregunta 11 (Moody's *review for downgrade*): un escalón de rating suele valer "
+            "~50-100 pb de spread — modelalo moviendo el slider de spread, no como un input aparte."
+        )
+
+        _ke = (_rf + _sh_rf) + _beta * (_erp + _sh_erp)
+        _kd_pre = (_rf + _sh_rf) + (_spread + _sh_spread)
+        _kd_post = _kd_pre * (1 - _tax / 100)
+        _wacc = (1 - _wd) * _ke + _wd * _kd_post + _sh_wacc
+
+        _m1, _m2, _m3, _m4 = st.columns(4)
+        _m1.metric("Costo de equity (CAPM)", f"{_ke:.2f} %")
+        _m2.metric("Costo de deuda (después de imp.)", f"{_kd_post:.2f} %")
+        _m3.metric("WACC ponderado", f"{_wacc:.2f} %")
+        _valor = None
+        if _wacc <= _g:
+            _m4.metric("Valor implícito", "—")
+            st.warning(
+                f"WACC ({_wacc:.2f} %) ≤ g ({_g:.2f} %): el modelo de crecimiento perpetuo "
+                "no aplica (denominador ≤ 0). Bajá el shock o revisá g."
+            )
+        else:
+            _valor = _flujo * (1 + _g / 100) / ((_wacc - _g) / 100)
+            _m4.metric("Valor implícito (crec. perpetuo)", f"{_valor:,.1f}")
+
+        _xs = np.linspace(_g + 0.25, max(_wacc + 4, 20.0), 160)
+        _ys = _flujo * (1 + _g / 100) / ((_xs - _g) / 100)
+        _figcc = px.line(x=_xs, y=_ys, labels={"x": "WACC (%)", "y": "Valor implícito"})
+        _figcc.update_layout(height=280, margin=dict(l=10, r=10, t=10, b=10), showlegend=False)
+        if _valor is not None:
+            _figcc.add_scatter(x=[_wacc], y=[_valor], mode="markers",
+                               marker=dict(size=12, color="crimson"), name="actual")
+        st.plotly_chart(_figcc, use_container_width=True)
+
+    with st.container(border=True):
+        st.markdown("#### Calculadora 2 — PEG / sostenibilidad de la prima")
+        st.caption("Pregunta 9. Recalcula en vivo.")
+        _p1, _p2, _p3 = st.columns(3)
+        _pe_emp = _p1.number_input("P/E de la empresa", value=14.0, step=0.5, key="dtd_peg_pe")
+        _pe_sec = _p2.number_input("P/E del sector", value=11.0, step=0.5, key="dtd_peg_pesec")
+        _g_eps0 = _p3.number_input("Crecimiento de EPS (%)", value=12.0, step=0.5, key="dtd_peg_g")
+        _g_eps = st.slider("Ajustar el supuesto de crecimiento de EPS (%) — testeá la revisión de consenso de +12 %",
+                           0.0, 40.0, float(_g_eps0), 0.5, key="dtd_peg_slider")
+        _peg = _pe_emp / _g_eps if _g_eps > 0 else None
+        _prima = (_pe_emp / _pe_sec - 1) * 100 if _pe_sec else None
+        _pq1, _pq2 = st.columns(2)
+        _pq1.metric("PEG resultante", f"{_peg:.2f}" if _peg is not None else "—")
+        if _prima is not None:
+            _pq2.metric("Prima de P/E vs. sector", f"{_prima:+.0f} %")
+        st.caption(
+            "PEG < 1 es una **heurística común, no una regla absoluta**, para juzgar si una prima "
+            "de valoración está justificada por el crecimiento esperado. Mové el slider para ver "
+            "a qué crecimiento de EPS el PEG cruza 1."
+        )
+
+    with st.container(border=True):
+        st.markdown("#### Calculadora 3 — Sensibilidad de márgenes (cadena de suministro)")
+        st.caption("Pregunta 10. Recalcula en vivo.")
+        _r1, _r2, _r3 = st.columns(3)
+        _margen0 = _r1.number_input("Margen EBIT actual (%)", value=18.0, step=0.5, key="dtd_mg_margen")
+        _exp = _r2.number_input("% de costos expuesto al país en tensión", value=30.0,
+                                min_value=0.0, max_value=100.0, step=1.0, key="dtd_mg_exp")
+        _ebit0 = _r3.number_input("EBIT actual", value=100.0, step=1.0, key="dtd_mg_ebit")
+        _sobre = st.slider("% de sobrecosto sobre los insumos expuestos (escenarios del enunciado: 0 % y 15 %)",
+                           0.0, 30.0, 0.0, 1.0, key="dtd_mg_slider")
+        if _margen0 > 0:
+            _ventas = _ebit0 / (_margen0 / 100)
+            _costos = _ventas - _ebit0
+            _costos_exp = _costos * _exp / 100
+            _delta = _costos_exp * _sobre / 100
+            _ebit_new = _ebit0 - _delta
+            _margen_new = _ebit_new / _ventas * 100
+            _cambio = (_ebit_new / _ebit0 - 1) * 100 if _ebit0 else 0.0
+            _g1, _g2, _g3 = st.columns(3)
+            _g1.metric("Nuevo margen EBIT", f"{_margen_new:.1f} %", f"{_margen_new - _margen0:+.1f} pp")
+            _g2.metric("Nuevo EBIT", f"{_ebit_new:,.1f}", f"{-_delta:+,.1f}")
+            _g3.metric("Cambio en EBIT", f"{_cambio:+.1f} %")
+            _xs3 = np.linspace(0, 30, 61)
+            _margen_curve = (_ebit0 - _costos_exp * _xs3 / 100) / _ventas * 100
+            _figmg = px.line(x=_xs3, y=_margen_curve, labels={"x": "% de sobrecosto", "y": "Margen EBIT (%)"})
+            _figmg.update_layout(height=280, margin=dict(l=10, r=10, t=10, b=10), showlegend=False)
+            for _xv in (0, 15):
+                _figmg.add_vline(x=_xv, line_dash="dot", line_color="gray")
+            _figmg.add_scatter(x=[_sobre], y=[_margen_new], mode="markers",
+                               marker=dict(size=12, color="crimson"), name="actual")
+            st.plotly_chart(_figmg, use_container_width=True)
+        else:
+            st.info("Ingresá un margen EBIT > 0 para calcular.")
 
     if st.button("💾 Guardar borrador de la defensa", key="dtd_guardar", type="primary"):
         try:
