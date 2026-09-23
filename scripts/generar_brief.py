@@ -27,6 +27,14 @@ from retry_utils import ESPERAS_REINTENTO_SEGUNDOS
 from scripts.actualizar_noticias import FUENTES_RSS
 
 MODELO_GEMINI = "gemini-3.6-flash"
+# Si el modelo principal devuelve 503 "high demand" y agota sus reintentos,
+# se prueba una vez con cada uno de estos antes de darse por vencido: la
+# demanda de Gemini varía por modelo de un momento a otro (verificado en vivo
+# el 2026-09-23: con gemini-3.6-flash y gemini-3.1-flash-lite caídos por alta
+# demanda, gemini-3.5-flash sí respondió), y usan la misma API key / tier
+# gratis -- sin costo adicional. gemini-2.5-flash NO es una opción: la API
+# devuelve 404 "no longer available to new users" para esta key.
+MODELOS_GEMINI_FALLBACK = ["gemini-3.5-flash", "gemini-3.1-flash-lite"]
 HORAS_VENTANA_TITULARES = 48
 # Cupo por FUENTE, no un corte único por fecha sobre todas juntas: con un
 # solo corte global, una fuente de mucho volumen (ej. Emol vía Google
@@ -285,24 +293,39 @@ def _texto_de_respuesta_gemini(respuesta) -> str:
 
 def _generar_contenido_brief(cliente, prompt: str) -> str:
     """Llama a Gemini. Reintenta con backoff SOLO los fallos transitorios
-    (timeout / 5xx); cuota agotada y respuestas bloqueadas se relanzan de
-    inmediato porque reintentar no sirve."""
+    (timeout / 5xx) contra el modelo principal; cuota agotada y respuestas
+    bloqueadas se relanzan de inmediato porque reintentar (con este modelo u
+    otro) no sirve. Si el principal agota sus reintentos y el fallo sigue
+    siendo transitorio, prueba una vez con cada modelo de
+    MODELOS_GEMINI_FALLBACK antes de darse por vencido."""
     ultimo_error = None
-    for intento in range(len(ESPERAS_REINTENTO_SEGUNDOS) + 1):
-        try:
-            respuesta = cliente.models.generate_content(model=MODELO_GEMINI, contents=prompt)
-            return _texto_de_respuesta_gemini(respuesta)
-        except BriefBloqueadoError:
-            raise  # el prompt no va a pasar por reintentar
-        except Exception as e:
-            if _clasificar_error_gemini(e) != "transitorio" or intento == len(ESPERAS_REINTENTO_SEGUNDOS):
-                raise
-            ultimo_error = e
-            espera = ESPERAS_REINTENTO_SEGUNDOS[intento]
-            print(f"  Gemini falló transitoriamente ({type(e).__name__}: {e}) — "
-                  f"reintento {intento + 1}/{len(ESPERAS_REINTENTO_SEGUNDOS)} en {espera}s...")
-            time.sleep(espera)
-    raise ultimo_error  # inalcanzable (el loop retorna o relanza), solo para el linter
+    for i, modelo in enumerate([MODELO_GEMINI] + MODELOS_GEMINI_FALLBACK):
+        es_principal = i == 0
+        reintentos = ESPERAS_REINTENTO_SEGUNDOS if es_principal else ()
+        if not es_principal:
+            print(f"  Probando con el modelo de respaldo '{modelo}'...")
+        for intento in range(len(reintentos) + 1):
+            try:
+                respuesta = cliente.models.generate_content(model=modelo, contents=prompt)
+                if not es_principal:
+                    print(f"  Gemini respondió con el modelo de respaldo '{modelo}'.")
+                return _texto_de_respuesta_gemini(respuesta)
+            except BriefBloqueadoError:
+                raise  # el prompt no va a pasar por reintentar, con ningún modelo
+            except Exception as e:
+                ultimo_error = e
+                if _clasificar_error_gemini(e) != "transitorio":
+                    raise  # no es un problema de demanda/timeout: otro modelo tampoco lo arregla
+                if intento < len(reintentos):
+                    espera = reintentos[intento]
+                    print(f"  Gemini ({modelo}) falló transitoriamente ({type(e).__name__}: {e}) — "
+                          f"reintento {intento + 1}/{len(reintentos)} en {espera}s...")
+                    time.sleep(espera)
+                else:
+                    print(f"  Gemini ({modelo}) falló transitoriamente ({type(e).__name__}: {e}).")
+                # si se agotaron los reintentos de este modelo, el for interno
+                # termina y el for externo pasa al próximo modelo (si queda uno)
+    raise ultimo_error  # se agotaron el modelo principal y todos los de respaldo
 
 
 def generar_traduccion_y_glosario(cliente, contenido_en: str) -> str:

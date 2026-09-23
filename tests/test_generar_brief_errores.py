@@ -116,6 +116,54 @@ def test_reintenta_solo_transitorios(monkeypatch=None):
     print("OK: reintenta transitorios, no reintenta cuota")
 
 
+def test_prueba_modelos_de_respaldo_si_el_principal_agota_reintentos():
+    """Si gemini-3.6-flash agota sus 3 reintentos por demanda alta (503), se
+    prueba una vez con cada modelo de MODELOS_GEMINI_FALLBACK antes de darse
+    por vencido -- verificado en vivo el 2026-09-23 (ver comentario en
+    generar_brief.py): con el principal caído, gemini-3.5-flash sí respondió."""
+    import scripts.generar_brief as _gb
+    orig_sleep = _gb.time.sleep
+    _gb.time.sleep = lambda s: None
+    try:
+        class _CliPrincipalCaidoPrimerRespaldoOk:
+            def __init__(self):
+                self.llamadas = []
+                self.models = self
+
+            def generate_content(self, model, contents):
+                self.llamadas.append(model)
+                if model == _gb.MODELO_GEMINI:
+                    raise _ErrorApiFalso(503, "high demand")
+                if model == _gb.MODELOS_GEMINI_FALLBACK[0]:
+                    return type("R", (), {"text": "brief del modelo de respaldo"})()
+                raise AssertionError(f"no debería haber llegado a {model}")
+
+        cli = _CliPrincipalCaidoPrimerRespaldoOk()
+        out = _generar_contenido_brief(cli, "prompt")
+        assert out == "brief del modelo de respaldo", out
+        # 4 intentos con el principal (1 inicial + 3 reintentos) + 1 con el
+        # primer respaldo, y nunca llega al segundo
+        assert cli.llamadas == [_gb.MODELO_GEMINI] * 4 + [_gb.MODELOS_GEMINI_FALLBACK[0]], cli.llamadas
+
+        # si TODOS los modelos (principal + los 2 de respaldo) fallan
+        # transitoriamente, se relanza el último error, no un genérico
+        class _CliTodosCaidos:
+            def __init__(self):
+                self.models = self
+
+            def generate_content(self, model, contents):
+                raise _ErrorApiFalso(503, f"high demand ({model})")
+
+        try:
+            _generar_contenido_brief(_CliTodosCaidos(), "prompt")
+            assert False, "debería haber relanzado el error tras agotar todos los modelos"
+        except _ErrorApiFalso as e:
+            assert _gb.MODELOS_GEMINI_FALLBACK[-1] in str(e), str(e)
+    finally:
+        _gb.time.sleep = orig_sleep
+    print("OK: prueba modelos de respaldo cuando el principal agota reintentos")
+
+
 def test_registrar_error_persiste_fila_en_la_bd():
     marca = f"__TEST_BRIEF_ERR_{os.getpid()}"
     _registrar_error_actualizacion(marca, "transitorio", "TimeoutError", "read timed out (prueba)")
@@ -143,5 +191,6 @@ if __name__ == "__main__":
     test_clasificacion_por_tipo_de_error()
     test_texto_de_respuesta_bloqueada_lanza_briefbloqueado()
     test_reintenta_solo_transitorios()
+    test_prueba_modelos_de_respaldo_si_el_principal_agota_reintentos()
     test_registrar_error_persiste_fila_en_la_bd()
-    print("OK: las cuatro pruebas pasaron.")
+    print("OK: las cinco pruebas pasaron.")
