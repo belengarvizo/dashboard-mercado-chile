@@ -13,10 +13,13 @@ import sys
 
 sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
 
+import time
+
 from scripts.actualizar_todo import (
     Paso,
     Resultado,
     _decidir_exit_code,
+    _correr_con_limite,
     MAX_FALLAS_NO_CRITICAS_TOLERADAS,
 )
 
@@ -70,10 +73,43 @@ def test_critica_manda_aunque_no_critica_tambien_falle():
     assert not any("CORRIDA PARCIAL" in m for m in msgs)
 
 
+def test_correr_con_limite_devuelve_el_resultado_si_termina_a_tiempo():
+    assert _correr_con_limite(lambda: 42, segundos=5) == 42
+
+
+def test_correr_con_limite_relanza_la_excepcion_real():
+    def _falla():
+        raise ValueError("boom")
+
+    try:
+        _correr_con_limite(_falla, segundos=5)
+        assert False, "debería haber relanzado ValueError"
+    except ValueError as e:
+        assert "boom" in str(e)
+
+
+def test_correr_con_limite_corta_un_paso_colgado_sin_bloquear_el_proceso():
+    """El caso real: una llamada que nunca retorna (como el fetch RSS sin
+    timeout que dejó el cron 'Running' 7+ horas en producción). Debe lanzar
+    TimeoutError apenas se cumple el límite -- y el propio test, que termina
+    acá, es la prueba de que el hilo colgado (daemon) no bloquea la salida."""
+    t0 = time.time()
+    try:
+        _correr_con_limite(lambda: time.sleep(3600), segundos=1)
+        assert False, "debería haber lanzado TimeoutError"
+    except TimeoutError as e:
+        transcurrido = time.time() - t0
+        assert transcurrido < 5, f"el timeout debería cortar cerca de 1s, tardó {transcurrido:.1f}s"
+        assert "no terminó" in str(e)
+
+
 if __name__ == "__main__":
     test_todo_ok_exit_0()
     test_falla_critica_exit_1()
     test_falla_no_critica_racha_corta_exit_0()
     test_falla_no_critica_racha_larga_escala_a_exit_1()
     test_critica_manda_aunque_no_critica_tambien_falle()
-    print("OK: las cinco pruebas pasaron.")
+    test_correr_con_limite_devuelve_el_resultado_si_termina_a_tiempo()
+    test_correr_con_limite_relanza_la_excepcion_real()
+    test_correr_con_limite_corta_un_paso_colgado_sin_bloquear_el_proceso()
+    print("OK: las ocho pruebas pasaron.")

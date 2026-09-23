@@ -36,6 +36,7 @@ minutos.
 
 import os
 import sys
+import threading
 import traceback
 from collections import namedtuple
 from datetime import datetime, timedelta
@@ -60,6 +61,47 @@ PASOS = [
     Paso("Series del BCCh", actualizar_todas_las_series, True, "bcch"),
     Paso("Acciones del IPSA", actualizar_todas_las_acciones, True, "yfinance"),
 ]
+
+# Límite de pared por paso: si una llamada de red futura queda colgada sin
+# lanzar excepción (pasó con el fetch RSS de actualizar_noticias.py, que dejó
+# el cron "Running" 7+ horas en producción sosteniendo abierta una sesión de
+# BD), este watchdog corta el paso igual y la corrida sigue con el resto en
+# vez de quedar zombie indefinidamente. BCCh y acciones bajan la serie
+# histórica completa y ya se sabe que pueden tardar >30 min (ver el
+# comentario del módulo); noticias y el brief son fetches puntuales.
+LIMITE_SEGUNDOS_POR_FUENTE = {
+    "noticias": 10 * 60,
+    "brief": 5 * 60,
+    "bcch": 45 * 60,
+    "yfinance": 45 * 60,
+}
+LIMITE_SEGUNDOS_DEFAULT = 15 * 60
+
+
+def _correr_con_limite(func, segundos):
+    """Corre func() en un hilo daemon con timeout de pared. Si no termina a
+    tiempo, lanza TimeoutError y el paso se registra como fallido. El hilo
+    colgado NO se puede matar (Python no lo permite) pero, al ser daemon, no
+    bloquea la salida del proceso cuando actualizar_todo() termina -- muere
+    con el proceso en vez de dejarlo "Running" para siempre."""
+    resultado: dict = {}
+
+    def _wrapper():
+        try:
+            resultado["valor"] = func()
+        except BaseException as e:
+            resultado["error"] = e
+
+    hilo = threading.Thread(target=_wrapper, daemon=True)
+    hilo.start()
+    hilo.join(timeout=segundos)
+    if hilo.is_alive():
+        raise TimeoutError(
+            f"no terminó en {segundos}s (se abandona el hilo colgado y se sigue con el próximo paso)"
+        )
+    if "error" in resultado:
+        raise resultado["error"]
+    return resultado.get("valor")
 
 # Ventana para contar la racha de fallas de un paso no crítico. El cron
 # corre 1 vez al día (14:00 UTC), así que ~40h cubre "hoy y ayer".
@@ -127,8 +169,9 @@ def actualizar_todo():
 
     for paso in PASOS:
         print(f"\n== Actualizando {paso.nombre.lower()} ==")
+        limite = LIMITE_SEGUNDOS_POR_FUENTE.get(paso.fuente, LIMITE_SEGUNDOS_DEFAULT)
         try:
-            paso.funcion()
+            _correr_con_limite(paso.funcion, limite)
             resultados.append(Resultado(paso, True, None))
         except Exception as e:
             print(f"ERROR en '{paso.nombre}': {e}")

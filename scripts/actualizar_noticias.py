@@ -48,6 +48,7 @@ from urllib.parse import quote
 sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
 
 import feedparser
+import requests
 from models import get_session, Noticia, MetadataActualizacion
 from retry_utils import con_reintentos, con_reintentos_db
 
@@ -162,8 +163,19 @@ USER_AGENT_NAVEGADOR = (
 def descargar_titulares(url: str, horas_ventana: int = HORAS_VENTANA) -> list[dict]:
     """Descarga un feed RSS y devuelve los titulares de las últimas
     `horas_ventana` horas, descartando páginas de etiqueta y avisos
-    clasificados (ver _es_titular_no_editorial)."""
-    feed = feedparser.parse(url, request_headers={"User-Agent": USER_AGENT_NAVEGADOR})
+    clasificados (ver _es_titular_no_editorial).
+
+    El fetch va por requests (timeout=15) en vez de feedparser.parse(url, ...)
+    directo: feedparser no acepta un parámetro de timeout (se confirmó en su
+    firma instalada), así que si el servidor acepta la conexión y no manda
+    datos, la llamada queda colgada sin límite -- pasó en producción, con el
+    cron completo (que corre este paso primero) quedando "Running" varias
+    horas. Con requests, un timeout sí lanza una excepción, así que
+    con_reintentos (que solo reacciona a excepciones, no a cuelgues) puede
+    reintentar de verdad."""
+    respuesta = requests.get(url, headers={"User-Agent": USER_AGENT_NAVEGADOR}, timeout=15)
+    respuesta.raise_for_status()
+    feed = feedparser.parse(respuesta.content)
     limite = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(hours=horas_ventana)
 
     resultado = []
