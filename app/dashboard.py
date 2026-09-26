@@ -2237,6 +2237,19 @@ try:
 except Exception:
     st.caption("Aún no hay datos cargados. Corre los scripts de actualización primero.")
 
+
+# --- DIAGNÓSTICO TEMPORAL (quitar cuando se encuentre el cuelgue) ---------
+# El dashboard se queda a veces con el indicador "running" girando para
+# siempre, mostrando solo la primera pestaña. Streamlit ejecuta el archivo de
+# arriba hacia abajo, así que la última línea [PROBE] que aparezca en los logs
+# de Railway dice exactamente hasta dónde llegó el render antes de trabarse.
+def _probe(etapa):  # PROBE
+    print(f"[PROBE] {datetime.now().strftime('%H:%M:%S')} {etapa}", file=sys.stderr, flush=True)  # PROBE
+
+
+_probe("script inicio")  # PROBE
+# -------------------------------------------------------------------------
+
 (
     tab_premercado, tab_macro, tab_acciones, tab_atribucion, tab_acciones_dow, tab_riesgo,
     tab_benchmark, tab_laboratorio, tab_recesion, tab_mesa_dinero, tab_defensa,
@@ -2761,6 +2774,7 @@ def _categorizar_titular(titulo: str, menciones: list[str]) -> str:
 
 
 with tab_premercado:
+    _probe("tab_premercado")  # PROBE
     st.caption(
         "This is the only tab shown in English — the rest of the dashboard is in "
         "Spanish. Meant to be read before the Santiago Stock Exchange opens, quickly, "
@@ -3044,6 +3058,7 @@ with tab_premercado:
 
 # --- Tab 1: Series macro del BCCh ---
 with tab_macro:
+    _probe("tab_macro")  # PROBE
     try:
         df_macro = cargar_series_macro()
 
@@ -3096,6 +3111,7 @@ with tab_macro:
 
 # --- Tab 2: Precios de acciones ---
 with tab_acciones:
+    _probe("tab_acciones")  # PROBE
     try:
         df_acciones = cargar_precios_acciones()
         _mostrar_banner_apagon(df_acciones, TICKERS_IPSA, "las acciones del IPSA")
@@ -3263,6 +3279,7 @@ def validar_atribucion_out_of_sample_cacheada(df_acciones: pd.DataFrame, df_macr
 
 
 with tab_atribucion:
+    _probe("tab_atribucion")  # PROBE
     st.subheader("Atribución del Movimiento de Hoy")
     st.caption(
         "Modelo de 3 factores: R_ECH = α + β_cobre·R_cobre + β_SP500·R_SP500 + "
@@ -3413,6 +3430,7 @@ with tab_atribucion:
 
 # --- Tab 2b: Precios de acciones del Dow Jones ---
 with tab_acciones_dow:
+    _probe("tab_acciones_dow")  # PROBE
     try:
         df_acciones = cargar_precios_acciones()
 
@@ -3528,6 +3546,7 @@ with tab_acciones_dow:
 
 # --- Tab 3: Riesgo ---
 with tab_riesgo:
+    _probe("tab_riesgo")  # PROBE
     try:
         df_acciones = cargar_precios_acciones()
         _mostrar_banner_apagon(df_acciones, TICKERS_IPSA, "las acciones del IPSA")
@@ -3744,6 +3763,7 @@ with tab_riesgo:
 
 # --- Tab 4: Benchmark (incluye 7 Magníficas) ---
 with tab_benchmark:
+    _probe("tab_benchmark")  # PROBE
     st.subheader("Benchmark internacional")
     try:
         df_bench = cargar_precios_acciones()
@@ -3805,6 +3825,7 @@ with tab_benchmark:
 
 # --- Tab 10: Laboratorio Financiero ---
 with tab_laboratorio:
+    _probe("tab_laboratorio")  # PROBE
     render_laboratorio_financiero()
 
 # --- Tab 8: Modelo de Recesión EEUU ---
@@ -3828,6 +3849,7 @@ def _preparar_series_macro_recesion(df_series_macro: pd.DataFrame) -> pd.DataFra
 
 
 with tab_recesion:
+    _probe("tab_recesion")  # PROBE
     st.header("Modelo de Recesión EEUU (Probit)")
     st.caption(
         "Extiende un modelo Probit de recesión de EEUU (predictores originales: "
@@ -5451,6 +5473,7 @@ def render_defensa_topdown():
 
 # --- Tab 9: Simulación Mesa de Dinero ---
 with tab_mesa_dinero:
+    _probe("tab_mesa_dinero")  # PROBE
     st.header("🏦 Simulación Mesa de Dinero")
     st.caption(
         "Plantilla de práctica para la rutina diaria de un analista de tesorería: "
@@ -6358,6 +6381,7 @@ with tab_mesa_dinero:
 
 # --- Tab 10: 🎯 Defensa Top-Down (pestaña propia) ---
 with tab_defensa:
+    _probe("tab_defensa")  # PROBE
     st.header("🎯 Defensa Top-Down")
     st.caption(
         "Espacio de trabajo para la Tarea de Inversiones \"Análisis Top-Down y "
@@ -6369,3 +6393,5 @@ with tab_defensa:
     )
     render_defensa_topdown()
 
+
+_probe("script FIN (render completo)")  # PROBE
