@@ -192,6 +192,20 @@ class DefensaTopdownPrediccion(Base):
 
 def get_engine():
     database_url = os.environ["DATABASE_URL"]
+    # Fuerza el driver psycopg2 explícito en vez de dejar que SQLAlchemy
+    # resuelva el default para un esquema ambiguo ("postgresql://" o el
+    # "postgres://" viejo estilo Heroku): requirements.txt solo trae
+    # psycopg2-binary (no psycopg v3), pero una versión de SQLAlchemy más
+    # nueva puede preferir el dialecto psycopg (v3) por default para ese
+    # esquema sin sufijo. Rompió así de verdad el cron en producción el
+    # 2026-09-25 -- "pure-manifestation" reconstruye el entorno en cada
+    # corrida, instaló una SQLAlchemy nueva sin querer (no estaba fijada en
+    # requirements.txt) y los 4 pasos fallaron con "ModuleNotFoundError: No
+    # module named 'psycopg'" apenas intentaban conectarse a la BD.
+    for esquema_ambiguo in ("postgresql://", "postgres://"):
+        if database_url.startswith(esquema_ambiguo):
+            database_url = "postgresql+psycopg2://" + database_url[len(esquema_ambiguo):]
+            break
     # pool_pre_ping: antes de reusar una conexión del pool, hace un chequeo
     # liviano y la reemplaza si ya murió — evita la mayoría de los
     # "server closed the connection unexpectedly" típicos de Postgres
