@@ -51,8 +51,32 @@ def test_esquema_ya_explicito_no_se_toca():
     print("OK: postgresql+psycopg2:// explícito queda igual")
 
 
+def test_ninguna_consulta_puede_colgarse_para_siempre():
+    """El servidor viene con statement_timeout=0 (sin límite): sin un tope
+    del lado del cliente, una conexión del pool ya muerta dejaba al
+    dashboard esperando para siempre (indicador "running" girando, CPU en
+    0%). get_engine() debe fijar statement_timeout, keepalives de TCP para
+    detectar la conexión muerta, y connect_timeout."""
+    from models import CONNECT_ARGS_POSTGRES as args, SEGUNDOS_RECICLAR_CONEXION
+
+    assert "statement_timeout" in args.get("options", ""), args.get("options")
+    assert args.get("keepalives") == 1, args
+    # detección de conexión muerta acotada: idle + interval * count
+    deteccion = args["keepalives_idle"] + args["keepalives_interval"] * args["keepalives_count"]
+    assert deteccion <= 60, f"detectar una conexión muerta tardaría {deteccion}s"
+    assert args.get("connect_timeout"), args
+    # y las conexiones viejas se reciclan antes de pudrirse en el pool
+    assert 0 < SEGUNDOS_RECICLAR_CONEXION <= 600, SEGUNDOS_RECICLAR_CONEXION
+
+    # que además lleguen de verdad al engine, no solo que existan las constantes
+    engine = _con_database_url("postgresql://usuario:pass@host:5432/db", get_engine)
+    assert engine.pool._recycle == SEGUNDOS_RECICLAR_CONEXION, engine.pool._recycle
+    print("OK: statement_timeout + keepalives + connect_timeout + pool_recycle")
+
+
 if __name__ == "__main__":
     test_esquema_postgresql_ambiguo_se_fuerza_a_psycopg2()
     test_esquema_postgres_viejo_estilo_heroku_tambien_se_fuerza()
     test_esquema_ya_explicito_no_se_toca()
-    print("OK: las tres pruebas pasaron.")
+    test_ninguna_consulta_puede_colgarse_para_siempre()
+    print("OK: las cuatro pruebas pasaron.")

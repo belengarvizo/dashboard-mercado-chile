@@ -190,6 +190,34 @@ class DefensaTopdownPrediccion(Base):
     verificado_en = Column(DateTime)        # cuándo se congeló la resolución
 
 
+# Descarta conexiones con más de 5 minutos: una conexión vieja en el pool es
+# la que más riesgo tiene de haber sido cortada en silencio por un router/NAT
+# intermedio, sin que ninguna de las dos puntas se entere.
+SEGUNDOS_RECICLAR_CONEXION = 300
+
+# Protección contra el síntoma que veníamos arrastrando: el dashboard se
+# quedaba con el indicador "running" girando indefinidamente y el CPU en 0%,
+# porque una conexión del pool ya muerta dejaba la consulta esperando una
+# respuesta que nunca iba a llegar. El servidor no ayuda: viene con
+# statement_timeout=0, o sea sin límite.
+CONNECT_ARGS_POSTGRES = {
+    "connect_timeout": 10,
+    # Ningún statement puede colgarse para siempre. 120s es enorme para
+    # cualquier consulta real (la más pesada, precios_acciones completa con
+    # 211k filas, mide ~6s) y a la vez acota el peor caso; también es holgado
+    # para los bulk insert del cron, que van por lotes chicos.
+    "options": "-c statement_timeout=120000",
+    # Keepalives de TCP: sin esto, una conexión muerta recién se detecta
+    # cuando el sistema operativo se rinde, que puede ser nunca. Con estos
+    # valores se detecta en ~25s (10 + 5x3) y psycopg2 levanta el error en
+    # vez de esperar indefinidamente.
+    "keepalives": 1,
+    "keepalives_idle": 10,
+    "keepalives_interval": 5,
+    "keepalives_count": 3,
+}
+
+
 def get_engine():
     database_url = os.environ["DATABASE_URL"]
     # Fuerza el driver psycopg2 explícito en vez de dejar que SQLAlchemy
@@ -206,11 +234,18 @@ def get_engine():
         if database_url.startswith(esquema_ambiguo):
             database_url = "postgresql+psycopg2://" + database_url[len(esquema_ambiguo):]
             break
-    # pool_pre_ping: antes de reusar una conexión del pool, hace un chequeo
-    # liviano y la reemplaza si ya murió — evita la mayoría de los
-    # "server closed the connection unexpectedly" típicos de Postgres
-    # serverless (Neon), que puede cerrar conexiones inactivas sin avisar.
-    return create_engine(database_url, pool_pre_ping=True)
+    return create_engine(
+        database_url,
+        # pool_pre_ping: antes de reusar una conexión del pool, hace un chequeo
+        # liviano y la reemplaza si ya murió — evita la mayoría de los
+        # "server closed the connection unexpectedly" típicos de Postgres
+        # serverless (Neon), que puede cerrar conexiones inactivas sin avisar.
+        # OJO: por sí solo no alcanza contra una conexión "medio muerta" (ver
+        # CONNECT_ARGS_POSTGRES), porque el propio ping se cuelga esperándola.
+        pool_pre_ping=True,
+        pool_recycle=SEGUNDOS_RECICLAR_CONEXION,
+        connect_args=CONNECT_ARGS_POSTGRES,
+    )
 
 
 def get_session():
