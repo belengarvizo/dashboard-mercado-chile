@@ -2274,6 +2274,31 @@ if not any(isinstance(_h, _ProbeLogHandler)  # PROBE
     _lg.addHandler(_ProbeLogHandler(level=30))  # PROBE
     _lg.setLevel(10)  # PROBE
 
+try:  # PROBE  — ¿quién pide detener la corrida?
+    from streamlit.runtime.scriptrunner import script_runner as _sr  # PROBE
+    if not getattr(_sr.ScriptRunner, "_probe_parcheado", False):  # PROBE
+        import traceback as _tb  # PROBE
+        _orig_stop = _sr.ScriptRunner.request_stop  # PROBE
+        _orig_rerun = _sr.ScriptRunner.request_rerun  # PROBE
+
+        def _stop_espiado(self, *a, **k):  # PROBE
+            _quien = " <- ".join(                                  # PROBE
+                f"{f.name}:{f.lineno}" for f in _tb.extract_stack()[-6:-1])  # PROBE
+            _probe(f"STOP pedido por: {_quien}"[:240])  # PROBE
+            return _orig_stop(self, *a, **k)  # PROBE
+
+        def _rerun_espiado(self, *a, **k):  # PROBE
+            _quien = " <- ".join(                                  # PROBE
+                f"{f.name}:{f.lineno}" for f in _tb.extract_stack()[-6:-1])  # PROBE
+            _probe(f"RERUN pedido por: {_quien}"[:240])  # PROBE
+            return _orig_rerun(self, *a, **k)  # PROBE
+
+        _sr.ScriptRunner.request_stop = _stop_espiado  # PROBE
+        _sr.ScriptRunner.request_rerun = _rerun_espiado  # PROBE
+        _sr.ScriptRunner._probe_parcheado = True  # PROBE
+except Exception:  # PROBE
+    pass  # PROBE
+
 _probe("00 script inicio")  # PROBE
 # ---------------------------------------------------------------------------
 
