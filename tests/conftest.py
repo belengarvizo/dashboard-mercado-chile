@@ -40,8 +40,90 @@ vuelven a leer la base. Es el precio correcto — una suite rápida que miente
 no sirve de nada, y este tipo de fallo cuesta horas de diagnóstico cada vez
 que aparece.
 """
+import time
+
 import pytest
 import streamlit as st
+from _pytest.runner import runtestprotocol
+
+# ---------------------------------------------------------------------------
+# Reintento de un test que ni siquiera llegó a correr por un corte de red
+# ---------------------------------------------------------------------------
+#
+# Esta suite es de integración: casi todos los tests levantan el dashboard
+# entero contra la base de Postgres en Railway, a la que se llega por un TCP
+# proxy desde la máquina de desarrollo. Cuando la conexión de casa hipa un
+# segundo, el test no "falla": nunca llega a probar nada, y aun así aparece en
+# rojo con el nombre de la funcionalidad que iba a verificar.
+#
+# Eso no es teórico ni menor: durante la cacería de un test intermitente, un
+# corte de red se confundió con evidencia y llevó a descartar la causa real
+# (la caché heredada entre tests, ver arriba). Costó horas.
+#
+# QUÉ HACE Y QUÉ NO HACE. Reintenta UNA sola vez, y solo si el traceback trae
+# una firma de error de conexión. Un assert que falla sigue siendo rojo a la
+# primera: nunca se reintenta un fallo de lógica. Y como el reintento es uno
+# solo y se anuncia en la salida, un problema de conexión sistemático (no un
+# hipo) falla igual, en los dos intentos, y queda a la vista.
+
+ESPERA_ANTES_DEL_REINTENTO_SEGUNDOS = 5
+
+FIRMAS_DE_ERROR_DE_CONEXION = (
+    "OperationalError",
+    "server closed the connection",
+    "connection to server at",
+    "timeout expired",
+    "could not connect to server",
+    "SSL connection has been closed",
+    "could not receive data from server",
+)
+
+
+def _firma_de_corte_de_red(reportes):
+    """Devuelve la firma encontrada, o None si el fallo no es de conexión."""
+    for reporte in reportes:
+        if not reporte.failed or reporte.longrepr is None:
+            continue
+        texto = str(reporte.longrepr)
+        for firma in FIRMAS_DE_ERROR_DE_CONEXION:
+            if firma in texto:
+                return firma
+    return None
+
+
+def pytest_runtest_protocol(item, nextitem):
+    # Al reemplazar el protocolo por defecto hay que emitir logstart/logfinish
+    # a mano: pytest los usa para abrir y cerrar el reporte de cada test.
+    item.ihook.pytest_runtest_logstart(nodeid=item.nodeid, location=item.location)
+    for intento in (1, 2):
+        if intento > 1:
+            # Reconstruye el request de fixtures para que el reintento arranque
+            # limpio en vez de reusar las de la corrida que se cayó.
+            if hasattr(item, "_initrequest"):
+                item._initrequest()
+
+        # Siempre se pasa el nextitem real. Pasar nextitem=item para "ahorrar"
+        # el desarmado entre intentos parece una optimización, pero difiere el
+        # teardown de TODOS los tests (no solo de los que se reintentan) y el
+        # siguiente revienta con "previous item was not torn down properly".
+        # Verificado: así fallaba la primera versión de este enganche.
+        reportes = runtestprotocol(item, nextitem=nextitem, log=False)
+
+        firma = _firma_de_corte_de_red(reportes)
+        if firma is None or intento == 2:
+            for reporte in reportes:
+                item.ihook.pytest_runtest_logreport(report=reporte)
+            break
+
+        print(
+            f"\n  [conexión] {item.nodeid}\n"
+            f"             falló por red ({firma!r}), no por una aserción.\n"
+            f"             Reintento único en {ESPERA_ANTES_DEL_REINTENTO_SEGUNDOS}s.",
+            flush=True,
+        )
+        time.sleep(ESPERA_ANTES_DEL_REINTENTO_SEGUNDOS)
+    item.ihook.pytest_runtest_logfinish(nodeid=item.nodeid, location=item.location)
+    return True
 
 
 @pytest.fixture(autouse=True)
