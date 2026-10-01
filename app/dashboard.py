@@ -2795,6 +2795,7 @@ def _categorizar_titular(titulo: str, menciones: list[str]) -> str:
     return "General"
 
 
+_probe("S01 antes de: Brief Premercado")  # PROBE
 if _seccion == "Brief Premercado":
     st.caption(
         "This is the only tab shown in English — the rest of the dashboard is in "
@@ -3085,6 +3086,7 @@ if _seccion == "Brief Premercado":
     )
 
 # --- Tab 1: Series macro del BCCh ---
+_probe("S02 antes de: Indicadores macro")  # PROBE
 if _seccion == "Indicadores macro":
     try:
         df_macro = cargar_series_macro()
@@ -3156,6 +3158,7 @@ if _seccion == "Indicadores macro":
         st.error(f"No se pudieron cargar los datos macro: {e}")
 
 # --- Tab 2: Precios de acciones ---
+_probe("S03 antes de: Acciones IPSA")  # PROBE
 if _seccion == "Acciones IPSA":
     try:
         df_acciones = cargar_precios_acciones()
@@ -3323,6 +3326,7 @@ def validar_atribucion_out_of_sample_cacheada(df_acciones: pd.DataFrame, df_macr
     return validar_atribucion_out_of_sample(df_acciones, df_macro)
 
 
+_probe("S04 antes de: Atribución IPSA")  # PROBE
 if _seccion == "Atribución IPSA":
     st.subheader("Atribución del Movimiento de Hoy")
     st.caption(
@@ -3473,6 +3477,7 @@ if _seccion == "Atribución IPSA":
         st.error(f"No se pudo calcular la atribución del IPSA: {e}")
 
 # --- Tab 2b: Precios de acciones del Dow Jones ---
+_probe("S05 antes de: Acciones Dow Jones")  # PROBE
 if _seccion == "Acciones Dow Jones":
     try:
         df_acciones = cargar_precios_acciones()
@@ -3588,6 +3593,7 @@ if _seccion == "Acciones Dow Jones":
         st.error(f"No se pudieron cargar los precios de acciones del Dow Jones: {e}")
 
 # --- Tab 3: Riesgo ---
+_probe("S06 antes de: Riesgo")  # PROBE
 if _seccion == "Riesgo":
     try:
         df_acciones = cargar_precios_acciones()
@@ -3804,6 +3810,7 @@ if _seccion == "Riesgo":
         st.error(f"No se pudieron calcular las métricas de riesgo: {e}")
 
 # --- Tab 4: Benchmark (incluye 7 Magníficas) ---
+_probe("S07 antes de: Benchmark")  # PROBE
 if _seccion == "Benchmark":
     st.subheader("Benchmark internacional")
     try:
@@ -3865,6 +3872,7 @@ if _seccion == "Benchmark":
 
 
 # --- Tab 10: Laboratorio Financiero ---
+_probe("S08 antes de: Laboratorio Financiero")  # PROBE
 if _seccion == "Laboratorio Financiero":
     render_laboratorio_financiero()
 
@@ -3888,6 +3896,7 @@ def _preparar_series_macro_recesion(df_series_macro: pd.DataFrame) -> pd.DataFra
     return _filtrar_macro_por_nombre(df_series_macro, mr.SERIES_FRED_RECESION.values())
 
 
+_probe("S09 antes de: Modelo de Recesión EEUU")  # PROBE
 if _seccion == "Modelo de Recesión EEUU":
     st.header("Modelo de Recesión EEUU (Probit)")
     st.caption(
@@ -5511,6 +5520,7 @@ def render_defensa_topdown():
 
 
 # --- Tab 9: Simulación Mesa de Dinero ---
+_probe("S10 antes de: Simulación Mesa de Dinero")  # PROBE
 if _seccion == "Simulación Mesa de Dinero":
     st.header("🏦 Simulación Mesa de Dinero")
     st.caption(
@@ -6418,6 +6428,7 @@ if _seccion == "Simulación Mesa de Dinero":
 
 
 # --- Tab 10: 🎯 Defensa Top-Down (pestaña propia) ---
+_probe("S11 antes de: 🎯 Defensa Top-Down")  # PROBE
 if _seccion == "🎯 Defensa Top-Down":
     st.header("🎯 Defensa Top-Down")
     st.caption(
