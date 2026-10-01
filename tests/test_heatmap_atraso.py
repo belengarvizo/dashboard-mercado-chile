@@ -56,17 +56,29 @@ def _atraso_manual(ticker: str) -> tuple[str, int, bool]:
     return texto, dias, atrasado
 
 
-def _tablas_heatmap_html():
-    """Corre la app y devuelve todas las tablas HTML de heatmap (las que
-    tienen tooltips + columna 'Atraso'), ya parseadas a DataFrame."""
-    at = AppTest.from_file(DASHBOARD_PATH, default_timeout=300).run(timeout=300)
-    assert not at.exception, f"La app lanzo una excepcion al correr: {at.exception}"
+SECCIONES_CON_HEATMAP = ["Acciones IPSA", "Acciones Dow Jones"]
 
+
+def _tablas_heatmap_html(secciones=SECCIONES_CON_HEATMAP):
+    """Corre la app una vez por sección y devuelve todas las tablas HTML de
+    heatmap (las que tienen tooltips + columna 'Atraso'), ya parseadas a
+    DataFrame.
+
+    Hace falta una corrida por sección porque desde que st.tabs se reemplazó
+    por un st.segmented_control el dashboard ejecuta SOLO el cuerpo de la
+    sección activa; con st.tabs los dos heatmaps aparecían en una sola
+    corrida.
+    """
     tablas = []
-    for elem in at.markdown:
-        html = elem.value
-        if "glosario-tooltip" in html and ">Atraso<" in html:
-            tablas.append(parsear_tabla_heatmap(html))
+    for seccion in secciones:
+        at = AppTest.from_file(DASHBOARD_PATH, default_timeout=300)
+        at.session_state["seccion_activa"] = seccion
+        at.run(timeout=300)
+        assert not at.exception, f"La app lanzo una excepcion en '{seccion}': {at.exception}"
+        for elem in at.markdown:
+            html = elem.value
+            if "glosario-tooltip" in html and ">Atraso<" in html:
+                tablas.append(parsear_tabla_heatmap(html))
     assert tablas, "No se encontro ningun heatmap con tooltips y columna 'Atraso' en la app"
     return tablas
 

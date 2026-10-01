@@ -3,12 +3,19 @@ app/dashboard.py).
 
 El dashboard lee st.query_params al inicio: si "vista" == "labfin", llama a
 render_laboratorio_financiero() y corta con st.stop() ANTES del título, el
-sidebar y st.tabs — así un link con ese parámetro muestra solo esa pestaña.
-Sin el parámetro (o con cualquier otro valor) el dashboard se comporta como
-siempre. NO es autenticación: quitar el parámetro de la URL muestra todo.
+sidebar y el selector de secciones — así un link con ese parámetro muestra
+solo esa sección. Sin el parámetro (o con cualquier otro valor) el dashboard
+se comporta como siempre. NO es autenticación: quitar el parámetro de la URL
+muestra todo.
 
 Estos tests fijan ese contrato para que no se rompa si alguien reordena el
 layout del dashboard más adelante.
+
+El marcador de "dashboard completo" es el st.segmented_control de secciones.
+Antes era st.tabs, pero se reemplazó porque st.tabs ejecuta el cuerpo de las
+once secciones en cada rerun; el selector ejecuta solo la activa. Como
+consecuencia, para ver el contenido de una sección hay que fijar
+session_state["seccion_activa"] antes de correr.
 """
 import os
 import sys
@@ -22,6 +29,7 @@ load_dotenv()  # no pisa una DATABASE_URL ya presente en el entorno
 
 DASHBOARD_PATH = os.path.join(os.path.dirname(__file__), "..", "app", "dashboard.py")
 LAB_HEADER = "Laboratorio Financiero — Frontera Media-Varianza"
+SECCION_LABFIN = "Laboratorio Financiero"
 
 
 def _texto_visible(at):
@@ -41,39 +49,41 @@ def _texto_sidebar(at):
 
 
 def test_dashboard_normal_sin_query_param():
-    """Sin ?vista: título, st.tabs y sidebar presentes, y el Laboratorio
-    Financiero igual se renderiza (dentro de su pestaña)."""
-    at = AppTest.from_file(DASHBOARD_PATH, default_timeout=420).run(timeout=420)
+    """Sin ?vista: título, selector de secciones y sidebar presentes, y el
+    Laboratorio Financiero igual se renderiza al seleccionar su sección."""
+    at = AppTest.from_file(DASHBOARD_PATH, default_timeout=420)
+    at.session_state["seccion_activa"] = SECCION_LABFIN
+    at.run(timeout=420)
     assert not at.exception, f"La app lanzo una excepcion: {at.exception}"
 
     assert any("Mercado Económico Chileno" in t.value for t in at.title), "falta el titulo del dashboard"
-    assert len(at.get("tab")) > 0, "deberia renderizarse st.tabs en modo normal"
+    assert len(at.segmented_control) > 0, "deberia renderizarse el selector de secciones en modo normal"
     assert "Última actualización" in _texto_sidebar(at), "falta el sidebar de ultima actualizacion"
     assert LAB_HEADER in _texto_visible(at), "el Laboratorio Financiero deberia renderizarse igual en modo normal"
 
 
 def test_vista_aislada_labfin_renderiza_solo_el_laboratorio():
-    """Con ?vista=labfin: sin título, sin st.tabs, sin sidebar; solo el
-    contenido del Laboratorio Financiero, sin errores de variables no
-    definidas y sin encabezados de otras pestañas."""
+    """Con ?vista=labfin: sin título, sin selector de secciones, sin
+    sidebar; solo el contenido del Laboratorio Financiero, sin errores de
+    variables no definidas y sin encabezados de otras secciones."""
     at = AppTest.from_file(DASHBOARD_PATH, default_timeout=420)
     at.query_params["vista"] = "labfin"
     at.run(timeout=420)
     assert not at.exception, f"La vista aislada lanzo una excepcion: {at.exception}"
 
     assert [t.value for t in at.title] == [], "en la vista aislada no deberia haber st.title"
-    assert len(at.get("tab")) == 0, "en la vista aislada no deberia renderizarse st.tabs"
+    assert len(at.segmented_control) == 0, "en la vista aislada no deberia renderizarse el selector de secciones"
     assert _texto_sidebar(at).strip() == "", "en la vista aislada el sidebar deberia estar vacio"
 
     texto = _texto_visible(at)
     assert LAB_HEADER in texto, "la vista aislada no renderizo el Laboratorio Financiero"
-    otras_pestanas = [
+    otras_secciones = [
         "Modelo de Recesión EEUU (Probit)",
         "Simulación Mesa de Dinero",
         "Atribución del retorno diario de ECH",
     ]
-    coladas = [p for p in otras_pestanas if p in texto]
-    assert not coladas, f"la vista aislada dejo pasar contenido de otras pestanas: {coladas}"
+    coladas = [p for p in otras_secciones if p in texto]
+    assert not coladas, f"la vista aislada dejo pasar contenido de otras secciones: {coladas}"
 
 
 def test_valor_de_vista_desconocido_se_comporta_como_dashboard_normal():
@@ -84,7 +94,7 @@ def test_valor_de_vista_desconocido_se_comporta_como_dashboard_normal():
     at.run(timeout=420)
     assert not at.exception, f"?vista=otracosa lanzo una excepcion: {at.exception}"
     assert any("Mercado Económico Chileno" in t.value for t in at.title), "?vista=otracosa deberia mostrar el dashboard normal"
-    assert len(at.get("tab")) > 0, "?vista=otracosa deberia renderizar st.tabs"
+    assert len(at.segmented_control) > 0, "?vista=otracosa deberia renderizar el selector de secciones"
 
 
 if __name__ == "__main__":

@@ -71,7 +71,12 @@ def test_atribucion_ipsa_en_la_app_coincide_con_calculo_independiente():
     )
     assert abs(suma_componentes - fila_esperada["retorno_ech"]) < 1e-9
 
-    at = AppTest.from_file(DASHBOARD_PATH, default_timeout=300).run(timeout=300)
+    # Hay que seleccionar la sección: desde que st.tabs se reemplazó por un
+    # st.segmented_control, el dashboard ejecuta solo el cuerpo de la sección
+    # activa, y por defecto esa es "Brief Premercado".
+    at = AppTest.from_file(DASHBOARD_PATH, default_timeout=300)
+    at.session_state["seccion_activa"] = "Atribución IPSA"
+    at.run(timeout=300)
     assert not at.exception, f"La app lanzo una excepcion al correr: {at.exception}"
 
     metricas = {m.label: m.value for m in at.metric}

@@ -49,9 +49,23 @@ FRASES_PROHIBIDAS = [
 ]
 
 
-def _correr_app():
-    at = AppTest.from_file(DASHBOARD_PATH, default_timeout=300).run(timeout=300)
-    assert not at.exception, f"La app lanzo una excepcion al correr: {at.exception}"
+SECCION_IPSA = "Acciones IPSA"
+SECCION_DOW = "Acciones Dow Jones"
+
+
+def _correr_app(seccion: str):
+    """Corre la app con una sección ya seleccionada.
+
+    Desde que st.tabs se reemplazó por un st.segmented_control, el dashboard
+    ejecuta SOLO el cuerpo de la sección activa (ese fue el punto del cambio:
+    con st.tabs se ejecutaban las once en cada rerun). Por eso hay que fijar
+    seccion_activa antes de correr, y una corrida por cada sección que la
+    prueba necesite mirar.
+    """
+    at = AppTest.from_file(DASHBOARD_PATH, default_timeout=300)
+    at.session_state["seccion_activa"] = seccion
+    at.run(timeout=300)
+    assert not at.exception, f"La app lanzo una excepcion en '{seccion}': {at.exception}"
     return at
 
 
@@ -67,7 +81,7 @@ def _tabla_por_marcador(at, marcador_columna: str) -> tuple[str, pd.DataFrame]:
 
 
 def test_heatmap_ipsa_completo_con_tooltips_y_atribucion():
-    at = _correr_app()
+    at = _correr_app(SECCION_IPSA)
     html_ipsa, df_ipsa = _tabla_por_marcador(at, "CAPM local (%)")
 
     assert len(df_ipsa) == 30, f"El heatmap IPSA deberia tener 30 acciones, tiene {len(df_ipsa)}"
@@ -118,7 +132,7 @@ def test_heatmap_ipsa_completo_con_tooltips_y_atribucion():
 
 
 def test_heatmap_dow_jones_completo_con_tooltips_sin_atribucion():
-    at = _correr_app()
+    at = _correr_app(SECCION_DOW)
     html_dow, df_dow = _tabla_por_marcador(at, "CAPM (%)")
 
     assert len(df_dow) == 30, f"El heatmap Dow Jones deberia tener 30 acciones, tiene {len(df_dow)}"
@@ -152,9 +166,8 @@ def test_heatmap_dow_jones_completo_con_tooltips_sin_atribucion():
 def test_tooltips_no_mencionan_lo_explicitamente_excluido():
     """Ni expectativas/consenso de analistas ni atribucion de noticias
     especifica por accion — ambas fuera de alcance a pedido explicito."""
-    at = _correr_app()
-    html_ipsa, _ = _tabla_por_marcador(at, "CAPM local (%)")
-    html_dow, _ = _tabla_por_marcador(at, "CAPM (%)")
+    html_ipsa, _ = _tabla_por_marcador(_correr_app(SECCION_IPSA), "CAPM local (%)")
+    html_dow, _ = _tabla_por_marcador(_correr_app(SECCION_DOW), "CAPM (%)")
 
     for html, nombre in [(html_ipsa, "IPSA"), (html_dow, "Dow Jones")]:
         texto_minuscula = html.lower()
