@@ -2238,71 +2238,6 @@ except Exception:
     st.caption("Aún no hay datos cargados. Corre los scripts de actualización primero.")
 
 
-# --- DIAGNÓSTICO TEMPORAL (quitar cuando se cierre el cuelgue) -------------
-# El render se traba en producción y ahí no se puede correr un profiler ni
-# leer los logs desde acá, así que cada etapa deja una fila en una tabla: la
-# última etapa registrada dice hasta dónde llegó. Escribe con su propia
-# conexión y timeout corto, y se traga cualquier error, para no poder ser
-# nunca la causa de un cuelgue.
-def _probe(etapa):  # PROBE
-    try:  # PROBE
-        with engine.connect() as _c:  # PROBE
-            _c.exec_driver_sql("SET LOCAL statement_timeout = 4000")  # PROBE
-            _c.exec_driver_sql(  # PROBE
-                "CREATE TABLE IF NOT EXISTS _probe_render "  # PROBE
-                "(id serial primary key, ts timestamptz default now(), etapa text)")  # PROBE
-            _c.exec_driver_sql("INSERT INTO _probe_render (etapa) VALUES (%s)", (etapa,))  # PROBE
-            _c.commit()  # PROBE
-    except Exception:  # PROBE
-        pass  # PROBE
-
-
-class _ProbeLogHandler(__import__("logging").Handler):  # PROBE
-    """Manda los WARNING+ de Streamlit a la tabla: en Railway no se pueden
-    leer los logs desde acá, y Streamlit explica ahí por qué detiene una
-    corrida ("Session ... already connected", shutdown, etc.)."""  # PROBE
-    def emit(self, record):  # PROBE
-        try:  # PROBE
-            _probe(f"LOG {record.name}: {record.getMessage()[:120]}")  # PROBE
-        except Exception:  # PROBE
-            pass  # PROBE
-
-
-if not any(isinstance(_h, _ProbeLogHandler)  # PROBE
-           for _h in __import__("logging").getLogger("streamlit").handlers):  # PROBE
-    _lg = __import__("logging").getLogger("streamlit")  # PROBE
-    _lg.addHandler(_ProbeLogHandler(level=30))  # PROBE
-    _lg.setLevel(10)  # PROBE
-
-try:  # PROBE  — ¿quién pide detener la corrida?
-    from streamlit.runtime.scriptrunner import script_runner as _sr  # PROBE
-    if not getattr(_sr.ScriptRunner, "_probe_parcheado", False):  # PROBE
-        import traceback as _tb  # PROBE
-        _orig_stop = _sr.ScriptRunner.request_stop  # PROBE
-        _orig_rerun = _sr.ScriptRunner.request_rerun  # PROBE
-
-        def _stop_espiado(self, *a, **k):  # PROBE
-            _quien = " <- ".join(                                  # PROBE
-                f"{f.name}:{f.lineno}" for f in _tb.extract_stack()[-6:-1])  # PROBE
-            _probe(f"STOP pedido por: {_quien}"[:240])  # PROBE
-            return _orig_stop(self, *a, **k)  # PROBE
-
-        def _rerun_espiado(self, *a, **k):  # PROBE
-            _quien = " <- ".join(                                  # PROBE
-                f"{f.name}:{f.lineno}" for f in _tb.extract_stack()[-6:-1])  # PROBE
-            _probe(f"RERUN pedido por: {_quien}"[:240])  # PROBE
-            return _orig_rerun(self, *a, **k)  # PROBE
-
-        _sr.ScriptRunner.request_stop = _stop_espiado  # PROBE
-        _sr.ScriptRunner.request_rerun = _rerun_espiado  # PROBE
-        _sr.ScriptRunner._probe_parcheado = True  # PROBE
-except Exception:  # PROBE
-    pass  # PROBE
-
-_probe("00 script inicio")  # PROBE
-# ---------------------------------------------------------------------------
-
-
 # Selector de sección en vez de st.tabs(). Motivo medido, no estético:
 # st.tabs() ejecuta el cuerpo de LAS 11 pestañas en cada rerun, aunque se vea
 # una sola. Con varias sesiones abiertas y las cachés frías, todas compiten por
@@ -2561,7 +2496,6 @@ def generar_pdf_brief_premercado() -> bytes:
         tabla.setStyle(TableStyle(comandos_tabla))
         story.append(tabla)
 
-        _probe("20 indicadores listos")  # PROBE
         spread_2s10s = calcular_spread_2s10s(df_macro)
         if spread_2s10s:
             fecha_spread = pd.Timestamp(spread_2s10s["fecha"]).strftime("%Y-%m-%d")
@@ -2837,7 +2771,6 @@ def _categorizar_titular(titulo: str, menciones: list[str]) -> str:
     return "General"
 
 
-_probe("S01 antes de: Brief Premercado")  # PROBE
 if _seccion == "Brief Premercado":
     st.caption(
         "This is the only tab shown in English — the rest of the dashboard is in "
@@ -2855,7 +2788,6 @@ if _seccion == "Brief Premercado":
     except Exception as e:
         st.caption(f"PDF export unavailable right now: {e}")
 
-    _probe("10 pdf listo")  # PROBE
     st.subheader("Key indicators")
 
     try:
@@ -2953,7 +2885,6 @@ if _seccion == "Brief Premercado":
         st.error(f"Could not load the international summary: {e}")
 
     st.divider()
-    _probe("30 breakeven listo")  # PROBE
     st.subheader("Economic calendar — next 7 days")
 
     try:
@@ -2999,7 +2930,6 @@ if _seccion == "Brief Premercado":
         st.error(f"Could not load the economic calendar: {e}")
 
     st.divider()
-    _probe("40 calendario listo")  # PROBE
     st.subheader("Today's summary")
 
     try:
@@ -3028,11 +2958,9 @@ if _seccion == "Brief Premercado":
 
     st.divider()
 
-    _probe("50 resumen listo")  # PROBE
     with st.expander("Relevant headlines (detail)"):
         try:
             df_noticias = cargar_noticias()
-            _probe("60 noticias cargadas")  # PROBE
 
             if df_noticias.empty:
                 st.info("No headlines downloaded yet. Run scripts/actualizar_noticias.py.")
@@ -3040,7 +2968,6 @@ if _seccion == "Brief Premercado":
                 df_noticias = df_noticias.assign(fecha_publicacion=pd.to_datetime(df_noticias["fecha_publicacion"]))
                 df_noticias["dia"] = df_noticias["fecha_publicacion"].dt.date
                 df_noticias["menciones"] = df_noticias["titulo"].apply(_detectar_menciones_ipsa)
-                _probe("70 menciones listas")  # PROBE
                 df_noticias["categoria"] = [
                     _categorizar_titular(t, m) for t, m in zip(df_noticias["titulo"], df_noticias["menciones"])
                 ]
@@ -3108,13 +3035,7 @@ if _seccion == "Brief Premercado":
         except Exception as e:
             st.error(f"Could not load headlines: {e}")
 
-    _probe("90 brief premercado FIN")  # PROBE
-    try:  # PROBE
-        st.divider()  # PROBE
-        _probe("91 tras divider")  # PROBE
-    except BaseException as _e:  # PROBE
-        _probe(f"91-EXC {type(_e).__name__}: {str(_e)[:70]}")  # PROBE
-        raise  # PROBE
+    st.divider()
     st.caption(
         "**Methodology note.** The summary above is generated automatically once a day "
         "from the \"Key indicators\" above and the headlines in the detail section — it "
@@ -3131,10 +3052,8 @@ if _seccion == "Brief Premercado":
         "using a name variant that isn't in the list and get no tag, or get miscategorized "
         "if it's ambiguous."
     )
-    _probe("92 tras caption (fin real de la seccion)")  # PROBE
 
 # --- Tab 1: Series macro del BCCh ---
-_probe("S02 antes de: Indicadores macro")  # PROBE
 if _seccion == "Indicadores macro":
     try:
         df_macro = cargar_series_macro()
@@ -3206,7 +3125,6 @@ if _seccion == "Indicadores macro":
         st.error(f"No se pudieron cargar los datos macro: {e}")
 
 # --- Tab 2: Precios de acciones ---
-_probe("S03 antes de: Acciones IPSA")  # PROBE
 if _seccion == "Acciones IPSA":
     try:
         df_acciones = cargar_precios_acciones()
@@ -3374,7 +3292,6 @@ def validar_atribucion_out_of_sample_cacheada(df_acciones: pd.DataFrame, df_macr
     return validar_atribucion_out_of_sample(df_acciones, df_macro)
 
 
-_probe("S04 antes de: Atribución IPSA")  # PROBE
 if _seccion == "Atribución IPSA":
     st.subheader("Atribución del Movimiento de Hoy")
     st.caption(
@@ -3525,7 +3442,6 @@ if _seccion == "Atribución IPSA":
         st.error(f"No se pudo calcular la atribución del IPSA: {e}")
 
 # --- Tab 2b: Precios de acciones del Dow Jones ---
-_probe("S05 antes de: Acciones Dow Jones")  # PROBE
 if _seccion == "Acciones Dow Jones":
     try:
         df_acciones = cargar_precios_acciones()
@@ -3641,7 +3557,6 @@ if _seccion == "Acciones Dow Jones":
         st.error(f"No se pudieron cargar los precios de acciones del Dow Jones: {e}")
 
 # --- Tab 3: Riesgo ---
-_probe("S06 antes de: Riesgo")  # PROBE
 if _seccion == "Riesgo":
     try:
         df_acciones = cargar_precios_acciones()
@@ -3858,7 +3773,6 @@ if _seccion == "Riesgo":
         st.error(f"No se pudieron calcular las métricas de riesgo: {e}")
 
 # --- Tab 4: Benchmark (incluye 7 Magníficas) ---
-_probe("S07 antes de: Benchmark")  # PROBE
 if _seccion == "Benchmark":
     st.subheader("Benchmark internacional")
     try:
@@ -3920,7 +3834,6 @@ if _seccion == "Benchmark":
 
 
 # --- Tab 10: Laboratorio Financiero ---
-_probe("S08 antes de: Laboratorio Financiero")  # PROBE
 if _seccion == "Laboratorio Financiero":
     render_laboratorio_financiero()
 
@@ -3944,7 +3857,6 @@ def _preparar_series_macro_recesion(df_series_macro: pd.DataFrame) -> pd.DataFra
     return _filtrar_macro_por_nombre(df_series_macro, mr.SERIES_FRED_RECESION.values())
 
 
-_probe("S09 antes de: Modelo de Recesión EEUU")  # PROBE
 if _seccion == "Modelo de Recesión EEUU":
     st.header("Modelo de Recesión EEUU (Probit)")
     st.caption(
@@ -5568,7 +5480,6 @@ def render_defensa_topdown():
 
 
 # --- Tab 9: Simulación Mesa de Dinero ---
-_probe("S10 antes de: Simulación Mesa de Dinero")  # PROBE
 if _seccion == "Simulación Mesa de Dinero":
     st.header("🏦 Simulación Mesa de Dinero")
     st.caption(
@@ -6476,7 +6387,6 @@ if _seccion == "Simulación Mesa de Dinero":
 
 
 # --- Tab 10: 🎯 Defensa Top-Down (pestaña propia) ---
-_probe("S11 antes de: 🎯 Defensa Top-Down")  # PROBE
 if _seccion == "🎯 Defensa Top-Down":
     st.header("🎯 Defensa Top-Down")
     st.caption(
@@ -6490,5 +6400,3 @@ if _seccion == "🎯 Defensa Top-Down":
     render_defensa_topdown()
 
 
-
-_probe("99 script FIN")  # PROBE
