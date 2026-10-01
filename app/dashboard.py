@@ -2238,6 +2238,29 @@ except Exception:
     st.caption("Aún no hay datos cargados. Corre los scripts de actualización primero.")
 
 
+# --- DIAGNÓSTICO TEMPORAL (quitar cuando se cierre el cuelgue) -------------
+# El render se traba en producción y ahí no se puede correr un profiler ni
+# leer los logs desde acá, así que cada etapa deja una fila en una tabla: la
+# última etapa registrada dice hasta dónde llegó. Escribe con su propia
+# conexión y timeout corto, y se traga cualquier error, para no poder ser
+# nunca la causa de un cuelgue.
+def _probe(etapa):  # PROBE
+    try:  # PROBE
+        with engine.connect() as _c:  # PROBE
+            _c.exec_driver_sql("SET LOCAL statement_timeout = 4000")  # PROBE
+            _c.exec_driver_sql(  # PROBE
+                "CREATE TABLE IF NOT EXISTS _probe_render "  # PROBE
+                "(id serial primary key, ts timestamptz default now(), etapa text)")  # PROBE
+            _c.exec_driver_sql("INSERT INTO _probe_render (etapa) VALUES (%s)", (etapa,))  # PROBE
+            _c.commit()  # PROBE
+    except Exception:  # PROBE
+        pass  # PROBE
+
+
+_probe("00 script inicio")  # PROBE
+# ---------------------------------------------------------------------------
+
+
 # Selector de sección en vez de st.tabs(). Motivo medido, no estético:
 # st.tabs() ejecuta el cuerpo de LAS 11 pestañas en cada rerun, aunque se vea
 # una sola. Con varias sesiones abiertas y las cachés frías, todas compiten por
@@ -2496,6 +2519,7 @@ def generar_pdf_brief_premercado() -> bytes:
         tabla.setStyle(TableStyle(comandos_tabla))
         story.append(tabla)
 
+        _probe("20 indicadores listos")  # PROBE
         spread_2s10s = calcular_spread_2s10s(df_macro)
         if spread_2s10s:
             fecha_spread = pd.Timestamp(spread_2s10s["fecha"]).strftime("%Y-%m-%d")
@@ -2788,6 +2812,7 @@ if _seccion == "Brief Premercado":
     except Exception as e:
         st.caption(f"PDF export unavailable right now: {e}")
 
+    _probe("10 pdf listo")  # PROBE
     st.subheader("Key indicators")
 
     try:
@@ -2885,6 +2910,7 @@ if _seccion == "Brief Premercado":
         st.error(f"Could not load the international summary: {e}")
 
     st.divider()
+    _probe("30 breakeven listo")  # PROBE
     st.subheader("Economic calendar — next 7 days")
 
     try:
@@ -2930,6 +2956,7 @@ if _seccion == "Brief Premercado":
         st.error(f"Could not load the economic calendar: {e}")
 
     st.divider()
+    _probe("40 calendario listo")  # PROBE
     st.subheader("Today's summary")
 
     try:
@@ -2958,9 +2985,11 @@ if _seccion == "Brief Premercado":
 
     st.divider()
 
+    _probe("50 resumen listo")  # PROBE
     with st.expander("Relevant headlines (detail)"):
         try:
             df_noticias = cargar_noticias()
+            _probe("60 noticias cargadas")  # PROBE
 
             if df_noticias.empty:
                 st.info("No headlines downloaded yet. Run scripts/actualizar_noticias.py.")
@@ -2968,6 +2997,7 @@ if _seccion == "Brief Premercado":
                 df_noticias = df_noticias.assign(fecha_publicacion=pd.to_datetime(df_noticias["fecha_publicacion"]))
                 df_noticias["dia"] = df_noticias["fecha_publicacion"].dt.date
                 df_noticias["menciones"] = df_noticias["titulo"].apply(_detectar_menciones_ipsa)
+                _probe("70 menciones listas")  # PROBE
                 df_noticias["categoria"] = [
                     _categorizar_titular(t, m) for t, m in zip(df_noticias["titulo"], df_noticias["menciones"])
                 ]
@@ -3035,6 +3065,7 @@ if _seccion == "Brief Premercado":
         except Exception as e:
             st.error(f"Could not load headlines: {e}")
 
+    _probe("90 brief premercado FIN")  # PROBE
     st.divider()
     st.caption(
         "**Methodology note.** The summary above is generated automatically once a day "
@@ -6400,3 +6431,5 @@ if _seccion == "🎯 Defensa Top-Down":
     render_defensa_topdown()
 
 
+
+_probe("99 script FIN")  # PROBE
