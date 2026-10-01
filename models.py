@@ -4,8 +4,10 @@ Usamos SQLAlchemy para no escribir SQL a mano.
 """
 
 import os
+import threading
 from dotenv import load_dotenv
 from sqlalchemy import create_engine, Column, Integer, String, Date, Numeric, BigInteger, DateTime, Text, Index
+from sqlalchemy.engine import Engine
 from sqlalchemy.orm import declarative_base, sessionmaker
 
 load_dotenv()
@@ -218,6 +220,25 @@ CONNECT_ARGS_POSTGRES = {
 }
 
 
+# Un engine (y por lo tanto un pool de conexiones) por URL, reusado durante
+# toda la vida del proceso. Antes get_engine() hacía create_engine() en CADA
+# llamada, así que cada llamador se llevaba su propio pool y ninguno se
+# cerraba: get_session() crea un engine nuevo por sesión, y hay bucles que la
+# llaman una vez por ticker (tests/test_heatmap_atraso.py abre 30 seguidas,
+# una por acción del IPSA). Eso son 30 handshakes contra Postgres donde
+# debería haber uno reusado, y multiplica por 30 la probabilidad de que
+# alguno caiga en una ventana mala del proxy de Railway — exactamente el
+# "server closed the connection unexpectedly" que veníamos viendo de forma
+# intermitente. Además desperdicia el pool_pre_ping y el pool_recycle, que
+# solo sirven si las conexiones efectivamente se reusan.
+#
+# Un Engine de SQLAlchemy está pensado para vivir todo el proceso y es
+# seguro de compartir entre hilos (el pool se encarga). El lock es solo para
+# que dos hilos que piden la misma URL a la vez no creen dos engines.
+_ENGINES_POR_URL: dict[str, Engine] = {}
+_LOCK_ENGINES = threading.Lock()
+
+
 def get_engine():
     database_url = os.environ["DATABASE_URL"]
     # Fuerza el driver psycopg2 explícito en vez de dejar que SQLAlchemy
@@ -234,6 +255,21 @@ def get_engine():
         if database_url.startswith(esquema_ambiguo):
             database_url = "postgresql+psycopg2://" + database_url[len(esquema_ambiguo):]
             break
+
+    engine = _ENGINES_POR_URL.get(database_url)
+    if engine is not None:
+        return engine
+    with _LOCK_ENGINES:
+        # Se vuelve a mirar adentro del lock: otro hilo pudo haberlo creado
+        # mientras este esperaba.
+        engine = _ENGINES_POR_URL.get(database_url)
+        if engine is None:
+            engine = _crear_engine(database_url)
+            _ENGINES_POR_URL[database_url] = engine
+        return engine
+
+
+def _crear_engine(database_url: str):
     return create_engine(
         database_url,
         # pool_pre_ping: antes de reusar una conexión del pool, hace un chequeo

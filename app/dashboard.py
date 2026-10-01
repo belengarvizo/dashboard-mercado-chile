@@ -103,6 +103,24 @@ if not _SOLO_LABFIN:
 engine = get_engine()
 
 
+def _hoy_normalizado() -> pd.Timestamp:
+    """Fecha de hoy a medianoche, para pasarla COMO ARGUMENTO a las funciones
+    cacheadas que dependen de "cuándo es hoy".
+
+    Esas funciones están cacheadas con ttl=3600. Si calcularan la fecha
+    adentro, quedaría congelada en la entrada del caché hasta una hora: el
+    dashboard seguiría usando el "hoy" de ayer durante la primera hora
+    después de medianoche. El síntoma más visible era el contador de la
+    columna "Atraso" ("Precio congelado — N días hábiles"), que mostraba el N
+    del día anterior.
+
+    Al pasarla como argumento, la fecha forma parte de la clave del caché, así
+    que el cambio de día invalida la entrada solo. Dentro del mismo día la
+    clave no cambia, por lo que el caché sigue sirviendo igual que antes.
+    """
+    return pd.Timestamp.now().normalize()
+
+
 @st.cache_data(ttl=3600)  # cachea 1 hora, para no golpear la BD en cada click
 def cargar_series_macro():
     # Sin ORDER BY en el SQL a propósito: con ~30.000 filas, Postgres elegía
@@ -465,7 +483,7 @@ def _renderizar_heatmap_con_tooltips(
 
 
 @st.cache_data(ttl=3600)
-def calcular_resumen_ipsa(df_todas: pd.DataFrame, df_macro: pd.DataFrame) -> pd.DataFrame:
+def calcular_resumen_ipsa(df_todas: pd.DataFrame, df_macro: pd.DataFrame, hoy: pd.Timestamp) -> pd.DataFrame:
     """% de cambio 1D/1W/1M/YTD, Beta (vs el proxy del IPSA), volatilidad y
     costo de capital CAPM (local y ajustado por riesgo país) para cada acción
     del IPSA."""
@@ -522,7 +540,8 @@ def calcular_resumen_ipsa(df_todas: pd.DataFrame, df_macro: pd.DataFrame) -> pd.
         cambia.iloc[0] = True  # el primer dato de la serie siempre cuenta como real
         ultima_fecha_real = serie.index[cambia][-1]
 
-        hoy = pd.Timestamp.now().normalize()
+        # `hoy` llega como argumento (ver _hoy_normalizado): calcularlo acá lo
+        # congelaría en el caché junto con el resto del resultado.
         dias_habiles_atraso = int(np.busday_count(ultima_fecha_real.date(), hoy.date()))
         atrasado = dias_habiles_atraso > 5
 
@@ -608,7 +627,7 @@ def calcular_resumen_ipsa(df_todas: pd.DataFrame, df_macro: pd.DataFrame) -> pd.
 
 
 @st.cache_data(ttl=3600)
-def calcular_resumen_dow_jones(df_todas: pd.DataFrame, df_macro: pd.DataFrame) -> pd.DataFrame:
+def calcular_resumen_dow_jones(df_todas: pd.DataFrame, df_macro: pd.DataFrame, hoy: pd.Timestamp) -> pd.DataFrame:
     """% de cambio 1D/1W/1M/YTD, Beta (vs el propio índice Dow Jones, que sí
     tiene ticker en Yahoo Finance a diferencia del IPSA), volatilidad y CAPM
     para cada acción del Dow Jones. Mismo criterio que calcular_resumen_ipsa,
@@ -678,7 +697,7 @@ def calcular_resumen_dow_jones(df_todas: pd.DataFrame, df_macro: pd.DataFrame) -
         cambia.iloc[0] = True
         ultima_fecha_real = serie.index[cambia][-1]
 
-        hoy = pd.Timestamp.now().normalize()
+        # `hoy` llega como argumento, igual que en calcular_resumen_ipsa.
         dias_habiles_atraso = int(np.busday_count(ultima_fecha_real.date(), hoy.date()))
         atrasado = dias_habiles_atraso > 5
 
@@ -764,11 +783,12 @@ def _escapar_markdown_matematico(texto: str) -> str:
 
 
 @st.cache_data(ttl=3600)
-def calcular_cuartiles_liquidez(df_todas: pd.DataFrame) -> pd.DataFrame:
+def calcular_cuartiles_liquidez(df_todas: pd.DataFrame, hoy: pd.Timestamp) -> pd.DataFrame:
     """Monto transado diario promedio (precio × volumen) de los últimos 3
     meses para las 30 acciones del IPSA, clasificado en cuartiles de liquidez."""
     df_todas = df_todas.assign(fecha=pd.to_datetime(df_todas["fecha"]))
-    fecha_corte = pd.Timestamp.now().normalize() - VENTANA_LIQUIDEZ
+    # `hoy` llega como argumento (ver _hoy_normalizado).
+    fecha_corte = hoy - VENTANA_LIQUIDEZ
 
     filas = []
     for ticker in TICKERS_IPSA:
@@ -787,7 +807,7 @@ def calcular_cuartiles_liquidez(df_todas: pd.DataFrame) -> pd.DataFrame:
 
 
 @st.cache_data(ttl=3600)
-def calcular_var(df_todas: pd.DataFrame) -> pd.DataFrame:
+def calcular_var(df_todas: pd.DataFrame, hoy: pd.Timestamp) -> pd.DataFrame:
     """VaR histórico y paramétrico (95% y 99%) para las 5 acciones principales
     y un portafolio hipotético equiponderado, sobre los últimos ~2 años de
     retornos "reales" (excluyendo días de precio congelado). El VaR de cada
@@ -796,7 +816,8 @@ def calcular_var(df_todas: pd.DataFrame) -> pd.DataFrame:
     acciones del IPSA) cae en el cuartil menos líquido — el portafolio no se
     ajusta, porque esa clasificación es por acción individual."""
     df_todas = df_todas.assign(fecha=pd.to_datetime(df_todas["fecha"]))
-    fecha_corte = pd.Timestamp.now().normalize() - VENTANA_VAR
+    # `hoy` llega como argumento (ver _hoy_normalizado).
+    fecha_corte = hoy - VENTANA_VAR
 
     retornos_por_ticker = {}
     for ticker in TICKERS_IPSA_PRINCIPALES:
@@ -814,7 +835,7 @@ def calcular_var(df_todas: pd.DataFrame) -> pd.DataFrame:
     # fecha completa si a algún componente le falta el dato).
     df_retornos["Portafolio (equiponderado)"] = df_retornos.mean(axis=1, skipna=False)
 
-    df_liquidez = calcular_cuartiles_liquidez(df_todas)
+    df_liquidez = calcular_cuartiles_liquidez(df_todas, hoy)
 
     filas = []
     for nombre in df_retornos.columns:
@@ -843,13 +864,14 @@ def calcular_var(df_todas: pd.DataFrame) -> pd.DataFrame:
 
 
 @st.cache_data(ttl=3600)
-def calcular_distribucion_retornos(df_todas: pd.DataFrame) -> dict:
+def calcular_distribucion_retornos(df_todas: pd.DataFrame, hoy: pd.Timestamp) -> dict:
     """Retornos diarios "reales" (excluyendo días de precio congelado) de los
     últimos ~2 años para las 5 acciones principales, con skewness y kurtosis
     (exceso de Fisher, 0 = normal) — para contrastar visualmente con el
     supuesto de normalidad del VaR paramétrico."""
     df_todas = df_todas.assign(fecha=pd.to_datetime(df_todas["fecha"]))
-    fecha_corte = pd.Timestamp.now().normalize() - VENTANA_VAR
+    # `hoy` llega como argumento (ver _hoy_normalizado).
+    fecha_corte = hoy - VENTANA_VAR
 
     resultado = {}
     for ticker in TICKERS_IPSA_PRINCIPALES:
@@ -3178,7 +3200,7 @@ if _seccion == "Acciones IPSA":
         st.subheader("Resumen de desempeño — todas las acciones del IPSA")
 
         df_macro = cargar_series_macro()
-        df_resumen = calcular_resumen_ipsa(df_acciones, df_macro)
+        df_resumen = calcular_resumen_ipsa(df_acciones, df_macro, _hoy_normalizado())
         capm_insumos = calcular_crp_y_prima_mercado(df_macro, df_acciones)
 
         columnas_pct = ["1D %", "1W %", "1M %", "YTD %"]
@@ -3493,7 +3515,7 @@ if _seccion == "Acciones Dow Jones":
         st.subheader("Resumen de desempeño — todas las acciones del Dow Jones")
 
         df_macro = cargar_series_macro()
-        df_resumen_dow = calcular_resumen_dow_jones(df_acciones, df_macro)
+        df_resumen_dow = calcular_resumen_dow_jones(df_acciones, df_macro, _hoy_normalizado())
 
         columnas_pct_dow = ["1D %", "1W %", "1M %", "YTD %"]
 
@@ -3583,7 +3605,7 @@ if _seccion == "Riesgo":
             "multiplica por 1,3× como ajuste heurístico por liquidez."
         )
 
-        df_var = calcular_var(df_acciones)
+        df_var = calcular_var(df_acciones, _hoy_normalizado())
         columnas_var_pct = [c for c in df_var.columns if c not in ("n", "Cuartil liquidez")]
         st.dataframe(
             df_var.style.format({col: "{:.2f}%" for col in columnas_var_pct}),
@@ -3634,7 +3656,7 @@ if _seccion == "Riesgo":
             "más abajo."
         )
 
-        distribuciones = calcular_distribucion_retornos(df_acciones)
+        distribuciones = calcular_distribucion_retornos(df_acciones, _hoy_normalizado())
         if distribuciones:
             columnas_dist = st.columns(len(distribuciones))
             for col, (nombre, datos) in zip(columnas_dist, distribuciones.items()):
@@ -3695,7 +3717,7 @@ if _seccion == "Riesgo":
             st.dataframe(estilo_impacto, use_container_width=True)
 
         df_macro_riesgo = cargar_series_macro()
-        df_resumen_riesgo = calcular_resumen_ipsa(df_acciones, df_macro_riesgo)
+        df_resumen_riesgo = calcular_resumen_ipsa(df_acciones, df_macro_riesgo, _hoy_normalizado())
         betas_todas = df_resumen_riesgo["Beta"].dropna()
         tickers_principales_sin_sufijo = [t.replace(".SN", "") for t in TICKERS_IPSA_PRINCIPALES]
         beta_portafolio_5 = betas_todas.reindex(tickers_principales_sin_sufijo).dropna().mean()
@@ -4314,7 +4336,7 @@ def _defensa_topdown_datos_reales() -> dict:
 
 
 @st.cache_data(ttl=1800)
-def _defensa_topdown_series_12m() -> dict:
+def _defensa_topdown_series_12m(hoy: pd.Timestamp) -> dict:
     """Trayectoria de los últimos 12 meses (no un número congelado) de las
     referencias MACRO que SÍ existen en el dashboard: VIX (precios_acciones,
     misma fuente que el resto del dashboard), spread 2s10s y Effective
@@ -4322,7 +4344,8 @@ def _defensa_topdown_series_12m() -> dict:
     de recesión (serie trimestral, se muestran los últimos 8 trimestres).
     Devuelve un dict de DataFrames {fecha, valor}; una clave falta si su
     serie no está disponible."""
-    corte = pd.Timestamp.now().normalize() - pd.DateOffset(months=12)
+    # `hoy` llega como argumento (ver _hoy_normalizado).
+    corte = hoy - pd.DateOffset(months=12)
     out: dict = {}
     try:
         dfa = cargar_precios_acciones(tickers=("^VIX",))
@@ -5216,7 +5239,7 @@ def render_defensa_topdown():
         )
 
     _datos_reales = _defensa_topdown_datos_reales()
-    _series12m = _defensa_topdown_series_12m()
+    _series12m = _defensa_topdown_series_12m(_hoy_normalizado())
     _dtd_cv = st.session_state.get("dtd_cache_version", 0)
 
     with st.expander("⚖️ ¿Aún no decidiste el ticker? — Comparador de decisión", expanded=False):

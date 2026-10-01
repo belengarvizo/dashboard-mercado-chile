@@ -74,9 +74,57 @@ def test_ninguna_consulta_puede_colgarse_para_siempre():
     print("OK: statement_timeout + keepalives + connect_timeout + pool_recycle")
 
 
+def test_el_engine_se_reusa_en_vez_de_crear_un_pool_nuevo_por_llamada():
+    """Antes, get_engine() llamaba a create_engine() CADA vez, así que cada
+    llamador se llevaba su propio pool y ninguno se cerraba. get_session()
+    crea un engine por sesión, y hay bucles que la llaman una vez por ticker
+    (test_heatmap_atraso abre 30 seguidas, una por acción del IPSA): 30
+    handshakes contra Postgres donde debería haber uno reusado, lo que
+    multiplica por 30 la chance de caer en una ventana mala de la red y
+    además desperdicia pool_pre_ping y pool_recycle, que solo sirven si las
+    conexiones se reusan de verdad."""
+    url = "postgresql://usuario:pass@host:5432/db_reuso"
+    primero = _con_database_url(url, get_engine)
+    segundo = _con_database_url(url, get_engine)
+    assert primero is segundo, (
+        "get_engine() devolvió dos engines distintos para la misma URL: "
+        "cada llamada estaría armando un pool de conexiones nuevo"
+    )
+
+
+def test_urls_distintas_no_comparten_engine():
+    """La memorización es por URL: apuntar a otra base no debe devolver el
+    engine de la anterior (los tests de arriba dependen de esto, y una
+    migración apuntada a la base equivocada sería un desastre silencioso)."""
+    uno = _con_database_url("postgresql://u:p@host:5432/base_a", get_engine)
+    otro = _con_database_url("postgresql://u:p@host:5432/base_b", get_engine)
+    assert uno is not otro, "dos URLs distintas devolvieron el mismo engine"
+    assert uno.url.database == "base_a", uno.url.database
+    assert otro.url.database == "base_b", otro.url.database
+
+
+def test_get_session_usa_el_engine_compartido():
+    """get_session() no debe esquivar la memorización: si vuelve a construir
+    un engine propio, el bucle de 30 tickers sigue abriendo 30 pools."""
+    from models import get_session
+
+    url = "postgresql://usuario:pass@host:5432/db_sesion"
+    engine_directo = _con_database_url(url, get_engine)
+    sesion = _con_database_url(url, get_session)
+    try:
+        assert sesion.get_bind() is engine_directo, (
+            "get_session() usó un engine distinto al que devuelve get_engine()"
+        )
+    finally:
+        sesion.close()
+
+
 if __name__ == "__main__":
     test_esquema_postgresql_ambiguo_se_fuerza_a_psycopg2()
     test_esquema_postgres_viejo_estilo_heroku_tambien_se_fuerza()
     test_esquema_ya_explicito_no_se_toca()
     test_ninguna_consulta_puede_colgarse_para_siempre()
-    print("OK: las cuatro pruebas pasaron.")
+    test_el_engine_se_reusa_en_vez_de_crear_un_pool_nuevo_por_llamada()
+    test_urls_distintas_no_comparten_engine()
+    test_get_session_usa_el_engine_compartido()
+    print("OK: las siete pruebas pasaron.")
