@@ -2238,26 +2238,24 @@ except Exception:
     st.caption("Aún no hay datos cargados. Corre los scripts de actualización primero.")
 
 
-# --- DIAGNÓSTICO TEMPORAL (quitar cuando se encuentre el cuelgue) ---------
-# El dashboard se queda a veces con el indicador "running" girando para
-# siempre, mostrando solo la primera pestaña. Streamlit ejecuta el archivo de
-# arriba hacia abajo, así que la última línea [PROBE] que aparezca en los logs
-# de Railway dice exactamente hasta dónde llegó el render antes de trabarse.
-def _probe(etapa):  # PROBE
-    print(f"[PROBE] {datetime.now().strftime('%H:%M:%S')} {etapa}", file=sys.stderr, flush=True)  # PROBE
-
-
-_probe("script inicio")  # PROBE
-# -------------------------------------------------------------------------
-
-(
-    tab_premercado, tab_macro, tab_acciones, tab_atribucion, tab_acciones_dow, tab_riesgo,
-    tab_benchmark, tab_laboratorio, tab_recesion, tab_mesa_dinero, tab_defensa,
-) = st.tabs([
+# Selector de sección en vez de st.tabs(). Motivo medido, no estético:
+# st.tabs() ejecuta el cuerpo de LAS 11 pestañas en cada rerun, aunque se vea
+# una sola. Con varias sesiones abiertas y las cachés frías, todas compiten por
+# los mismos locks de @st.cache_data y el render tardaba minutos o directamente
+# no terminaba — se reprodujo con 4 sesiones simultáneas: las 4 quedaban
+# colgadas mostrando solo la primera sección, con el servidor ocioso (los
+# stacks mostraban los 4 hilos parados en el mismo punto). Con el selector,
+# cada rerun ejecuta UNA sección.
+# El costo: cambiar de sección pasa a tardar un rerun (~1s) en vez de ser
+# instantáneo; a cambio, cualquier interacción deja de pagar las otras 10.
+SECCIONES = [
     "Brief Premercado", "Indicadores macro", "Acciones IPSA", "Atribución IPSA", "Acciones Dow Jones",
     "Riesgo", "Benchmark", "Laboratorio Financiero", "Modelo de Recesión EEUU", "Simulación Mesa de Dinero",
     "🎯 Defensa Top-Down",
-])
+]
+_seccion = st.segmented_control(
+    "Sección", SECCIONES, default=SECCIONES[0], key="seccion_activa", label_visibility="collapsed",
+) or SECCIONES[0]
 
 # --- Tab 0: Brief Premercado ---
 ETIQUETA_EN_POR_ES = {
@@ -2773,8 +2771,7 @@ def _categorizar_titular(titulo: str, menciones: list[str]) -> str:
     return "General"
 
 
-with tab_premercado:
-    _probe("tab_premercado")  # PROBE
+if _seccion == "Brief Premercado":
     st.caption(
         "This is the only tab shown in English — the rest of the dashboard is in "
         "Spanish. Meant to be read before the Santiago Stock Exchange opens, quickly, "
@@ -3057,8 +3054,7 @@ with tab_premercado:
     )
 
 # --- Tab 1: Series macro del BCCh ---
-with tab_macro:
-    _probe("tab_macro")  # PROBE
+if _seccion == "Indicadores macro":
     try:
         df_macro = cargar_series_macro()
 
@@ -3079,18 +3075,37 @@ with tab_macro:
         # en precios_acciones, no en series_macro — se agregan acá con el
         # mismo formato nombre/fecha/valor para que todos los indicadores de
         # esa sección también se puedan explorar en este selector.
-        df_acciones_indicadores = cargar_precios_acciones()
+        # Se piden SOLO los tickers que se van a usar (~6), no la tabla entera:
+        # cargar_precios_acciones() sin argumentos trae las 211k filas de
+        # precios_acciones, y el filtro por ticker dentro del loop volvía a
+        # escanearlas en cada iteración. Con la columna `ticker` respaldada por
+        # Arrow, cada comparación forzaba una conversión Arrow->numpy de toda la
+        # columna; con varias sesiones concurrentes peleando por el GIL, el
+        # render se frenaba en seco justo acá y nunca llegaba a las pestañas
+        # siguientes (se reprodujo con 4 sesiones simultáneas y caché fría: los
+        # 4 hilos de script parados en esta misma línea).
+        claves_accion = tuple(
+            clave for _etiqueta, tipo, clave, *_resto in INDICADORES_PREMERCADO if tipo == "accion"
+        )
+        df_acciones_indicadores = cargar_precios_acciones(tickers=claves_accion)
+        # Un solo groupby en vez de un filtro por indicador, y un solo concat al
+        # final en vez de uno por vuelta (concat dentro de un loop es cuadrático:
+        # recopia el acumulado entero cada vez).
+        por_ticker = dict(tuple(df_acciones_indicadores.groupby("ticker", sort=False)))
+        series_accion = []
         for etiqueta, tipo, clave, _unidad, _cadencia, _menor in INDICADORES_PREMERCADO:
             if tipo != "accion":
                 continue
-            serie_accion = (
-                df_acciones_indicadores[df_acciones_indicadores["ticker"] == clave]
-                .sort_values("fecha")[["fecha", "precio_cierre"]]
+            sub = por_ticker.get(clave)
+            if sub is None or sub.empty:
+                continue
+            series_accion.append(
+                sub.sort_values("fecha")[["fecha", "precio_cierre"]]
                 .rename(columns={"precio_cierre": "valor"})
-                .assign(nombre=etiqueta)
+                .assign(nombre=etiqueta)[["nombre", "fecha", "valor"]]
             )
-            if not serie_accion.empty:
-                df_macro = pd.concat([df_macro, serie_accion[["nombre", "fecha", "valor"]]], ignore_index=True)
+        if series_accion:
+            df_macro = pd.concat([df_macro, *series_accion], ignore_index=True)
 
         series_disponibles = df_macro["nombre"].unique()
         serie_elegida = st.selectbox("Elige un indicador", series_disponibles)
@@ -3110,8 +3125,7 @@ with tab_macro:
         st.error(f"No se pudieron cargar los datos macro: {e}")
 
 # --- Tab 2: Precios de acciones ---
-with tab_acciones:
-    _probe("tab_acciones")  # PROBE
+if _seccion == "Acciones IPSA":
     try:
         df_acciones = cargar_precios_acciones()
         _mostrar_banner_apagon(df_acciones, TICKERS_IPSA, "las acciones del IPSA")
@@ -3278,8 +3292,7 @@ def validar_atribucion_out_of_sample_cacheada(df_acciones: pd.DataFrame, df_macr
     return validar_atribucion_out_of_sample(df_acciones, df_macro)
 
 
-with tab_atribucion:
-    _probe("tab_atribucion")  # PROBE
+if _seccion == "Atribución IPSA":
     st.subheader("Atribución del Movimiento de Hoy")
     st.caption(
         "Modelo de 3 factores: R_ECH = α + β_cobre·R_cobre + β_SP500·R_SP500 + "
@@ -3429,8 +3442,7 @@ with tab_atribucion:
         st.error(f"No se pudo calcular la atribución del IPSA: {e}")
 
 # --- Tab 2b: Precios de acciones del Dow Jones ---
-with tab_acciones_dow:
-    _probe("tab_acciones_dow")  # PROBE
+if _seccion == "Acciones Dow Jones":
     try:
         df_acciones = cargar_precios_acciones()
 
@@ -3545,8 +3557,7 @@ with tab_acciones_dow:
         st.error(f"No se pudieron cargar los precios de acciones del Dow Jones: {e}")
 
 # --- Tab 3: Riesgo ---
-with tab_riesgo:
-    _probe("tab_riesgo")  # PROBE
+if _seccion == "Riesgo":
     try:
         df_acciones = cargar_precios_acciones()
         _mostrar_banner_apagon(df_acciones, TICKERS_IPSA, "las acciones del IPSA")
@@ -3762,8 +3773,7 @@ with tab_riesgo:
         st.error(f"No se pudieron calcular las métricas de riesgo: {e}")
 
 # --- Tab 4: Benchmark (incluye 7 Magníficas) ---
-with tab_benchmark:
-    _probe("tab_benchmark")  # PROBE
+if _seccion == "Benchmark":
     st.subheader("Benchmark internacional")
     try:
         df_bench = cargar_precios_acciones()
@@ -3824,8 +3834,7 @@ with tab_benchmark:
 
 
 # --- Tab 10: Laboratorio Financiero ---
-with tab_laboratorio:
-    _probe("tab_laboratorio")  # PROBE
+if _seccion == "Laboratorio Financiero":
     render_laboratorio_financiero()
 
 # --- Tab 8: Modelo de Recesión EEUU ---
@@ -3848,8 +3857,7 @@ def _preparar_series_macro_recesion(df_series_macro: pd.DataFrame) -> pd.DataFra
     return _filtrar_macro_por_nombre(df_series_macro, mr.SERIES_FRED_RECESION.values())
 
 
-with tab_recesion:
-    _probe("tab_recesion")  # PROBE
+if _seccion == "Modelo de Recesión EEUU":
     st.header("Modelo de Recesión EEUU (Probit)")
     st.caption(
         "Extiende un modelo Probit de recesión de EEUU (predictores originales: "
@@ -5472,8 +5480,7 @@ def render_defensa_topdown():
 
 
 # --- Tab 9: Simulación Mesa de Dinero ---
-with tab_mesa_dinero:
-    _probe("tab_mesa_dinero")  # PROBE
+if _seccion == "Simulación Mesa de Dinero":
     st.header("🏦 Simulación Mesa de Dinero")
     st.caption(
         "Plantilla de práctica para la rutina diaria de un analista de tesorería: "
@@ -6380,8 +6387,7 @@ with tab_mesa_dinero:
 
 
 # --- Tab 10: 🎯 Defensa Top-Down (pestaña propia) ---
-with tab_defensa:
-    _probe("tab_defensa")  # PROBE
+if _seccion == "🎯 Defensa Top-Down":
     st.header("🎯 Defensa Top-Down")
     st.caption(
         "Espacio de trabajo para la Tarea de Inversiones \"Análisis Top-Down y "
@@ -6394,4 +6400,3 @@ with tab_defensa:
     render_defensa_topdown()
 
 
-_probe("script FIN (render completo)")  # PROBE
