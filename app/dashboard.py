@@ -3018,8 +3018,19 @@ if _seccion == "Brief Premercado":
 
                     # df_filtrado ya viene ordenado desc por fecha_publicacion (ver cargar_noticias),
                     # así que agrupar sin volver a ordenar deja primero el día más reciente.
+                    # Un st.markdown por DÍA, no uno por titular. Cada llamada a
+                    # st.* es un mensaje por el WebSocket, y la cola de envío de
+                    # Streamlit tiene un tope fijo de 500
+                    # (WEBSOCKET_MAX_SEND_QUEUE_SIZE, no configurable). Con una
+                    # línea por titular esta sección sola emitía miles de
+                    # mensajes: la cola se desbordaba, Streamlit marcaba la
+                    # conexión como cerrada (SessionClientDisconnectedError) y
+                    # abortaba el render a mitad de camino -- sin cerrar el
+                    # WebSocket, así que el navegador quedaba cargando para
+                    # siempre. Empeoró con el tiempo porque la tabla `noticias`
+                    # crece con cada corrida del cron.
                     for dia, grupo in df_filtrado.groupby("dia", sort=False):
-                        st.markdown(f"**{dia.strftime('%Y-%m-%d')}**")
+                        lineas_dia = [f"**{dia.strftime('%Y-%m-%d')}**", ""]
                         for _, fila in grupo.iterrows():
                             hora = fila["fecha_publicacion"].strftime("%H:%M")
                             titulo_seguro = _escapar_markdown_matematico(fila["titulo"])
@@ -3030,7 +3041,8 @@ if _seccion == "Brief Premercado":
                                     _, cambio_pct, _, _ = resultado
                                     flecha = "🔺" if cambio_pct >= 0 else "🔻"
                                     linea += f" {flecha} **{ticker}** {cambio_pct:+.2f}%"
-                            st.markdown(linea)
+                            lineas_dia.append(linea)
+                        st.markdown("\n".join(lineas_dia))
 
         except Exception as e:
             st.error(f"Could not load headlines: {e}")
