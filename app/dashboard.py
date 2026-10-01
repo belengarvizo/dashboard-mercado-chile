@@ -2257,6 +2257,23 @@ def _probe(etapa):  # PROBE
         pass  # PROBE
 
 
+class _ProbeLogHandler(__import__("logging").Handler):  # PROBE
+    """Manda los WARNING+ de Streamlit a la tabla: en Railway no se pueden
+    leer los logs desde acá, y Streamlit explica ahí por qué detiene una
+    corrida ("Session ... already connected", shutdown, etc.)."""  # PROBE
+    def emit(self, record):  # PROBE
+        try:  # PROBE
+            _probe(f"LOG {record.name}: {record.getMessage()[:120]}")  # PROBE
+        except Exception:  # PROBE
+            pass  # PROBE
+
+
+if not any(isinstance(_h, _ProbeLogHandler)  # PROBE
+           for _h in __import__("logging").getLogger("streamlit").handlers):  # PROBE
+    _lg = __import__("logging").getLogger("streamlit")  # PROBE
+    _lg.addHandler(_ProbeLogHandler(level=30))  # PROBE
+    _lg.setLevel(10)  # PROBE
+
 _probe("00 script inicio")  # PROBE
 # ---------------------------------------------------------------------------
 
