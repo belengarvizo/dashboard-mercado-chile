@@ -3067,7 +3067,12 @@ if _seccion == "Brief Premercado":
             st.error(f"Could not load headlines: {e}")
 
     _probe("90 brief premercado FIN")  # PROBE
-    st.divider()
+    try:  # PROBE
+        st.divider()  # PROBE
+        _probe("91 tras divider")  # PROBE
+    except BaseException as _e:  # PROBE
+        _probe(f"91-EXC {type(_e).__name__}: {str(_e)[:70]}")  # PROBE
+        raise  # PROBE
     st.caption(
         "**Methodology note.** The summary above is generated automatically once a day "
         "from the \"Key indicators\" above and the headlines in the detail section — it "
@@ -3084,6 +3089,7 @@ if _seccion == "Brief Premercado":
         "using a name variant that isn't in the list and get no tag, or get miscategorized "
         "if it's ambiguous."
     )
+    _probe("92 tras caption (fin real de la seccion)")  # PROBE
 
 # --- Tab 1: Series macro del BCCh ---
 _probe("S02 antes de: Indicadores macro")  # PROBE
