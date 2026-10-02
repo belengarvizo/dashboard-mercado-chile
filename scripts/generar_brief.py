@@ -13,6 +13,7 @@ Requiere la variable de entorno:
 """
 
 import os
+import re
 import sys
 import time
 from datetime import date, datetime, timedelta
@@ -35,6 +36,46 @@ MODELO_GEMINI = "gemini-3.6-flash"
 # gratis -- sin costo adicional. gemini-2.5-flash NO es una opción: la API
 # devuelve 404 "no longer available to new users" para esta key.
 MODELOS_GEMINI_FALLBACK = ["gemini-3.5-flash", "gemini-3.1-flash-lite"]
+
+# Un 429 de Gemini son DOS cosas muy distintas, y confundirlas costaba la
+# traducción bilingüe varios días al mes (verificado en errores_actualizacion:
+# "brief_traduccion / cuota / 429" el 2026-09-29, 09-30 y 10-01, con
+# contenido_bilingue vacío en los dos primeros):
+#
+#   a) el límite POR MINUTO del plan gratuito ("limit: 5" peticiones). El paso
+#      del brief hace 2 llamadas (brief + traducción) y cada reintento suma
+#      otra, así que se cruza con facilidad. La respuesta trae "Please retry
+#      in 40.4s": se despeja sola en menos de un minuto.
+#   b) la cuota diaria agotada, que NO se despeja hoy y donde reintentar solo
+#      quema tiempo del cron.
+#
+# La señal que las distingue es justamente esa espera sugerida. Antes el
+# código clasificaba las dos como "cuota" y se rendía de inmediato, así que
+# tiraba a la basura un brief que habría salido esperando 40 segundos.
+PATRON_ESPERA_SUGERIDA = re.compile(r"retry\s+in\s+([0-9]+(?:\.[0-9]+)?)\s*s", re.IGNORECASE)
+# Las comillas se aceptan simples o dobles: el SDK a veces imprime el detalle
+# como repr de dict de Python ('retryDelay': '30s') y a veces como JSON crudo
+# ("retryDelay": "30s").
+PATRON_RETRY_DELAY = re.compile(
+    r"['\"]?retryDelay['\"]?\s*[:=]\s*['\"]?([0-9]+(?:\.[0-9]+)?)s", re.IGNORECASE
+)
+# Tope por espera. El paso "brief" tiene un watchdog de pared en
+# actualizar_todo.py (LIMITE_SEGUNDOS_POR_FUENTE), así que esperar lo que pida
+# la API no puede ser ilimitado: si pide más que esto, se trata como cuota
+# agotada y se deja para mañana.
+TOPE_ESPERA_SUGERIDA_SEGUNDOS = 75
+# Cuántas veces se honra la espera sugerida con un mismo modelo. Dos alcanza
+# para el límite por minuto, que se renueva cada 60s.
+MAX_ESPERAS_POR_LIMITE_DE_TASA = 2
+# Techo DURO al tiempo total dormido en una llamada, sumando todos los modelos.
+# Sin esto el peor caso (3 modelos x 2 esperas x 75s) se iría a ~450s y se
+# comería el watchdog de pared del paso "brief" en actualizar_todo.py, que es
+# justamente la protección contra que el cron se cuelgue. Con el techo, el
+# peor caso por llamada queda en 150s de espera; el paso hace 2 llamadas
+# (brief + traducción), así que el peor caso del paso es ~300s de espera más
+# el trabajo real -- por eso el watchdog de "brief" se subió a 10 minutos.
+PRESUPUESTO_TOTAL_ESPERAS_SEGUNDOS = 150
+
 HORAS_VENTANA_TITULARES = 48
 # Cupo por FUENTE, no un corte único por fecha sobre todas juntas: con un
 # solo corte global, una fuente de mucho volumen (ej. Emol vía Google
@@ -247,6 +288,38 @@ def _clasificar_error_gemini(exc: Exception) -> str:
     return "otro"
 
 
+def _espera_sugerida_por_gemini(exc: Exception) -> float | None:
+    """Segundos que la propia API pide esperar antes de reintentar, o None.
+
+    Es lo que separa el límite por minuto (recuperable esperando un poco) de
+    la cuota diaria agotada (no se despeja hoy): solo el primero viene con una
+    espera sugerida. Se busca tanto en el texto ("Please retry in 40.4s") como
+    en el RetryInfo estructurado ("retryDelay: '40s'"), porque el formato
+    depende de la versión del SDK.
+
+    Devuelve None si no hay espera sugerida o si supera
+    TOPE_ESPERA_SUGERIDA_SEGUNDOS — en ambos casos conviene rendirse y dejarlo
+    para mañana en vez de comerse el watchdog del paso.
+    """
+    texto = str(exc)
+    detalles = getattr(exc, "details", None)
+    if detalles is not None:
+        texto = f"{texto} {detalles}"
+
+    for patron in (PATRON_RETRY_DELAY, PATRON_ESPERA_SUGERIDA):
+        encontrado = patron.search(texto)
+        if not encontrado:
+            continue
+        try:
+            segundos = float(encontrado.group(1))
+        except (TypeError, ValueError):
+            continue
+        if 0 < segundos <= TOPE_ESPERA_SUGERIDA_SEGUNDOS:
+            return segundos
+        return None
+    return None
+
+
 def _registrar_error_actualizacion(fuente: str, categoria: str, tipo: str, mensaje: str) -> None:
     """Best-effort: deja el detalle del error en la tabla errores_actualizacion
     para poder diagnosticar sin el log de Railway. Usa su propia sesión (la
@@ -292,19 +365,34 @@ def _texto_de_respuesta_gemini(respuesta) -> str:
 
 
 def _generar_contenido_brief(cliente, prompt: str) -> str:
-    """Llama a Gemini. Reintenta con backoff SOLO los fallos transitorios
-    (timeout / 5xx) contra el modelo principal; cuota agotada y respuestas
-    bloqueadas se relanzan de inmediato porque reintentar (con este modelo u
-    otro) no sirve. Si el principal agota sus reintentos y el fallo sigue
-    siendo transitorio, prueba una vez con cada modelo de
-    MODELOS_GEMINI_FALLBACK antes de darse por vencido."""
+    """Llama a Gemini, con tres tratamientos distintos según el tipo de fallo:
+
+    - TRANSITORIO (timeout / 5xx): reintenta con backoff, solo contra el
+      modelo principal. Si los agota, pasa al próximo modelo.
+    - LÍMITE POR MINUTO (429 CON espera sugerida): duerme exactamente lo que
+      pide la API y reintenta con el MISMO modelo, sin gastar un reintento
+      transitorio. Hasta MAX_ESPERAS_POR_LIMITE_DE_TASA veces por modelo y
+      dentro de PRESUPUESTO_TOTAL_ESPERAS_SEGUNDOS en total. Si el modelo
+      sigue limitado, pasa al próximo: el cupo es por modelo, lo dice el
+      propio error ("limit: 5, model: gemini-3.6-flash").
+    - CUOTA DIARIA (429 SIN espera sugerida) y respuesta BLOQUEADA: se
+      relanzan de inmediato. No se despejan hoy ni cambiando de modelo, y
+      reintentar solo quema tiempo del watchdog del cron.
+
+    La distinción entre los dos tipos de 429 es la que faltaba: antes los dos
+    caían en "cuota" y se abandonaba al instante, así que se perdía la
+    traducción bilingüe los días en que el paso cruzaba el límite por minuto.
+    """
     ultimo_error = None
+    segundos_dormidos = 0.0  # presupuesto compartido por todos los modelos
     for i, modelo in enumerate([MODELO_GEMINI] + MODELOS_GEMINI_FALLBACK):
         es_principal = i == 0
         reintentos = ESPERAS_REINTENTO_SEGUNDOS if es_principal else ()
         if not es_principal:
             print(f"  Probando con el modelo de respaldo '{modelo}'...")
-        for intento in range(len(reintentos) + 1):
+        intento = 0
+        esperas_por_tasa = 0
+        while True:
             try:
                 respuesta = cliente.models.generate_content(model=modelo, contents=prompt)
                 if not es_principal:
@@ -314,17 +402,52 @@ def _generar_contenido_brief(cliente, prompt: str) -> str:
                 raise  # el prompt no va a pasar por reintentar, con ningún modelo
             except Exception as e:
                 ultimo_error = e
-                if _clasificar_error_gemini(e) != "transitorio":
-                    raise  # no es un problema de demanda/timeout: otro modelo tampoco lo arregla
+                categoria = _clasificar_error_gemini(e)
+
+                if categoria == "cuota":
+                    espera_sugerida = _espera_sugerida_por_gemini(e)
+                    if espera_sugerida is None:
+                        # Sin espera sugerida: es la cuota diaria, no el límite
+                        # por minuto. No se despeja hoy ni cambiando de modelo.
+                        raise
+                    hay_presupuesto = (
+                        segundos_dormidos + espera_sugerida <= PRESUPUESTO_TOTAL_ESPERAS_SEGUNDOS
+                    )
+                    if esperas_por_tasa < MAX_ESPERAS_POR_LIMITE_DE_TASA and hay_presupuesto:
+                        esperas_por_tasa += 1
+                        segundos_dormidos += espera_sugerida
+                        print(f"  Gemini ({modelo}) pegó contra el límite por minuto; la API pide "
+                              f"{espera_sugerida:.0f}s — esperando "
+                              f"({esperas_por_tasa}/{MAX_ESPERAS_POR_LIMITE_DE_TASA}, "
+                              f"{segundos_dormidos:.0f}s de {PRESUPUESTO_TOTAL_ESPERAS_SEGUNDOS}s "
+                              f"del presupuesto)...")
+                        time.sleep(espera_sugerida + 1)  # +1s de margen sobre lo pedido
+                        continue  # mismo modelo, sin gastar un reintento transitorio
+                    if not hay_presupuesto:
+                        print(f"  Gemini ({modelo}) limitado por tasa, pero ya se agotó el "
+                              f"presupuesto de espera ({PRESUPUESTO_TOTAL_ESPERAS_SEGUNDOS}s); "
+                              f"no se espera más para no comerse el watchdog del paso.")
+                        raise
+                    # Agotadas las esperas de este modelo. El límite por minuto
+                    # es POR MODELO (el propio error lo dice: "limit: 5,
+                    # model: gemini-3.6-flash"), así que el siguiente arranca
+                    # con su propio cupo en vez de darnos por vencidos.
+                    print(f"  Gemini ({modelo}) sigue limitado por tasa tras "
+                          f"{esperas_por_tasa} esperas; paso al próximo modelo.")
+                    break
+
+                if categoria != "transitorio":
+                    raise  # no es demanda/timeout/tasa: otro modelo tampoco lo arregla
+
                 if intento < len(reintentos):
                     espera = reintentos[intento]
                     print(f"  Gemini ({modelo}) falló transitoriamente ({type(e).__name__}: {e}) — "
                           f"reintento {intento + 1}/{len(reintentos)} en {espera}s...")
                     time.sleep(espera)
-                else:
-                    print(f"  Gemini ({modelo}) falló transitoriamente ({type(e).__name__}: {e}).")
-                # si se agotaron los reintentos de este modelo, el for interno
-                # termina y el for externo pasa al próximo modelo (si queda uno)
+                    intento += 1
+                    continue
+                print(f"  Gemini ({modelo}) falló transitoriamente ({type(e).__name__}: {e}).")
+                break  # se agotaron los reintentos: pasa al próximo modelo (si queda)
     raise ultimo_error  # se agotaron el modelo principal y todos los de respaldo
 
 

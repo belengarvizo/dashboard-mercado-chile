@@ -35,13 +35,26 @@ DASHBOARD_PATH = os.path.join(os.path.dirname(__file__), "..", "app", "dashboard
 # así que cubre pd.Timestamp.now, datetime.datetime.now, date.today, etc.
 LLAMADAS_DE_RELOJ = ("Timestamp.now", "datetime.now", "date.today", "time.time")
 
-# PENDIENTE CONOCIDO, aceptado a propósito y no "ruido tolerado":
-# generar_pdf_brief_premercado estampa la hora de generación y la fecha en el
-# PDF. Tiene el mismo defecto (el PDF puede declarar una hora de hasta una
-# hora de antigüedad), pero se dejó fuera del arreglo inicial para no mezclar
-# un cambio en la generación de documentos con el arreglo de los indicadores.
-# Si se arregla, hay que sacarla de esta lista; si se agrega algo nuevo acá,
-# tiene que ser con una razón escrita, no para hacer pasar el test.
+# EXCEPCIÓN CORRECTA, no un pendiente: generar_pdf_brief_premercado.
+#
+# Acá el reloj congelado es el comportamiento que se quiere, y conviene
+# entender por qué, porque la diferencia con el resto es sutil.
+#
+# En las funciones que sí se arreglaron, el reloj se usa para CALCULAR un
+# valor que responde una pregunta sobre AHORA: cuántos días hábiles hace que
+# un precio no cambia. Esa respuesta crece sola con el paso del tiempo, así
+# que servirla congelada da un número falso.
+#
+# El PDF hace lo contrario: es una FOTO. Reusa las mismas cachés de datos que
+# la pestaña, así que su contenido es el de un instante concreto, y el
+# "Generated <hora>" del pie y el "As of <fecha>" de la portada estampan
+# precisamente ese instante. Un PDF generado a las 23:50 que dice "Generated
+# 23:50" es correcto aunque se descargue a las 00:10: esa ES la hora en que
+# se produjo. Pasarle la fecha por argumento no lo arreglaría; lo rompería,
+# porque el sello dejaría de coincidir con los datos que el documento trae.
+#
+# Si alguna vez se agrega algo nuevo a esta lista, tiene que ser con una razón
+# escrita como esta, no para hacer pasar el test.
 EXCEPCIONES_ACEPTADAS = {"generar_pdf_brief_premercado"}
 
 

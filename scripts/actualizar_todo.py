@@ -71,7 +71,14 @@ PASOS = [
 # comentario del módulo); noticias y el brief son fetches puntuales.
 LIMITE_SEGUNDOS_POR_FUENTE = {
     "noticias": 10 * 60,
-    "brief": 5 * 60,
+    # 10 min y no 5: el paso hace dos llamadas a Gemini (brief + traducción
+    # bilingüe) y cada una puede tener que dormir lo que pide la API cuando
+    # pega contra el límite de 5 peticiones por minuto del plan gratuito (ver
+    # PRESUPUESTO_TOTAL_ESPERAS_SEGUNDOS en generar_brief.py: hasta 150s de
+    # espera por llamada). Con el tope anterior de 5 min, honrar esas esperas
+    # habría hecho que el watchdog matara el paso justo cuando estaba por
+    # tener éxito.
+    "brief": 10 * 60,
     "bcch": 45 * 60,
     "yfinance": 45 * 60,
 }

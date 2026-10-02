@@ -187,10 +187,184 @@ def test_registrar_error_persiste_fila_en_la_bd():
     print("OK: _registrar_error_actualizacion persiste y es consultable")
 
 
+MENSAJE_LIMITE_POR_MINUTO = (
+    "429 RESOURCE_EXHAUSTED. {'error': {'code': 429, 'message': 'You exceeded your "
+    "current quota. * Quota exceeded for metric: "
+    "generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 5, "
+    "model: gemini-3.6-flash\\nPlease retry in 40.389909296s.', "
+    "'status': 'RESOURCE_EXHAUSTED'}}"
+)
+MENSAJE_CUOTA_DIARIA = (
+    "429 RESOURCE_EXHAUSTED. {'error': {'code': 429, 'message': 'You exceeded your "
+    "current quota, please check your plan and billing details.', "
+    "'status': 'RESOURCE_EXHAUSTED'}}"
+)
+
+
+def _sin_dormir_de_verdad():
+    """Reemplaza time.sleep y devuelve (lista_de_esperas, restaurar)."""
+    dormidas = []
+    original = gb.time.sleep
+    gb.time.sleep = lambda s: dormidas.append(s)
+    return dormidas, (lambda: setattr(gb.time, "sleep", original))
+
+
+def test_espera_sugerida_solo_cuando_la_api_la_indica():
+    """Es la señal que separa el límite por minuto (se despeja en segundos)
+    de la cuota diaria agotada (no se despeja hoy)."""
+    assert gb._espera_sugerida_por_gemini(Exception(MENSAJE_LIMITE_POR_MINUTO)) == 40.389909296
+    assert gb._espera_sugerida_por_gemini(Exception("retryDelay: '30s'")) == 30.0
+    assert gb._espera_sugerida_por_gemini(Exception('"retryDelay": "7s"')) == 7.0
+
+    # cuota diaria: sin espera sugerida
+    assert gb._espera_sugerida_por_gemini(Exception(MENSAJE_CUOTA_DIARIA)) is None
+    assert gb._espera_sugerida_por_gemini(_ErrorApiFalso(429, "RESOURCE_EXHAUSTED")) is None
+
+    # una espera absurda se trata como "no hay": esperar tanto se comería el
+    # watchdog del paso en actualizar_todo.py
+    excesiva = gb.TOPE_ESPERA_SUGERIDA_SEGUNDOS + 1
+    assert gb._espera_sugerida_por_gemini(Exception(f"Please retry in {excesiva}s")) is None
+    print("OK: la espera sugerida distingue limite por minuto de cuota diaria")
+
+
+def test_limite_por_minuto_espera_lo_que_pide_la_api_y_reintenta_igual_modelo():
+    """ESTE es el bug que se arregló: antes un 429 con espera sugerida se
+    abandonaba al instante y se perdía la traducción bilingüe del día
+    (observado en errores_actualizacion el 2026-09-29 y 09-30, con
+    contenido_bilingue vacío)."""
+    dormidas, restaurar = _sin_dormir_de_verdad()
+    try:
+        class _Cli:
+            def __init__(self):
+                self.modelos_usados = []
+                self.models = self
+
+            def generate_content(self, model, contents):
+                self.modelos_usados.append(model)
+                if len(self.modelos_usados) == 1:
+                    raise _ErrorApiFalso(429, MENSAJE_LIMITE_POR_MINUTO)
+                return type("R", (), {"text": "traducción que antes se perdía"})()
+
+        cli = _Cli()
+        salida = _generar_contenido_brief(cli, "prompt")
+        assert salida == "traducción que antes se perdía", salida
+        # esperó lo que pidió la API (40.39s) más el margen de 1s
+        assert len(dormidas) == 1 and 41 <= dormidas[0] <= 42, dormidas
+        # y reintentó con el MISMO modelo, sin saltar al de respaldo
+        assert cli.modelos_usados == [gb.MODELO_GEMINI, gb.MODELO_GEMINI], cli.modelos_usados
+    finally:
+        restaurar()
+    print("OK: el limite por minuto se espera y se reintenta con el mismo modelo")
+
+
+def test_cuota_diaria_sigue_sin_reintentarse():
+    """El arreglo no debe volver reintentable la cuota diaria: ahí esperar
+    solo quema el tiempo del cron, porque no se despeja hoy."""
+    dormidas, restaurar = _sin_dormir_de_verdad()
+    try:
+        class _Cli:
+            models = property(lambda self: self)
+
+            def generate_content(self, model, contents):
+                raise _ErrorApiFalso(429, MENSAJE_CUOTA_DIARIA)
+
+        try:
+            _generar_contenido_brief(_Cli(), "prompt")
+            assert False, "la cuota diaria deberia relanzarse"
+        except _ErrorApiFalso as e:
+            assert e.code == 429
+        assert dormidas == [], f"no deberia haber dormido por cuota diaria: {dormidas}"
+    finally:
+        restaurar()
+    print("OK: la cuota diaria se relanza sin esperar")
+
+
+def test_si_el_modelo_sigue_limitado_pasa_al_siguiente():
+    """El cupo por minuto es POR MODELO (el propio error dice
+    "limit: 5, model: gemini-3.6-flash"), así que agotadas las esperas
+    conviene probar el siguiente, que trae su propio cupo."""
+    dormidas, restaurar = _sin_dormir_de_verdad()
+    try:
+        class _Cli:
+            def __init__(self):
+                self.modelos_usados = []
+                self.models = self
+
+            def generate_content(self, model, contents):
+                self.modelos_usados.append(model)
+                if model == gb.MODELO_GEMINI:
+                    raise _ErrorApiFalso(429, MENSAJE_LIMITE_POR_MINUTO)
+                return type("R", (), {"text": "respondió el modelo de respaldo"})()
+
+        cli = _Cli()
+        salida = _generar_contenido_brief(cli, "prompt")
+        assert salida == "respondió el modelo de respaldo", salida
+        # el principal se intentó 1 + MAX_ESPERAS veces y después se cambió
+        esperados_principal = 1 + gb.MAX_ESPERAS_POR_LIMITE_DE_TASA
+        assert cli.modelos_usados[:esperados_principal] == [gb.MODELO_GEMINI] * esperados_principal
+        assert cli.modelos_usados[esperados_principal] == gb.MODELOS_GEMINI_FALLBACK[0]
+        assert len(dormidas) == gb.MAX_ESPERAS_POR_LIMITE_DE_TASA, dormidas
+    finally:
+        restaurar()
+    print("OK: agotadas las esperas, pasa al siguiente modelo")
+
+
+def test_el_tiempo_total_dormido_nunca_supera_el_presupuesto():
+    """Techo duro: el paso "brief" tiene un watchdog de pared, así que honrar
+    la espera de la API no puede volverse ilimitado aunque los tres modelos
+    estén limitados a la vez."""
+    dormidas, restaurar = _sin_dormir_de_verdad()
+    try:
+        class _Cli:
+            models = property(lambda self: self)
+
+            def generate_content(self, model, contents):
+                # el tope de espera, para forzar el peor caso
+                raise _ErrorApiFalso(
+                    429, f"Please retry in {gb.TOPE_ESPERA_SUGERIDA_SEGUNDOS}s"
+                )
+
+        try:
+            _generar_contenido_brief(_Cli(), "prompt")
+            assert False, "deberia terminar relanzando"
+        except _ErrorApiFalso:
+            pass
+        total = sum(dormidas)
+        margen = len(dormidas)  # el +1s de margen por espera
+        assert total - margen <= gb.PRESUPUESTO_TOTAL_ESPERAS_SEGUNDOS, (
+            f"durmió {total - margen}s, por encima del presupuesto de "
+            f"{gb.PRESUPUESTO_TOTAL_ESPERAS_SEGUNDOS}s"
+        )
+    finally:
+        restaurar()
+    print(f"OK: el total dormido respeta el presupuesto ({sum(dormidas):.0f}s)")
+
+
+def test_el_watchdog_del_paso_brief_deja_lugar_a_las_esperas():
+    """Si alguien baja el límite del paso sin mirar esto, el watchdog mataría
+    el brief justo cuando estaba por tener éxito tras esperar lo que pidió la
+    API. El paso hace 2 llamadas (brief + traducción)."""
+    from scripts.actualizar_todo import LIMITE_SEGUNDOS_POR_FUENTE
+
+    limite = LIMITE_SEGUNDOS_POR_FUENTE["brief"]
+    peor_caso_esperando = 2 * gb.PRESUPUESTO_TOTAL_ESPERAS_SEGUNDOS
+    assert limite > peor_caso_esperando, (
+        f"el watchdog del paso 'brief' es {limite}s pero solo esperando por límite de "
+        f"tasa se pueden ir {peor_caso_esperando}s, sin contar el trabajo real"
+    )
+    print(f"OK: watchdog {limite}s > peor caso de espera {peor_caso_esperando}s")
+
+
 if __name__ == "__main__":
     test_clasificacion_por_tipo_de_error()
     test_texto_de_respuesta_bloqueada_lanza_briefbloqueado()
     test_reintenta_solo_transitorios()
     test_prueba_modelos_de_respaldo_si_el_principal_agota_reintentos()
     test_registrar_error_persiste_fila_en_la_bd()
-    print("OK: las cinco pruebas pasaron.")
+    test_espera_sugerida_solo_cuando_la_api_la_indica()
+    test_limite_por_minuto_espera_lo_que_pide_la_api_y_reintenta_igual_modelo()
+    test_cuota_diaria_sigue_sin_reintentarse()
+    test_si_el_modelo_sigue_limitado_pasa_al_siguiente()
+    test_el_tiempo_total_dormido_nunca_supera_el_presupuesto()
+    test_el_watchdog_del_paso_brief_deja_lugar_a_las_esperas()
+    print("OK: las once pruebas pasaron.")
