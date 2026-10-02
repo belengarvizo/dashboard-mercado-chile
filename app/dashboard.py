@@ -57,7 +57,7 @@ from market_data import (
     validar_atribucion_out_of_sample,
     INDICADORES_PREMERCADO,
 )
-from calendario_economico import proximos_eventos, NOTA_VIGENCIA, INDICADOR_POR_TIPO, CALENDARIO_VERIFICADO_AL
+from calendario_economico import proximos_eventos, cobertura_por_tipo, INDICADOR_POR_TIPO, CALENDARIO_VERIFICADO_AL
 from glosario import (
     nombre_completo,
     explicacion_rendimiento,
@@ -2938,9 +2938,19 @@ if _seccion == "Brief Premercado":
                 )
 
         st.caption(
+            # El alcance se calcula de los propios datos. Antes era una frase
+            # fija ("the 2027 FOMC calendar is published in December 2026 —
+            # update then") y quedó mintiendo apenas se cargó el FOMC 2027.
             f"Calendar verified as of {CALENDARIO_VERIFICADO_AL.strftime('%Y-%m-%d')}. "
-            "The 2027 Monetary Policy Meeting calendar is published in September 2026, "
-            "and the 2027 FOMC calendar in December 2026 — update then."
+            "Only dates published by the issuing body — nothing estimated. Loaded through: "
+            + ", ".join(
+                f"{tipo} {hasta.strftime('%b %Y')}"
+                for tipo, hasta in sorted(
+                    cobertura_por_tipo().items(), key=lambda kv: kv[1], reverse=True
+                )
+                if hasta >= hoy
+            )
+            + "."
         )
         st.caption(
             "OPEC+ meetings don't follow a fixed annual calendar (unlike central banks): "

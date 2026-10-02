@@ -16,7 +16,7 @@ import calendario_economico as cal
 
 
 def _por_tipo(tipo):
-    return [e for e in cal.EVENTOS_2026 if e.tipo == tipo]
+    return [e for e in cal.EVENTOS if e.tipo == tipo]
 
 
 def test_ipc_todos_a_las_08_00():
