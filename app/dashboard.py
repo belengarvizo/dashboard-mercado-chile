@@ -2236,6 +2236,8 @@ if _SOLO_LABFIN:
     st.stop()
 
 # --- Sidebar: info de última actualización ---
+AUTORA = "Belén Muñoz Garvizo"
+
 with st.sidebar:
     st.subheader("Última actualización")
     try:
@@ -2244,6 +2246,13 @@ with st.sidebar:
             st.text(f"{fila['fuente']}: {fila['ultima_actualizacion']}")
     except Exception:
         st.warning("Aún no hay datos cargados. Corre los scripts de actualización primero.")
+
+    # Autoría, al pie del sidebar: visible en todas las secciones sin competir
+    # con los datos. Va dentro de este bloque a propósito, porque la vista
+    # aislada del Laboratorio Financiero (?vista=labfin) corta antes con
+    # st.stop() y no debe mostrar sidebar — ver tests/test_labfin_view.py.
+    st.divider()
+    st.caption(f"Creado por **{AUTORA}**")
 
 # --- Barra de última actualización (visible arriba, antes de las pestañas) ---
 NOMBRES_FUENTE = {"bcch": "Banco Central de Chile", "yfinance": "Yahoo Finance"}

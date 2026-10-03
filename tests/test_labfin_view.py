@@ -30,6 +30,7 @@ load_dotenv()  # no pisa una DATABASE_URL ya presente en el entorno
 DASHBOARD_PATH = os.path.join(os.path.dirname(__file__), "..", "app", "dashboard.py")
 LAB_HEADER = "Laboratorio Financiero — Frontera Media-Varianza"
 SECCION_LABFIN = "Laboratorio Financiero"
+AUTORA_ESPERADA = "Belén Muñoz Garvizo"
 
 
 def _texto_visible(at):
@@ -86,6 +87,37 @@ def test_vista_aislada_labfin_renderiza_solo_el_laboratorio():
     assert not coladas, f"la vista aislada dejo pasar contenido de otras secciones: {coladas}"
 
 
+def test_la_autoria_aparece_en_el_sidebar():
+    """El crédito de autoría va al pie del sidebar, así que se ve en todas
+    las secciones. Si alguien reordena el sidebar y lo pierde, esto falla."""
+    at = AppTest.from_file(DASHBOARD_PATH, default_timeout=420).run(timeout=420)
+    assert not at.exception, f"La app lanzo una excepcion: {at.exception}"
+
+    texto = _texto_sidebar(at)
+    # El nombre va literal y no importado de app.dashboard: importar ese
+    # módulo ejecutaría el script entero fuera de Streamlit, y además un test
+    # que compara la constante consigo misma pasaría aunque el nombre quedara
+    # mal escrito.
+    assert AUTORA_ESPERADA in texto, (
+        f"falta el crédito de autoría ({AUTORA_ESPERADA!r}) en el sidebar. Texto del "
+        f"sidebar: {texto[:300]!r}"
+    )
+    assert "Creado por" in texto, "falta la frase 'Creado por' junto al nombre"
+
+
+def test_la_autoria_no_se_cuela_en_la_vista_aislada():
+    """La vista ?vista=labfin no tiene sidebar: es un link para mostrar solo
+    el Laboratorio Financiero, y su contrato es que no renderiza nada del
+    layout normal."""
+    at = AppTest.from_file(DASHBOARD_PATH, default_timeout=420)
+    at.query_params["vista"] = "labfin"
+    at.run(timeout=420)
+    assert not at.exception, f"La vista aislada lanzo una excepcion: {at.exception}"
+    assert _texto_sidebar(at).strip() == "", (
+        "la vista aislada no debería mostrar el sidebar, ni siquiera la autoría"
+    )
+
+
 def test_valor_de_vista_desconocido_se_comporta_como_dashboard_normal():
     """Solo ?vista=labfin activa la vista aislada; cualquier otro valor
     cae al dashboard completo."""
@@ -100,5 +132,7 @@ def test_valor_de_vista_desconocido_se_comporta_como_dashboard_normal():
 if __name__ == "__main__":
     test_dashboard_normal_sin_query_param()
     test_vista_aislada_labfin_renderiza_solo_el_laboratorio()
+    test_la_autoria_aparece_en_el_sidebar()
+    test_la_autoria_no_se_cuela_en_la_vista_aislada()
     test_valor_de_vista_desconocido_se_comporta_como_dashboard_normal()
-    print("OK: las tres pruebas pasaron.")
+    print("OK: las cinco pruebas pasaron.")
