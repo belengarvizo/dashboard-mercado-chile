@@ -96,9 +96,19 @@ VENTANA_LIQUIDEZ = pd.DateOffset(months=3)
 MULTIPLICADOR_LIQUIDEZ = 1.3
 
 
+# El crédito va en DOS lugares a propósito, y no es redundancia: en pantallas
+# angostas (celular) Streamlit colapsa el sidebar fuera de la pantalla
+# (medido: x=-300, ancho=0 a 390px), así que el crédito del sidebar queda
+# escondido detrás del botón de menú y no se ve nunca. Bajo el título se ve
+# siempre, en cualquier ancho.
+AUTORA = "Belén Muñoz Garvizo"
+
 if not _SOLO_LABFIN:
     st.title("Mercado Económico Chileno")
-    st.caption("Datos del Banco Central de Chile y Yahoo Finance, actualizados diariamente")
+    st.caption(
+        "Datos del Banco Central de Chile y Yahoo Finance, actualizados diariamente"
+        f" · Creado por **{AUTORA}**"
+    )
 
 engine = get_engine()
 
@@ -2236,8 +2246,6 @@ if _SOLO_LABFIN:
     st.stop()
 
 # --- Sidebar: info de última actualización ---
-AUTORA = "Belén Muñoz Garvizo"
-
 with st.sidebar:
     st.subheader("Última actualización")
     try:

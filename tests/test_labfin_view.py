@@ -105,6 +105,25 @@ def test_la_autoria_aparece_en_el_sidebar():
     assert "Creado por" in texto, "falta la frase 'Creado por' junto al nombre"
 
 
+def test_la_autoria_se_ve_sin_depender_del_sidebar():
+    """El crédito del sidebar NO alcanza por sí solo: en pantallas angostas
+    Streamlit colapsa el sidebar fuera de la pantalla (medido en producción a
+    390px de ancho: x=-300, ancho=0), así que desde el celular queda escondido
+    detrás del botón de menú y no se ve nunca. Por eso va también bajo el
+    título, en el cuerpo principal, que se ve en cualquier ancho.
+
+    Este test mira SOLO el cuerpo, sin el sidebar, que es justo lo que ve
+    alguien desde el teléfono."""
+    at = AppTest.from_file(DASHBOARD_PATH, default_timeout=420).run(timeout=420)
+    assert not at.exception, f"La app lanzo una excepcion: {at.exception}"
+
+    cuerpo = _texto_visible(at)
+    assert AUTORA_ESPERADA in cuerpo, (
+        "el crédito no aparece en el cuerpo principal, así que en celular "
+        "(sidebar colapsado) no se vería. Debe ir también bajo el título."
+    )
+
+
 def test_la_autoria_no_se_cuela_en_la_vista_aislada():
     """La vista ?vista=labfin no tiene sidebar: es un link para mostrar solo
     el Laboratorio Financiero, y su contrato es que no renderiza nada del
@@ -133,6 +152,7 @@ if __name__ == "__main__":
     test_dashboard_normal_sin_query_param()
     test_vista_aislada_labfin_renderiza_solo_el_laboratorio()
     test_la_autoria_aparece_en_el_sidebar()
+    test_la_autoria_se_ve_sin_depender_del_sidebar()
     test_la_autoria_no_se_cuela_en_la_vista_aislada()
     test_valor_de_vista_desconocido_se_comporta_como_dashboard_normal()
-    print("OK: las cinco pruebas pasaron.")
+    print("OK: las seis pruebas pasaron.")
