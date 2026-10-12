@@ -89,6 +89,136 @@ def peor_racha_perdidas(resultados) -> int:
     return peor
 
 
+# ----------------------------------------------------- antimartingala
+SIN_AVISO, AVISO_SUBIO, SIN_DATO = "ninguno", "aviso", "sin_dato"
+
+TEXTO_ANTIMARTINGALA = (
+    "Subir el tamaño después de perder es el patrón que más rápido destruye una "
+    "cuenta: convierte una racha de pérdidas normal en una racha de pérdidas "
+    "crecientes, y el pozo se hace más hondo justo cuando menos capital queda "
+    "para salir."
+)
+
+
+def ultima_cerrada(operaciones):
+    """La operación CERRADA más reciente, por fecha de cierre.
+
+    Las abiertas no sirven de comparación: todavía no tienen resultado, así
+    que no se sabe si fueron pérdida.
+    """
+    cerradas = [op for op in (operaciones or [])
+                if op.get("fecha_cierre") is not None
+                and op.get("fecha_cierre") == op.get("fecha_cierre")]  # descarta NaT
+    if not cerradas:
+        return None
+    try:
+        return max(cerradas, key=lambda op: op["fecha_cierre"])
+    except TypeError:
+        # Fechas de tipos mezclados: queda la última tal como vino.
+        return cerradas[-1]
+
+
+@dataclass
+class Antimartingala:
+    """El resultado del chequeo. `nivel` es SIN_AVISO, AVISO_SUBIO o SIN_DATO.
+
+    SIN_DATO no es lo mismo que SIN_AVISO: quiere decir que la operación
+    anterior no tiene cargado el riesgo o el resultado, así que no se puede
+    comparar. Callarlo sería dar por buena una comparación que no se hizo.
+    """
+    nivel: str = SIN_AVISO
+    texto: str = ""
+    riesgo_anterior: Decimal = None
+    resultado_anterior: Decimal = None
+    riesgo_nuevo: Decimal = None
+
+    @property
+    def avisa(self) -> bool:
+        return self.nivel == AVISO_SUBIO
+
+
+def aviso_antimartingala(riesgo_nuevo, operaciones) -> Antimartingala:
+    """Avisa si el riesgo que se va a tomar SUPERA el de la operación
+    anterior Y esa anterior fue una pérdida.
+
+    Estrictamente mayor: repetir el mismo tamaño después de perder no es
+    antimartingala, es mantener el plan.
+
+    Es un AVISO, nunca un bloqueo: la función solo describe, no decide.
+    """
+    nuevo = _d(riesgo_nuevo)
+    if nuevo is None or nuevo <= 0:
+        return Antimartingala(SIN_AVISO)
+
+    anterior = ultima_cerrada(operaciones)
+    if anterior is None:
+        # Sin operaciones cerradas no hay con qué comparar, y eso no es una
+        # falta de datos: es el primer trade.
+        return Antimartingala(SIN_AVISO, riesgo_nuevo=nuevo)
+
+    resultado = _d(anterior.get("resultado_clp"))
+    riesgo_anterior = _d(anterior.get("riesgo_clp"))
+    instrumento = anterior.get("instrumento") or "la anterior"
+
+    if resultado is None or riesgo_anterior is None or riesgo_anterior <= 0:
+        falta = "el resultado" if resultado is None else "el riesgo"
+        return Antimartingala(
+            SIN_DATO,
+            f"No se puede comparar con la operación anterior ({instrumento}): le "
+            f"falta {falta}. Cárgalo en el diario si quieres que este aviso "
+            f"funcione.",
+            riesgo_anterior, resultado, nuevo)
+
+    if resultado >= 0:
+        return Antimartingala(SIN_AVISO, riesgo_nuevo=nuevo,
+                              riesgo_anterior=riesgo_anterior,
+                              resultado_anterior=resultado)
+
+    if nuevo <= riesgo_anterior:
+        return Antimartingala(SIN_AVISO, riesgo_nuevo=nuevo,
+                              riesgo_anterior=riesgo_anterior,
+                              resultado_anterior=resultado)
+
+    subida = (nuevo - riesgo_anterior) / riesgo_anterior * 100
+    return Antimartingala(
+        AVISO_SUBIO,
+        f"**Estás subiendo el tamaño después de perder.** La operación anterior "
+        f"({instrumento}) cerró con una pérdida de {abs(resultado):,.0f} CLP "
+        f"arriesgando {riesgo_anterior:,.0f}, y esta la estás dimensionando en "
+        f"{nuevo:,.0f}, un {subida:.0f}% más. {TEXTO_ANTIMARTINGALA}",
+        riesgo_anterior, resultado, nuevo)
+
+
+def veces_que_subio_despues_de_perder(operaciones) -> tuple:
+    """(veces, comparaciones_posibles) sobre el diario ya registrado.
+
+    Recorre las operaciones cerradas en orden cronológico y cuenta los pares
+    consecutivos donde la anterior perdió y la siguiente arriesgó más. El
+    segundo número dice sobre cuántos pares se pudo mirar: sin él, un 0 no
+    distingue "nunca pasó" de "no se pudo revisar".
+    """
+    cerradas = [op for op in (operaciones or [])
+                if op.get("fecha_cierre") is not None
+                and op.get("fecha_cierre") == op.get("fecha_cierre")]
+    try:
+        cerradas = sorted(cerradas, key=lambda op: op["fecha_cierre"])
+    except TypeError:
+        pass
+    veces = comparables = 0
+    for previa, siguiente in zip(cerradas, cerradas[1:]):
+        resultado = _d(previa.get("resultado_clp"))
+        riesgo_previo = _d(previa.get("riesgo_clp"))
+        riesgo_siguiente = _d(siguiente.get("riesgo_clp"))
+        if resultado is None or riesgo_previo is None or riesgo_siguiente is None:
+            continue
+        if riesgo_previo <= 0:
+            continue
+        comparables += 1
+        if resultado < 0 and riesgo_siguiente > riesgo_previo:
+            veces += 1
+    return veces, comparables
+
+
 @dataclass
 class Estadisticas:
     n: int

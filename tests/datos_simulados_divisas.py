@@ -140,3 +140,53 @@ def interceptar(pd_modulo):
         return real(sql, *a, **kw)
 
     return reemplazo
+
+
+# --------------------------------------------- escenario de antimartingala
+# UNA sola operación cerrada, con pérdida y con un riesgo MENOR al que el
+# calculador propone por defecto. Sin estado de cuenta a propósito: así la
+# base del calculador es el capital inicial de 10.000.000 y el riesgo por
+# defecto (1%) son 100.000, que superan los 50.000 de la operación previa.
+RIESGO_PREVIO = 50000.0
+
+
+def operacion_cerrada(resultado: float, riesgo: float = RIESGO_PREVIO) -> pd.DataFrame:
+    fila = {c: None for c in COLUMNAS_OPERACIONES}
+    fila.update({
+        "id": 1,
+        "instrumento": "EURUSD",
+        "categoria": "divisas",
+        "direccion": "compra",
+        "fecha_apertura": pd.Timestamp("2026-10-09 09:00:00", tz="America/Santiago"),
+        "fecha_cierre": pd.Timestamp("2026-10-09 15:00:00", tz="America/Santiago"),
+        "precio_entrada": 1.1200,
+        "precio_salida": 1.1150,
+        "lotes": 0.05,
+        "margen_clp": 90000.0,
+        "riesgo_clp": riesgo,
+        "resultado_clp": resultado,
+        "duracion_segundos": 21600,
+        "tesis": "Operación simulada para revisar la pantalla.",
+        "notas": "SIMULADA",
+    })
+    return pd.DataFrame([fila], columns=COLUMNAS_OPERACIONES)
+
+
+def interceptar_una_cerrada(pd_modulo, resultado: float, riesgo: float = RIESGO_PREVIO):
+    """Como `interceptar`, pero con UNA operación cerrada y sin equity."""
+    real = pd_modulo.read_sql
+
+    def reemplazo(sql, *a, **kw):
+        texto = str(sql)
+        if "FROM trading_operaciones" in texto:
+            return operacion_cerrada(resultado, riesgo)
+        if "FROM trading_estado_cuenta" in texto:
+            return estado_cuenta().iloc[0:0]      # vacío: base = capital inicial
+        if "FROM precios_acciones" in texto:
+            parametros = kw.get("params") or {}
+            pedidos = parametros.get("tickers") or []
+            if any(str(t).endswith("=X") for t in pedidos):
+                return precios()
+        return real(sql, *a, **kw)
+
+    return reemplazo

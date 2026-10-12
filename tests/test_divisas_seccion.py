@@ -161,6 +161,48 @@ def test_la_tabla_de_recuperacion_es_una_referencia_y_no_un_bloqueo():
     assert "es una referencia para dimensionar, no una señal" in texto.lower()
 
 
+def test_avisa_si_subes_el_tamano_despues_de_perder(monkeypatch):
+    """El diario real está en cero, así que el escenario va simulado: UNA
+    operación cerrada con pérdida que arriesgó 50.000, contra el 1% por
+    defecto del calculador sobre el capital inicial, que son 100.000."""
+    import pandas as pd
+
+    import datos_simulados_divisas as sim
+
+    monkeypatch.setattr(pd, "read_sql", sim.interceptar_una_cerrada(pd, -50000.0))
+    at = _correr()
+    avisos = " || ".join(str(w.value) for w in at.warning)
+    assert "subiendo el tamaño después de perder" in avisos, avisos[:600]
+    assert "50,000" in avisos and "100,000" in avisos
+    assert "100% más" in avisos, avisos[:600]
+    # El texto dice POR QUÉ importa, no solo que pasó.
+    assert "destruye una cuenta" in avisos
+    # Y deja claro que no bloquea.
+    assert "Es un aviso, no un bloqueo" in avisos
+
+
+def test_no_avisa_si_la_operacion_anterior_gano(monkeypatch):
+    """Subir el tamaño después de ganar es lo contrario del patrón."""
+    import pandas as pd
+
+    import datos_simulados_divisas as sim
+
+    monkeypatch.setattr(pd, "read_sql", sim.interceptar_una_cerrada(pd, 40000.0))
+    at = _correr()
+    avisos = " || ".join(str(w.value) for w in at.warning)
+    assert "subiendo el tamaño" not in avisos, avisos[:600]
+
+
+def test_el_aviso_de_antimartingala_no_bloquea_nada():
+    with open(DASHBOARD_PATH, encoding="utf-8") as f:
+        codigo = f.read()
+    inicio = codigo.index("def _trd_aviso_antimartingala(")
+    bloque = codigo[inicio:codigo.index("\ndef ", inicio + 10)]
+    for prohibido in ("st.stop()", "raise ", "return False", "disabled=True"):
+        assert prohibido not in bloque, (
+            f"el aviso de antimartingala contiene {prohibido!r}: avisa, no bloquea")
+
+
 def test_el_riesgo_agrupado_aparece_junto_al_riesgo_total():
     """El control de arriba suma el riesgo por instrumento y no ve que dos
     posiciones correlacionadas son la misma apuesta. El bloque nuevo va

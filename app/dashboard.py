@@ -93,13 +93,16 @@ from trading_proceso import (
     AVISO_POCAS,
     CALIDADES,
     PREGUNTAS_CHECKLIST,
+    SIN_DATO,
     TENDENCIAS,
+    aviso_antimartingala,
     cuadro_decision_resultado,
     estadisticas,
     estadisticas_por,
     evaluar_checklist,
     eventos_torneo_con_fecha,
     r_multiplo,
+    veces_que_subio_despues_de_perder,
     valor_esperado_pips,
     validar_probabilidades,
 )
@@ -4394,6 +4397,44 @@ def _trd_revision_semanal(cerradas) -> None:
             st.error(f"No se pudo guardar: {e}")
 
 
+def _trd_aviso_antimartingala(riesgo_clp, operaciones) -> None:
+    """Avisa si el tamaño que estás eligiendo es mayor que el de la operación
+    anterior Y esa anterior fue una pérdida.
+
+    AVISA, NO BLOQUEA. No impide calcular, ni registrar, ni cerrar nada: la
+    decisión es tuya. Lo único que hace es poner el patrón a la vista en el
+    momento en que se está por repetir.
+    """
+    registros = operaciones.to_dict("records") if not operaciones.empty else []
+    chequeo = aviso_antimartingala(riesgo_clp, registros)
+
+    if chequeo.nivel == SIN_DATO:
+        st.caption(chequeo.texto)
+        return
+
+    if chequeo.avisa:
+        st.warning(
+            chequeo.texto +
+            "\n\nEs un aviso, no un bloqueo: si tienes una razón para subir el "
+            "tamaño, súbelo. Lo que no conviene es subirlo *porque* perdiste."
+        )
+
+    veces, comparables = veces_que_subio_despues_de_perder(registros)
+    if not comparables:
+        return
+    if veces:
+        st.caption(
+            f"En tu diario ya pasó **{veces}** de {comparables} veces que se pudo "
+            f"revisar: una operación que arriesgó más que la anterior, después de "
+            f"que la anterior perdiera."
+        )
+    elif not chequeo.avisa:
+        st.caption(
+            f"En tu diario no pasó ninguna vez en las {comparables} comparaciones "
+            f"que se pudieron hacer."
+        )
+
+
 def _trd_tabla_recuperacion(riesgo_clp, capital_clp) -> None:
     """Cuánto hay que ganar para volver, al lado del riesgo calculado.
 
@@ -4821,6 +4862,7 @@ def render_divisas():
     # así que la tabla sirve igual aunque el cálculo de lotes se haya negado
     # por falta del tamaño del pip.
     _trd_tabla_recuperacion(riesgo_clp, base_riesgo)
+    _trd_aviso_antimartingala(riesgo_clp, operaciones)
 
     # -------------------------------------------------------------- diario
     st.divider()

@@ -260,3 +260,160 @@ def test_valor_esperado_con_el_movimiento_sin_completar():
         {"escenario": "b", "probabilidad": 50, "movimiento_pips": float("nan")},
     ]
     assert valor_esperado_pips(con_nan) is None
+
+
+# ============================================================ antimartingala
+# Subir el tamaño después de perder. El aviso tiene que dispararse SOLO
+# cuando se cumplen las dos condiciones a la vez: la anterior perdió y esta
+# arriesga más. Cualquier otra combinación es silencio, salvo que falten
+# datos, que es un tercer estado distinto de los otros dos.
+from trading_proceso import (  # noqa: E402
+    AVISO_SUBIO,
+    SIN_AVISO,
+    SIN_DATO,
+    Antimartingala,
+    aviso_antimartingala,
+    ultima_cerrada,
+    veces_que_subio_despues_de_perder,
+)
+
+
+def _op(instrumento="EURUSD", cierre="2026-10-10", resultado=None, riesgo=None):
+    return {"instrumento": instrumento, "fecha_cierre": cierre,
+            "resultado_clp": resultado, "riesgo_clp": riesgo}
+
+
+def test_sin_operaciones_previas_no_avisa():
+    """La primera operación no tiene con qué compararse. Eso no es falta de
+    datos: es el primer trade."""
+    assert aviso_antimartingala(Decimal("100000"), []).nivel == SIN_AVISO
+    assert aviso_antimartingala(Decimal("100000"), None).nivel == SIN_AVISO
+
+
+def test_si_la_anterior_gano_no_avisa_aunque_subas_el_tamano():
+    """Subir después de ganar es lo contrario de la antimartingala."""
+    previa = [_op(resultado=50000, riesgo=100000)]
+    assert aviso_antimartingala(Decimal("300000"), previa).nivel == SIN_AVISO
+
+
+def test_un_resultado_de_cero_no_es_perdida():
+    previa = [_op(resultado=0, riesgo=100000)]
+    assert aviso_antimartingala(Decimal("200000"), previa).nivel == SIN_AVISO
+
+
+def test_si_la_anterior_perdio_y_subes_el_tamano_avisa():
+    previa = [_op(resultado=-80000, riesgo=100000)]
+    a = aviso_antimartingala(Decimal("150000"), previa)
+    assert a.nivel == AVISO_SUBIO and a.avisa
+    assert "subiendo el tamaño después de perder" in a.texto
+    assert "50% más" in a.texto, a.texto
+    # El texto tiene que decir POR QUÉ importa, no solo que pasó.
+    assert "destruye una cuenta" in a.texto
+
+
+def test_repetir_el_mismo_tamano_despues_de_perder_no_es_antimartingala():
+    """Mantener el plan no es subir la apuesta. Estrictamente mayor."""
+    previa = [_op(resultado=-80000, riesgo=100000)]
+    assert aviso_antimartingala(Decimal("100000"), previa).nivel == SIN_AVISO
+
+
+def test_bajar_el_tamano_despues_de_perder_tampoco_avisa():
+    previa = [_op(resultado=-80000, riesgo=100000)]
+    assert aviso_antimartingala(Decimal("50000"), previa).nivel == SIN_AVISO
+
+
+def test_sin_el_riesgo_o_el_resultado_de_la_anterior_no_se_puede_comparar():
+    """Tercer estado: no es que no haya aviso, es que no se pudo mirar.
+    Callarlo daría por buena una comparación que no se hizo."""
+    sin_resultado = [_op(resultado=None, riesgo=100000)]
+    a = aviso_antimartingala(Decimal("200000"), sin_resultado)
+    assert a.nivel == SIN_DATO and not a.avisa
+    assert "el resultado" in a.texto
+
+    sin_riesgo = [_op(resultado=-50000, riesgo=None)]
+    b = aviso_antimartingala(Decimal("200000"), sin_riesgo)
+    assert b.nivel == SIN_DATO
+    assert "el riesgo" in b.texto
+
+
+def test_un_nulo_de_la_base_llega_como_nan():
+    """pandas convierte el NULL de SQL en NaN, que es un float: `is None` no
+    lo ve. Ya pasó antes en este proyecto."""
+    nan = float("nan")
+    assert aviso_antimartingala(Decimal("200000"), [_op(resultado=nan, riesgo=100000)]).nivel == SIN_DATO
+    assert aviso_antimartingala(Decimal("200000"), [_op(resultado=-5000, riesgo=nan)]).nivel == SIN_DATO
+    assert aviso_antimartingala(nan, [_op(resultado=-5000, riesgo=100000)]).nivel == SIN_AVISO
+
+
+def test_un_riesgo_anterior_en_cero_no_sirve_para_comparar():
+    """Dividir por cero al calcular el porcentaje de subida."""
+    a = aviso_antimartingala(Decimal("200000"), [_op(resultado=-5000, riesgo=0)])
+    assert a.nivel == SIN_DATO
+
+
+def test_la_comparacion_es_contra_la_ultima_CERRADA():
+    """Una posición abierta todavía no tiene resultado: no puede ser la
+    pérdida que gatilla el aviso."""
+    operaciones = [
+        _op("EURUSD", "2026-10-05", resultado=-90000, riesgo=100000),
+        {"instrumento": "GBPUSD", "fecha_cierre": None,
+         "resultado_clp": None, "riesgo_clp": 300000},
+    ]
+    a = aviso_antimartingala(Decimal("150000"), operaciones)
+    assert a.nivel == AVISO_SUBIO
+    assert "EURUSD" in a.texto, "comparó contra la posición abierta"
+
+
+def test_toma_la_mas_reciente_y_no_la_primera_de_la_lista():
+    operaciones = [
+        _op("EURUSD", "2026-10-01", resultado=-90000, riesgo=100000),
+        _op("GBPUSD", "2026-10-09", resultado=40000, riesgo=100000),
+    ]
+    # La más reciente ganó, así que no hay aviso aunque la vieja perdiera.
+    assert aviso_antimartingala(Decimal("250000"), operaciones).nivel == SIN_AVISO
+    assert ultima_cerrada(operaciones)["instrumento"] == "GBPUSD"
+
+
+def test_ultima_cerrada_descarta_las_abiertas_y_los_NaT():
+    assert ultima_cerrada([]) is None
+    abiertas = [{"instrumento": "X", "fecha_cierre": None},
+                {"instrumento": "Y", "fecha_cierre": float("nan")}]
+    assert ultima_cerrada(abiertas) is None
+
+
+def test_cuenta_cuantas_veces_ya_paso_en_el_diario():
+    """El segundo número dice sobre cuántos pares se pudo mirar: sin él, un 0
+    no distingue 'nunca pasó' de 'no se pudo revisar'."""
+    diario = [
+        _op("A", "2026-10-01", resultado=-50000, riesgo=100000),
+        _op("B", "2026-10-02", resultado=-30000, riesgo=150000),   # subió tras perder
+        _op("C", "2026-10-03", resultado=70000, riesgo=200000),    # subió tras perder
+        _op("D", "2026-10-04", resultado=-10000, riesgo=120000),   # bajó tras ganar
+        _op("E", "2026-10-05", resultado=20000, riesgo=120000),    # igual tras perder
+    ]
+    veces, comparables = veces_que_subio_despues_de_perder(diario)
+    assert (veces, comparables) == (2, 4)
+
+
+def test_el_conteo_distingue_cero_de_no_haber_podido_mirar():
+    sin_datos = [
+        _op("A", "2026-10-01", resultado=None, riesgo=None),
+        _op("B", "2026-10-02", resultado=None, riesgo=None),
+    ]
+    assert veces_que_subio_despues_de_perder(sin_datos) == (0, 0)
+    assert veces_que_subio_despues_de_perder([]) == (0, 0)
+
+    nunca = [
+        _op("A", "2026-10-01", resultado=-50000, riesgo=100000),
+        _op("B", "2026-10-02", resultado=-30000, riesgo=80000),
+    ]
+    assert veces_que_subio_despues_de_perder(nunca) == (0, 1)
+
+
+def test_el_aviso_describe_y_no_decide():
+    """Es un aviso, nunca un bloqueo: la función no tiene forma de impedir
+    nada, solo devuelve texto."""
+    a = aviso_antimartingala(Decimal("150000"), [_op(resultado=-80000, riesgo=100000)])
+    assert isinstance(a, Antimartingala)
+    assert isinstance(a.texto, str)
+    assert "no" not in a.nivel or a.nivel in (SIN_AVISO, AVISO_SUBIO, SIN_DATO)
