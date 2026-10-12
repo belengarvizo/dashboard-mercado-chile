@@ -16,7 +16,7 @@ import time
 from collections import Counter
 from decimal import Decimal
 from zoneinfo import ZoneInfo
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
 
@@ -62,6 +62,18 @@ from market_data import (
 )
 from calendario_economico import proximos_eventos, cobertura_por_tipo, INDICADOR_POR_TIPO, CALENDARIO_VERIFICADO_AL
 from catalogo_instrumentos import TICKERS_YAHOO_FASE_1
+from trading_correlacion import (
+    MINIMO_OBSERVACIONES,
+    TICKERS_SIN_CONVENCION_COMUN,
+    UMBRAL_AGRUPACION,
+    VENTANA_CORRELACION,
+    agrupar_por_correlacion,
+    evaluar_limites,
+    matriz_correlacion,
+    posiciones_desde_diario,
+    resumen,
+    riesgo_por_direccion,
+)
 from trading_fx import divisas_del_par, lotes_para_riesgo, valor_pip_clp
 from trading_acceso import (
     MAX_INTENTOS,
@@ -3994,6 +4006,26 @@ def cargar_estado_cuenta_trading(version: int = 0) -> pd.DataFrame:
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
+def cargar_correlacion_fx(hoy: date):
+    """(matriz, observaciones, fecha_del_ultimo_cierre) de los pares de la
+    Fase 1, sobre los retornos diarios YA GUARDADOS en la base.
+
+    `hoy` entra como argumento para que la fecha forme parte de la clave de
+    caché. Si la función leyera el reloj adentro, la matriz quedaría
+    congelada en la fecha de la primera carga durante todo el TTL.
+
+    Se piden 150 días corridos para juntar las ~60 ruedas de la ventana: los
+    fines de semana y los feriados no dejan cierre.
+    """
+    desde = hoy - timedelta(days=150)
+    df = cargar_precios_acciones(tickers=tuple(TICKERS_YAHOO_FASE_1), fecha_inicio=desde)
+    if df.empty:
+        return pd.DataFrame(), pd.DataFrame(), None
+    matriz, observaciones = matriz_correlacion(df)
+    return matriz, observaciones, pd.to_datetime(df["fecha"]).max()
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
 def cargar_cotizaciones_fx() -> dict:
     """Último cierre de cada par de la Fase 1, desde la BASE (no de Yahoo en
     vivo: la página no debe depender de una llamada de red en cada carga)."""
@@ -4355,6 +4387,183 @@ def _trd_revision_semanal(cerradas) -> None:
             st.success("Revisión guardada.")
         except Exception as e:
             st.error(f"No se pudo guardar: {e}")
+
+
+def _trd_riesgo_agrupado(abiertas, catalogo, equity_actual, hoy) -> None:
+    """Riesgo agrupado por correlación, con topes por grupo y por dirección.
+
+    AVISA, NO BLOQUEA: igual que el resto de la pestaña, esto es un espejo.
+    Ningún tope impide registrar nada.
+    """
+    st.markdown("#### Correlación y riesgo agrupado")
+    st.caption(
+        f"Dos posiciones muy correlacionadas no son dos apuestas: son la misma "
+        f"apuesta puesta dos veces. El control de arriba suma el riesgo por "
+        f"instrumento y no ve eso. Correlación de los retornos diarios de los "
+        f"últimos {VENTANA_CORRELACION} cierres guardados."
+    )
+
+    matriz, observaciones, ultimo_cierre = cargar_correlacion_fx(hoy)
+
+    c1, c2, c3 = st.columns(3)
+    umbral = c1.slider("Umbral de correlación", 0.50, 0.95, UMBRAL_AGRUPACION, 0.05,
+                       key="trd_corr_umbral",
+                       help="Dos posiciones se agrupan cuando la correlación, en valor "
+                            "absoluto, SUPERA este número. Justo en el umbral no agrupa.")
+    base = equity_actual if equity_actual is not None else TRD_CAPITAL_INICIAL
+    pct_grupo = c2.number_input("Tope por grupo (% del capital)", 0.5, 20.0, 2.0, 0.5,
+                                key="trd_corr_tope_grupo")
+    pct_dir = c3.number_input("Tope por dirección (% del capital)", 0.5, 30.0, 4.0, 0.5,
+                              key="trd_corr_tope_dir")
+    tope_grupo = base * Decimal(str(pct_grupo)) / Decimal(100)
+    tope_dir = base * Decimal(str(pct_dir)) / Decimal(100)
+
+    if ultimo_cierre is None:
+        st.info(
+            "**Todavía no hay precios de los pares en la base.** La correlación se "
+            "calcula desde los cierres que guarda el cron, no desde una llamada en "
+            "vivo a Yahoo."
+        )
+        return
+    # Más de 4 días corridos sin cierre nuevo ya no se explica por un fin de
+    # semana largo (viernes a martes con el lunes feriado son 4), así que a
+    # partir de ahí es el cron el que falló.
+    dias_viejo = (hoy - ultimo_cierre.date()).days
+    if dias_viejo > 4:
+        st.warning(
+            f"El último cierre guardado de los pares es del {ultimo_cierre:%d-%m-%Y}, "
+            f"hace {dias_viejo} días. La correlación que se muestra es de esa fecha, "
+            f"no de hoy."
+        )
+
+    mapa = (dict(zip(catalogo["nombre_xtb"], catalogo["ticker_yahoo"]))
+            if not catalogo.empty else {})
+    posiciones, afuera = posiciones_desde_diario(abiertas, mapa)
+
+    if not posiciones:
+        st.info(
+            "**Sin posiciones abiertas con riesgo cargado.** El riesgo agrupado "
+            "aparece acá cuando haya al menos una. La matriz de abajo se puede "
+            "mirar antes de abrir nada."
+        )
+    else:
+        grupos = agrupar_por_correlacion(posiciones, matriz, umbral)
+        bruto, mayor, racimos = resumen(grupos)
+        por_direccion = riesgo_por_direccion(posiciones)
+
+        m1, m2, m3 = st.columns(3)
+        m1.metric("Riesgo total abierto", f"{bruto:,.0f} CLP",
+                  help="La suma de los riesgos, tratando cada posición como "
+                       "independiente. Es el mismo número del control de arriba.")
+        m2.metric("Riesgo agrupado estimado", f"{mayor:,.0f} CLP",
+                  help="El grupo más grande: la apuesta más grande que está "
+                       "corriendo en los hechos. Sale de raíz(r' C r), la misma "
+                       "fórmula del riesgo de una cartera, con los riesgos "
+                       "firmados por la dirección.")
+        m3.metric("Compras / ventas",
+                  f"{por_direccion['compra']:,.0f} / {por_direccion['venta']:,.0f}")
+
+        if racimos:
+            lineas = [
+                "**Estas posiciones se comportan como una sola apuesta.** El riesgo "
+                "agrupado suma las que van en el mismo sentido y compensa las que van "
+                "en sentidos contrarios, pero la compensación es PARCIAL: solo una "
+                "correlación de exactamente -1 cubre del todo."
+            ]
+            for g in racimos:
+                tickers = ", ".join(sorted({p["instrumento"] for p in g.posiciones}))
+                lineas.append(
+                    f"- **{tickers}** → riesgo agrupado estimado "
+                    f"**{g.riesgo_agrupado:,.0f} CLP** "
+                    f"(bruto, sin compensar: {g.riesgo_bruto:,.0f})"
+                )
+                lineas.extend(f"    - {d}" for d in g.detalle)
+            # La linea en blanco corta la lista: sin ella, Markdown pega esta
+            # nota al final del ultimo punto en vez de dejarla aparte.
+            lineas.append("")
+            lineas.append(
+                "*Estimado con la correlación de los últimos 60 días; si el mercado "
+                "cambia, la cobertura puede ser menor.*"
+            )
+            # Un solo st.markdown: cada llamada a st.* es un mensaje en la cola
+            # del WebSocket, y esa cola tiene un tope de 500 por cliente.
+            st.markdown("\n".join(lineas))
+        else:
+            st.success(
+                f"Ninguna pareja de posiciones abiertas supera una correlación de "
+                f"{umbral:.2f}. Cada una es, por ahora, una apuesta distinta."
+            )
+
+        alertas = evaluar_limites(grupos, posiciones, tope_grupo, tope_dir)
+        for nivel, pintar in (("rojo", st.error), ("amarillo", st.warning)):
+            textos = [a.texto for a in alertas if a.nivel == nivel]
+            if textos:
+                pintar("\n\n".join(f"- {t}" for t in textos))
+        if alertas:
+            st.caption(
+                "Los topes son tuyos y editables. Esto avisa: no impide registrar "
+                "ni cerrar nada."
+            )
+
+    if afuera:
+        st.caption(
+            f"Quedaron fuera del cálculo {len(afuera)} posición(es) sin ticker en el "
+            f"catálogo o sin riesgo cargado: {', '.join(str(x) for x in afuera)}. El "
+            f"riesgo agrupado de arriba NO las incluye."
+        )
+
+    sin_convencion = [p["instrumento"] for p in posiciones
+                      if p["ticker"] in TICKERS_SIN_CONVENCION_COMUN]
+    if sin_convencion:
+        st.warning(
+            f"**{', '.join(sin_convencion)} cuenta en el riesgo total y por dirección, "
+            f"pero no se agrupa con ningún par.** La serie del índice dólar que guarda "
+            f"el cron no comparte convención de fecha con la de los pares, así que "
+            f"correlacionarla mezclaría dos días distintos. Si abres una posición en el "
+            f"índice a la vez que una en EURUSD, el panel no va a ver que son casi la "
+            f"misma apuesta al revés: eso tienes que mirarlo tú."
+        )
+
+    titulo_matriz = (f"Ver la matriz de correlación ({len(matriz)} pares)"
+                     if not matriz.empty else "Ver la matriz de correlación")
+    with st.expander(titulo_matriz, expanded=False):
+        if matriz.empty:
+            st.info(
+                f"Todavía no hay suficientes cierres guardados. Hacen falta al menos "
+                f"{MINIMO_OBSERVACIONES} retornos en común por pareja."
+            )
+        else:
+            corta = matriz.copy()
+            corta.index = [str(t).replace("=X", "") for t in corta.index]
+            corta.columns = [str(t).replace("=X", "") for t in corta.columns]
+            fig = px.imshow(corta, text_auto=".2f", aspect="auto",
+                            color_continuous_scale="RdBu_r", zmin=-1, zmax=1)
+            fig.update_layout(height=520, margin=dict(t=20, b=20),
+                              coloraxis_colorbar=dict(title="corr"))
+            st.plotly_chart(fig, use_container_width=True)
+            vacias = int(matriz.isna().sum().sum())
+            fuera_diagonal = [observaciones.loc[a, b] for a in observaciones.index
+                              for b in observaciones.columns if a != b]
+            rango_obs = (f"{int(min(fuera_diagonal))} a {int(max(fuera_diagonal))}"
+                         if fuera_diagonal else "sin datos")
+            st.caption(
+                f"Rojo = se mueven juntos; azul = se mueven al revés. Medido sobre "
+                f"{rango_obs} ruedas en común según la pareja. Las casillas vacías "
+                f"son parejas sin datos suficientes ({vacias} de {matriz.size}): con "
+                f"menos de {MINIMO_OBSERVACIONES} retornos en común, o con una serie "
+                f"de precio plano, la correlación queda indefinida y acá se deja en "
+                f"blanco en vez de mostrarla como 0."
+            )
+            st.caption(
+                "**El índice dólar (USDIDX) no está en la matriz.** Su serie no "
+                "comparte convención de fecha con la de los pares: medido sobre los "
+                "datos guardados, una canasta DXY reconstruida desde los propios "
+                "pares calza con el índice en desfase de una rueda (+0,94) y no en la "
+                "misma fila (+0,04). Correlacionarlo igual daba -0,05 contra EURUSD, "
+                "que se leería como 'no tienen relación' cuando el euro pesa más de "
+                "la mitad del índice. No se corrige desplazando la serie: alinear "
+                "datos a partir de un ajuste de correlación es una suposición."
+            )
 
 
 def _trd_puerta_de_acceso() -> bool:
@@ -4862,6 +5071,8 @@ def render_divisas():
         concentracion_por_categoria(por_categoria),
     ]:
         _trd_pinta(chequeo)
+
+    _trd_riesgo_agrupado(abiertas, catalogo, equity_actual, hoy)
 
     if not cerradas.empty and cerradas["resultado_clp"].notna().any():
         st.markdown("#### Desempeño")
