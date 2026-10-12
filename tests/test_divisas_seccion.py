@@ -122,6 +122,45 @@ def test_el_panel_muestra_los_controles_del_reglamento():
         assert control in texto, f"falta el control {control!r} en el panel"
 
 
+def test_la_tabla_de_recuperacion_aparece_en_el_calculador():
+    """Sin equity registrado la base es el capital inicial de 10.000.000, y
+    el riesgo por defecto es 1%: 100.000 CLP, que exigen ganar 1,01%."""
+    texto = _todo_el_texto(_correr())
+    assert "Si esta operación sale mal" in texto
+    assert "100,000 CLP" in texto and "1.01%" in texto, texto[-1500:]
+    assert "9,900,000" in texto, "falta el capital que queda"
+    # Las dos rachas, con sus porcentajes compuestos.
+    assert "3 pérdidas seguidas" in texto and "3.06%" in texto
+    assert "5 pérdidas seguidas" in texto and "5.15%" in texto
+    # Las dos referencias que fijan la fórmula.
+    assert "20% exige ganar un 25%" in texto
+    assert "50% exige ganar un 100%" in texto
+
+
+def test_la_tabla_de_recuperacion_sigue_al_riesgo_que_elijas():
+    """Si no se moviera con el porcentaje, sería un adorno."""
+    at = _correr()
+    at.number_input(key="trd_calc_pct").set_value(2.0).run(timeout=420)
+    assert not at.exception, at.exception
+    texto = _todo_el_texto(at)
+    assert "200,000 CLP" in texto and "2.04%" in texto, texto[-1500:]
+    # 5 pérdidas seguidas al 2% componen a 9,61%, no a 10%.
+    assert "9.61%" in texto and "10.63%" in texto
+
+
+def test_la_tabla_de_recuperacion_es_una_referencia_y_no_un_bloqueo():
+    with open(DASHBOARD_PATH, encoding="utf-8") as f:
+        codigo = f.read()
+    inicio = codigo.index("def _trd_tabla_recuperacion(")
+    bloque = codigo[inicio:codigo.index("\ndef ", inicio + 10)]
+    for prohibido in ("st.stop()", "raise ", "return False", "disabled=True"):
+        assert prohibido not in bloque, (
+            f"la tabla de recuperación contiene {prohibido!r}: es una referencia, "
+            f"no un bloqueo")
+    texto = _todo_el_texto(_correr())
+    assert "es una referencia para dimensionar, no una señal" in texto.lower()
+
+
 def test_el_riesgo_agrupado_aparece_junto_al_riesgo_total():
     """El control de arriba suma el riesgo por instrumento y no ve que dos
     posiciones correlacionadas son la misma apuesta. El bloque nuevo va
@@ -201,14 +240,20 @@ def test_el_riesgo_agrupado_con_posiciones_abiertas_simuladas(monkeypatch):
     assert "GBPUSD compra 120,000 CLP" in texto
     assert "USDCHF compra 40,000 CLP" in texto
     # Cada pareja explica su propio signo; no hay posición de referencia.
-    assert "referencia" not in texto
-    assert "EURUSD \u2194 GBPUSD" in texto and "suman" in texto
-    assert "EURUSD \u2194 USDCHF" in texto and "se compensan" in texto
+    # Se mira SOLO el bloque del grupo: buscar la palabra en toda la página
+    # la confunde con otros textos que la usan en su sentido corriente, como
+    # la tabla de recuperación ("es una referencia para dimensionar").
+    bloque = next(str(m.value) for m in at.markdown
+                  if "se comportan como una sola apuesta" in str(m.value))
+    assert "referencia" not in bloque, bloque
+    assert "EURUSD ↔ GBPUSD" in bloque and "suman" in bloque
+    assert "EURUSD ↔ USDCHF" in bloque and "se compensan" in bloque
     # Y queda dicho que es una estimación, no una medición.
-    assert "Estimado con la correlaci\u00f3n de los \u00faltimos 60 d\u00edas" in texto
-    assert "la compensaci\u00f3n es PARCIAL" in texto
-    # El que no se parece a ninguno no entra al grupo.
-    assert "USDJPY venta" not in texto
+    assert "Estimado con la correlación de los últimos 60 días" in texto
+    assert "la compensación es PARCIAL" in texto
+    # El que no se parece a ninguno no entra al grupo. También acotado al
+    # bloque: el nombre del par aparece en otras partes de la pantalla.
+    assert "USDJPY" not in bloque, bloque
 
     # El tope por grupo es el 2% de 9.500.000 = 190.000, y el grupo va en
     # 230.000: tiene que avisar en rojo, nombrando los tres instrumentos.

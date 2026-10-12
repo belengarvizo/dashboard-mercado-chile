@@ -75,6 +75,11 @@ from trading_correlacion import (
     riesgo_por_direccion,
 )
 from trading_fx import divisas_del_par, lotes_para_riesgo, valor_pip_clp
+from trading_recuperacion import (
+    RACHAS,
+    recuperacion,
+    tabla_de_rachas,
+)
 from trading_acceso import (
     MAX_INTENTOS,
     SEGUNDOS_BLOQUEO,
@@ -4389,6 +4394,58 @@ def _trd_revision_semanal(cerradas) -> None:
             st.error(f"No se pudo guardar: {e}")
 
 
+def _trd_tabla_recuperacion(riesgo_clp, capital_clp) -> None:
+    """Cuánto hay que ganar para volver, al lado del riesgo calculado.
+
+    Es una REFERENCIA para dimensionar, no una señal ni un bloqueo: no
+    recomienda abrir ni cerrar nada.
+    """
+    actual = recuperacion(riesgo_clp, capital_clp)
+    if actual is None:
+        # Sin pérdida o sin capital no hay nada que mostrar.
+        return
+
+    st.markdown("#### Si esta operación sale mal")
+    if not actual.se_puede:
+        st.warning(
+            f"**Esta pérdida no se recupera con una sola operación:** {actual.motivo}."
+        )
+        return
+
+    fraccion = Decimal(str(riesgo_clp)) / Decimal(str(capital_clp))
+    filas = [("Esta operación", actual)]
+    filas += [(f"{n} pérdidas seguidas", r)
+              for n, r in tabla_de_rachas(fraccion, capital_clp)]
+
+    lineas = [
+        f"Perder **{actual.perdida_clp:,.0f} CLP** te deja en "
+        f"{actual.capital_restante_clp:,.0f}. Para volver a "
+        f"{Decimal(str(capital_clp)):,.0f} tienes que ganar "
+        f"**{actual.ganancia_fraccion * 100:.2f}%** sobre lo que te quede: son los "
+        f"mismos pesos que perdiste, pero pesan más sobre un capital más chico.",
+        "",
+        "| Escenario | Pierdes | Te queda | Tienes que ganar |",
+        "|---|---|---|---|",
+    ]
+    for etiqueta, r in filas:
+        lineas.append(
+            f"| {etiqueta} | {r.perdida_clp:,.0f} CLP "
+            f"({r.perdida_fraccion * 100:.2f}%) | {r.capital_restante_clp:,.0f} CLP | "
+            f"**{r.ganancia_fraccion * 100:.2f}%** |"
+        )
+    # Un solo st.markdown: cada llamada a st.* es un mensaje en la cola del
+    # WebSocket, y esa cola tiene un tope de 500 por cliente.
+    st.markdown("\n".join(lineas))
+    st.caption(
+        f"Perder y recuperar no son simétricos, y la brecha se abre rápido: perder "
+        f"un 20% exige ganar un 25%, y perder un 50% exige ganar un 100%. Las rachas "
+        f"de {' y '.join(str(n) for n in RACHAS)} suponen que vuelves a calcular el "
+        f"tamaño sobre el capital que te queda, que es lo que hace este calculador; "
+        f"por eso las pérdidas componen y no se suman. Es una referencia para "
+        f"dimensionar, no una señal."
+    )
+
+
 def _trd_riesgo_agrupado(abiertas, catalogo, equity_actual, hoy) -> None:
     """Riesgo agrupado por correlación, con topes por grupo y por dirección.
 
@@ -4759,6 +4816,11 @@ def render_divisas():
             st.markdown("\n".join(f"- {p}" for p in resultado.pasos))
         for aviso in resultado.avisos:
             st.warning(aviso)
+
+    # Va FUERA del else: el riesgo en pesos sale del porcentaje y del capital,
+    # así que la tabla sirve igual aunque el cálculo de lotes se haya negado
+    # por falta del tamaño del pip.
+    _trd_tabla_recuperacion(riesgo_clp, base_riesgo)
 
     # -------------------------------------------------------------- diario
     st.divider()
