@@ -71,6 +71,20 @@ TICKERS_SIN_CONVENCION_COMUN = frozenset({"DX-Y.NYB"})
 
 COMPRA, VENTA = "compra", "venta"
 
+# Topes por defecto, como fracción del capital. Son valores de partida y la
+# pantalla los deja editar.
+#
+# POR QUÉ EL DE DIRECCIÓN TIENE QUE SER MENOR QUE EL RIESGO TOTAL ABIERTO.
+# El riesgo de un lado del mercado nunca puede superar al riesgo total, así
+# que un tope por dirección POR ENCIMA del tope total es una restricción
+# muerta: se cumpliría siempre. Con el total en 3% (TOPE_RIESGO_ABIERTO_POR_
+# DEFECTO en trading_reglas.py), un tope por dirección de 4% no se podía
+# gatillar nunca, ni en amarillo. Por eso queda en 2,5%: alcanza a avisar
+# antes de que el control total se ponga rojo. Hay una prueba que compara
+# los dos números.
+TOPE_GRUPO_POR_DEFECTO = Decimal("0.02")
+TOPE_DIRECCION_POR_DEFECTO = Decimal("0.025")
+
 
 def retornos_diarios(df_precios: pd.DataFrame, ventana: int = VENTANA_CORRELACION) -> pd.DataFrame:
     """Tabla de retornos diarios por ticker, con las últimas `ventana` ruedas.

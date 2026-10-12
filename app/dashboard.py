@@ -65,6 +65,8 @@ from catalogo_instrumentos import TICKERS_YAHOO_FASE_1
 from trading_correlacion import (
     MINIMO_OBSERVACIONES,
     TICKERS_SIN_CONVENCION_COMUN,
+    TOPE_DIRECCION_POR_DEFECTO,
+    TOPE_GRUPO_POR_DEFECTO,
     UMBRAL_AGRUPACION,
     VENTANA_CORRELACION,
     agrupar_por_correlacion,
@@ -4509,10 +4511,15 @@ def _trd_riesgo_agrupado(abiertas, catalogo, equity_actual, hoy) -> None:
                        help="Dos posiciones se agrupan cuando la correlación, en valor "
                             "absoluto, SUPERA este número. Justo en el umbral no agrupa.")
     base = equity_actual if equity_actual is not None else TRD_CAPITAL_INICIAL
-    pct_grupo = c2.number_input("Tope por grupo (% del capital)", 0.5, 20.0, 2.0, 0.5,
-                                key="trd_corr_tope_grupo")
-    pct_dir = c3.number_input("Tope por dirección (% del capital)", 0.5, 30.0, 4.0, 0.5,
-                              key="trd_corr_tope_dir")
+    pct_grupo = c2.number_input(
+        "Tope por grupo (% del capital)", 0.5, 20.0,
+        float(TOPE_GRUPO_POR_DEFECTO * 100), 0.5, key="trd_corr_tope_grupo")
+    pct_dir = c3.number_input(
+        "Tope por dirección (% del capital)", 0.5, 30.0,
+        float(TOPE_DIRECCION_POR_DEFECTO * 100), 0.5, key="trd_corr_tope_dir",
+        help="Por debajo del tope de riesgo total abierto (3%): si fuera mayor, "
+             "no se podría gatillar nunca, porque el riesgo de un lado del "
+             "mercado nunca supera al total.")
     tope_grupo = base * Decimal(str(pct_grupo)) / Decimal(100)
     tope_dir = base * Decimal(str(pct_dir)) / Decimal(100)
 

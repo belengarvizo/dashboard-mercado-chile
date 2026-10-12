@@ -308,11 +308,16 @@ def test_el_riesgo_agrupado_con_posiciones_abiertas_simuladas(monkeypatch):
     assert "EURUSD, GBPUSD, USDCHF" in rojos, rojos
     assert "=X" not in rojos and "=X" not in texto, "se filtró un ticker de Yahoo"
 
-    # Las compras van en 310.000 contra un tope de 380.000: sobre el 80%,
-    # así que amarillo y no rojo.
+    # El tope por dirección es el 2,5% de 9.500.000 = 237.500, y las compras
+    # van en 310.000: rojo. Con el 4% que tenía antes (380.000) este aviso no
+    # podía gatillar nunca, porque el control de riesgo total abierto, que va
+    # al 3%, se ponía rojo primero.
+    assert "Riesgo en compras: 310,000 CLP, sobre el tope de 237,500" in rojos, rojos
+    assert "apuesta direccional" in rojos
+    # Las ventas, en 90.000, están bajo el 80% del tope: no dicen nada.
+    assert "Riesgo en ventas" not in rojos
     amarillos = " || ".join(str(e.value) for e in at.warning)
-    assert "compras" in amarillos and "310,000" in amarillos, amarillos
-    assert "310,000" not in rojos, "pintó de rojo algo que está bajo el tope"
+    assert "Riesgo en ventas" not in amarillos, amarillos
 
 
 def test_el_bloque_de_correlacion_va_despues_de_la_puerta():

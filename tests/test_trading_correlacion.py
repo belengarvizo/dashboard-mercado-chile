@@ -23,6 +23,8 @@ import pytest
 
 from trading_correlacion import (
     COMPRA,
+    TOPE_DIRECCION_POR_DEFECTO,
+    TOPE_GRUPO_POR_DEFECTO,
     riesgo_agrupado_de,
     MINIMO_OBSERVACIONES,
     UMBRAL_AGRUPACION,
@@ -388,6 +390,38 @@ def test_el_limite_por_direccion_mira_el_lado_del_mercado():
     grupos = agrupar_por_correlacion(posiciones, _matriz({("A", "B"): 0.1}, ["A", "B"]))
     alertas = evaluar_limites(grupos, posiciones, None, 150000)
     assert any(a.nivel == "rojo" and "compras" in a.texto for a in alertas)
+
+
+def test_el_tope_por_direccion_tiene_que_ser_MENOR_que_el_de_riesgo_total():
+    """Si no, es una restricción muerta.
+
+    El riesgo de un lado del mercado nunca puede superar al riesgo total, así
+    que un tope por dirección por encima del tope total se cumple siempre y no
+    avisa jamás. Con el total en 3% y la dirección en 4% —como estaba— ni
+    siquiera el amarillo, que va al 80%, podía gatillar.
+    """
+    from trading_reglas import TOPE_RIESGO_ABIERTO_POR_DEFECTO
+
+    assert TOPE_DIRECCION_POR_DEFECTO < TOPE_RIESGO_ABIERTO_POR_DEFECTO, (
+        f"el tope por dirección ({TOPE_DIRECCION_POR_DEFECTO}) no puede ser mayor "
+        f"o igual al de riesgo total ({TOPE_RIESGO_ABIERTO_POR_DEFECTO})")
+    # El amarillo va al 80% del tope: también tiene que caer bajo el total.
+    assert TOPE_DIRECCION_POR_DEFECTO * Decimal("0.8") < TOPE_RIESGO_ABIERTO_POR_DEFECTO
+    # Y el de grupo, por debajo del de dirección: un grupo es parte de un lado.
+    assert TOPE_GRUPO_POR_DEFECTO < TOPE_DIRECCION_POR_DEFECTO
+
+
+def test_el_limite_por_direccion_tambien_avisa_en_amarillo():
+    posiciones = [
+        {"ticker": "A", "direccion": COMPRA, "riesgo_clp": Decimal("90000")},
+        {"ticker": "B", "direccion": COMPRA, "riesgo_clp": Decimal("90000")},
+    ]
+    grupos = agrupar_por_correlacion(posiciones, _matriz({("A", "B"): 0.1}, ["A", "B"]))
+    # 180.000 contra un tope de 200.000: sobre el 80% (160.000), bajo el tope.
+    alertas = evaluar_limites(grupos, posiciones, None, 200000)
+    assert [a.nivel for a in alertas] == ["amarillo"], alertas
+    # y bajo el 80% no dice nada
+    assert evaluar_limites(grupos, posiciones, None, 300000) == []
 
 
 def test_sin_topes_no_hay_alertas():
