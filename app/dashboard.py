@@ -62,6 +62,21 @@ from market_data import (
 from calendario_economico import proximos_eventos, cobertura_por_tipo, INDICADOR_POR_TIPO, CALENDARIO_VERIFICADO_AL
 from catalogo_instrumentos import TICKERS_YAHOO_FASE_1
 from trading_fx import divisas_del_par, lotes_para_riesgo, valor_pip_clp
+from trading_proceso import (
+    AVISO_CHECKLIST,
+    AVISO_POCAS,
+    CALIDADES,
+    PREGUNTAS_CHECKLIST,
+    TENDENCIAS,
+    cuadro_decision_resultado,
+    estadisticas,
+    estadisticas_por,
+    evaluar_checklist,
+    eventos_torneo_con_fecha,
+    r_multiplo,
+    valor_esperado_pips,
+    validar_probabilidades,
+)
 from trading_reglas import (
     concentracion_por_categoria,
     limite_margen_por_subyacente,
@@ -3922,7 +3937,7 @@ def _trd_aviso_hora(clave_fecha: str, clave_hora: str, sufijo: str) -> None:
                          on_click=_trd_poner_hora_ahora, args=(clave_fecha, clave_hora))
     columna_texto.caption(
         f"Hora por defecto: **{inicial:%H:%M}**, la de cuando abriste la página. "
-        f"**Revisala** — si la pestaña lleva rato abierta, ya no es la hora actual."
+        f"**Revísala** — si la pestaña lleva rato abierta, ya no es la hora actual."
     )
 
 
@@ -3953,7 +3968,8 @@ def cargar_operaciones_trading(version: int = 0) -> pd.DataFrame:
     return pd.read_sql(
         "SELECT id, instrumento, categoria, direccion, fecha_apertura, fecha_cierre, "
         "precio_entrada, precio_salida, stop, objetivo, lotes, margen_clp, riesgo_clp, "
-        "resultado_clp, duracion_segundos, catalizador, condicion_invalidacion, tesis, notas "
+        "resultado_clp, duracion_segundos, catalizador, condicion_invalidacion, tesis, notas, "
+        "conviccion, tendencia_diario, evento_dia, calidad_decision, nota_post, evento_plan_id "
         "FROM trading_operaciones ORDER BY fecha_apertura DESC",
         engine,
     )
@@ -4000,6 +4016,336 @@ def _trd_pinta(chequeo) -> None:
     if chequeo.desglose:
         with st.expander("ver el cálculo", expanded=False):
             st.markdown("\n".join(f"- {d}" for d in chequeo.desglose))
+
+
+
+
+def _trd_fila_estadistica(etiqueta, est) -> dict:
+    """Una fila de la tabla de estadísticas. Devuelve texto ya formateado:
+    la tabla se dibuja de una sola vez con st.dataframe, no fila por fila."""
+    def num(x, sufijo="", dec=2):
+        return "—" if x is None else f"{x:.{dec}f}{sufijo}"
+    return {
+        "Grupo": etiqueta,
+        "n": est.n,
+        "con R": est.n_con_r,
+        "Expectativa (R)": num(est.expectativa_r),
+        "Aciertos": num(est.aciertos_pct, "%", 0),
+        "R medio ganadoras": num(est.r_medio_ganadoras),
+        "R medio perdedoras": num(est.r_medio_perdedoras),
+        "Peor racha": est.peor_racha,
+        "Aviso": est.aviso,
+    }
+
+
+def _trd_estadisticas_proceso(cerradas) -> None:
+    """PARTE B — cómo se decide, no solo cuánto se ganó."""
+    st.divider()
+    st.markdown("### Estadísticas del proceso")
+    st.caption(
+        "Todo en múltiplos de **R**: cuántas veces el riesgo que arriesgaste. "
+        "Una operación sin riesgo inicial cargado no tiene R y queda fuera de "
+        "esos promedios, aunque sí se cuenta en *n*."
+    )
+
+    if cerradas.empty:
+        st.info("Todavía no hay operaciones cerradas.")
+        return
+
+    ops = cerradas.to_dict("records")
+    general = estadisticas(ops)
+
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Expectativa (R)",
+              "—" if general.expectativa_r is None else f"{general.expectativa_r:.2f}")
+    m2.metric("Aciertos",
+              "—" if general.aciertos_pct is None else f"{general.aciertos_pct:.0f}%")
+    m3.metric("Peor racha de pérdidas", general.peor_racha)
+    m4.metric("Operaciones cerradas", general.n)
+
+    if general.aviso:
+        st.warning(f"**{general.aviso.capitalize()}.** Con {general.n} operaciones, estos "
+                   f"números dicen más sobre el azar que sobre tu proceso.")
+    for d in general.desglose:
+        st.caption(d)
+
+    filas = [_trd_fila_estadistica("TODAS", general)]
+    for campo, titulo, posibles in [
+        ("tendencia_diario", "Tendencia", TENDENCIAS),
+        ("conviccion", "Convicción", (1, 2, 3)),
+        ("evento_dia", "Evento del día", None),
+    ]:
+        grupos = estadisticas_por(ops, campo, posibles)
+        for clave, est in sorted(grupos.items(), key=lambda kv: str(kv[0])):
+            if est.n == 0:
+                continue
+            filas.append(_trd_fila_estadistica(f"{titulo}: {clave}", est))
+
+    # Una sola llamada para toda la tabla.
+    st.dataframe(pd.DataFrame(filas), use_container_width=True, hide_index=True)
+
+    # --- cuadro decisión x resultado
+    st.markdown("#### Decisión y resultado")
+    st.caption(
+        "Con pocas operaciones el resultado es en buena parte azar. Lo que se "
+        "puede controlar es la decisión, y por eso se miran separadas: una "
+        "**mala decisión con buen resultado** es la casilla más peligrosa, "
+        "porque enseña exactamente lo contrario de lo que conviene."
+    )
+    cuadro = cuadro_decision_resultado(ops)
+    tabla = pd.DataFrame([
+        {"": "Decisión buena",
+         "Ganó": cuadro[("buena", "ganadora")], "Perdió": cuadro[("buena", "perdedora")]},
+        {"": "Decisión mala",
+         "Ganó": cuadro[("mala", "ganadora")], "Perdió": cuadro[("mala", "perdedora")]},
+    ])
+    st.dataframe(tabla, use_container_width=True, hide_index=True)
+    if cuadro["sin_clasificar"]:
+        st.caption(f"{cuadro['sin_clasificar']} operación(es) sin calidad evaluada o con "
+                   f"resultado cero: no entran en el cuadro.")
+
+
+def _trd_checklist_de(evento: str, fecha):
+    """Respuestas guardadas de un evento, o None si todavía no se respondió."""
+    try:
+        with engine.connect() as conn:
+            fila = conn.execute(text(
+                "SELECT respuestas FROM evento_checklist WHERE evento = :e AND fecha = :f"
+            ), {"e": evento, "f": fecha}).fetchone()
+        return list(fila[0]) if fila else None
+    except Exception:
+        return None
+
+
+def _trd_checklists_guardados() -> dict:
+    """{etiqueta legible: id de evento_checklist} de los eventos ya respondidos.
+
+    El id de ESTA tabla es el que guarda trading_operaciones.evento_plan_id:
+    evento_checklist tiene una fila por evento, mientras que evento_planes
+    tiene una por escenario.
+    """
+    try:
+        with engine.connect() as conn:
+            filas = conn.execute(text(
+                "SELECT id, evento, fecha FROM evento_checklist ORDER BY fecha")).fetchall()
+        return {
+            f"{ev} — {_trd_a_chile(fe):%d-%m %H:%M}": int(i)
+            for i, ev, fe in filas
+        }
+    except Exception:
+        return {}
+
+
+def _trd_planes_evento() -> None:
+    """PARTE D — plan escrito ANTES de un dato grande."""
+    st.divider()
+    st.markdown("### Plan antes de un dato grande")
+    st.caption(
+        "Escribir los escenarios **antes** del dato evita decidir con el "
+        "mercado moviéndose. Las fechas vienen de los calendarios oficiales y "
+        "están **pendientes de verificar en el Calendar de XTB**."
+    )
+
+    eventos = eventos_torneo_con_fecha()
+    etiquetas = {
+        f"{n} — {f.astimezone(TZ_CHILE):%d-%m %H:%M} (hora de Chile)": (n, f, nota)
+        for n, f, nota in eventos
+    }
+    elegido = st.selectbox("Evento", list(etiquetas), key="trd_plan_evento")
+    nombre_ev, fecha_ev, nota_ev = etiquetas[elegido]
+    st.caption(
+        f"{fecha_ev:%d-%m %H:%M} en Nueva York · "
+        f"{fecha_ev.astimezone(TZ_CHILE):%d-%m %H:%M} en Chile. {nota_ev}"
+    )
+
+    # ---- checklist
+    st.markdown("#### ¿Conviene operar este evento?")
+    # Las claves de las casillas llevan el nombre del evento: con una clave
+    # fija, cambiar de evento mostraba las respuestas del anterior. Y si ya
+    # respondiste este evento, se precargan desde evento_checklist.
+    guardadas = _trd_checklist_de(nombre_ev, fecha_ev)
+    if guardadas is not None:
+        st.caption("Respuestas cargadas de la última vez que lo respondiste.")
+    clave_ev = re.sub(r"[^a-z0-9]+", "_", nombre_ev.lower())
+    respuestas = []
+    for i, pregunta in enumerate(PREGUNTAS_CHECKLIST):
+        previa = bool(guardadas[i]) if guardadas is not None else False
+        respuestas.append(st.checkbox(pregunta, value=previa, key=f"trd_chk_{clave_ev}_{i}"))
+    puede, noes = evaluar_checklist(respuestas)
+    if not puede:
+        st.warning(
+            f"**{AVISO_CHECKLIST}.** Respondiste que no a: "
+            + "; ".join(noes)
+            + ". Es un aviso, no un bloqueo: la decisión es tuya."
+        )
+    else:
+        st.success("Las seis respuestas están en sí.")
+
+    if st.button("Guardar el checklist", key="trd_chk_guardar"):
+        try:
+            with engine.begin() as conn:
+                conn.execute(text(
+                    "INSERT INTO evento_checklist (evento, fecha, respuestas) "
+                    "VALUES (:e,:f,:r) ON CONFLICT (evento, fecha) DO UPDATE SET "
+                    "respuestas = EXCLUDED.respuestas, respondido_en = NOW()"
+                ), {"e": nombre_ev, "f": fecha_ev, "r": respuestas})
+            _trd_invalidar()
+            st.success("Checklist guardado.")
+        except Exception as e:
+            st.error(f"No se pudo guardar: {e}")
+
+    # ---- escenarios
+    st.markdown("#### Escenarios")
+    try:
+        escenarios = pd.read_sql(
+            "SELECT id, escenario, probabilidad, movimiento_pips, peor_caso_pips, "
+            "tamano_max_lotes, nota FROM evento_planes WHERE evento = %(e)s "
+            "AND fecha = %(f)s ORDER BY id",
+            engine, params={"e": nombre_ev, "f": fecha_ev})
+    except Exception as e:
+        st.error(f"No se pudieron leer los escenarios: {e}")
+        return
+
+    with st.form("trd_form_escenario"):
+        e1, e2, e3 = st.columns(3)
+        nuevo_nombre = e1.text_input("Escenario", key="trd_esc_nombre")
+        nueva_prob = e2.number_input("Probabilidad (%)", 0.0, 100.0, 25.0, 5.0,
+                                     key="trd_esc_prob")
+        # value=None para distinguir "no lo llené" de "es cero". Guardar 0
+        # haría que el valor esperado se calcule como si ese escenario no
+        # moviera el precio, que es una afirmación, no un dato faltante.
+        nuevo_mov = e3.number_input("Movimiento esperado (pips)", value=None, step=5.0,
+                                    key="trd_esc_mov", placeholder="sin completar")
+        f1, f2 = st.columns(2)
+        nuevo_peor = f1.number_input("Peor caso (pips)", value=None, step=5.0,
+                                     key="trd_esc_peor", placeholder="sin completar")
+        nuevo_max = f2.number_input("Tamaño máximo (lotes)", 0.0, 100.0, 0.0, 0.01,
+                                    key="trd_esc_max")
+        nueva_nota = st.text_input("Nota", key="trd_esc_nota")
+        if st.form_submit_button("Agregar escenario"):
+            if not nuevo_nombre.strip():
+                st.error("El escenario necesita un nombre.")
+            else:
+                try:
+                    with engine.begin() as conn:
+                        conn.execute(text(
+                            "INSERT INTO evento_planes (evento, fecha, escenario, "
+                            "probabilidad, movimiento_pips, peor_caso_pips, "
+                            "tamano_max_lotes, nota) VALUES (:e,:f,:es,:p,:m,:pc,:tm,:n)"
+                        ), {"e": nombre_ev, "f": fecha_ev, "es": nuevo_nombre.strip(),
+                            "p": nueva_prob,
+                            "m": None if nuevo_mov is None else nuevo_mov,
+                            "pc": None if nuevo_peor is None else nuevo_peor,
+                            "tm": nuevo_max or None, "n": nueva_nota or None})
+                    _trd_invalidar()
+                    st.success("Escenario agregado.")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"No se pudo guardar: {e}")
+
+    if escenarios.empty:
+        st.info("Todavía no cargaste escenarios para este evento.")
+        return
+
+    st.dataframe(escenarios.drop(columns=["id"]), use_container_width=True, hide_index=True)
+
+    filas = escenarios.to_dict("records")
+    valido, suma, mensaje = validar_probabilidades(filas)
+    if valido:
+        ve = valor_esperado_pips(filas)
+        if ve is not None:
+            st.success(f"Las probabilidades suman {suma:.1f}%. "
+                       f"**Valor esperado: {ve:+.1f} pips.**")
+        else:
+            sin_mov = [f["escenario"] for f in filas if f.get("movimiento_pips") is None]
+            st.warning(
+                f"Las probabilidades suman {suma:.1f}%, pero falta el movimiento "
+                f"esperado en: {', '.join(sin_mov)}. Sin ese dato no se calcula el "
+                f"valor esperado: completarlo con un cero diría que ese escenario no "
+                f"mueve el precio, que es una afirmación y no un dato faltante."
+            )
+    else:
+        st.error(f"**{mensaje}** El valor esperado no se calcula sobre probabilidades "
+                 f"que no suman 100%: no significaría nada.")
+
+    if st.button("Borrar los escenarios de este evento", key="trd_esc_borrar"):
+        try:
+            with engine.begin() as conn:
+                conn.execute(text(
+                    "DELETE FROM evento_planes WHERE evento = :e AND fecha = :f"),
+                    {"e": nombre_ev, "f": fecha_ev})
+            _trd_invalidar()
+            st.rerun()
+        except Exception as e:
+            st.error(f"No se pudo borrar: {e}")
+
+
+def _trd_revision_semanal(cerradas) -> None:
+    """PARTE E — revisión de la semana y una sola meta para la siguiente."""
+    st.divider()
+    st.markdown("### Revisión semanal")
+
+    if cerradas.empty:
+        st.info("Todavía no hay operaciones cerradas para revisar.")
+        return
+
+    fechas = pd.to_datetime(cerradas["fecha_cierre"]).map(_trd_a_chile)
+    lunes = fechas.map(lambda f: (f - pd.Timedelta(days=f.weekday())).date())
+    semanas = sorted(set(lunes), reverse=True)
+    if not semanas:
+        st.info("No hay semanas con operaciones cerradas.")
+        return
+
+    semana = st.selectbox(
+        "Semana a revisar", semanas, key="trd_rev_semana",
+        format_func=lambda d: f"semana del {d:%d-%m-%Y} (lunes)")
+    de_la_semana = cerradas[lunes.values == semana]
+    ops = de_la_semana.to_dict("records")
+    est = estadisticas(ops)
+
+    r1, r2, r3, r4 = st.columns(4)
+    r1.metric("Operaciones", est.n)
+    r2.metric("Expectativa (R)",
+              "—" if est.expectativa_r is None else f"{est.expectativa_r:.2f}")
+    resultados = de_la_semana["resultado_clp"].dropna().astype(float)
+    r3.metric("Mayor ganadora", f"{resultados.max():,.0f}" if len(resultados) else "—")
+    r4.metric("Mayor perdedora", f"{resultados.min():,.0f}" if len(resultados) else "—")
+
+    conteo = de_la_semana["tendencia_diario"].value_counts(dropna=False).to_dict()
+    partes = [f"{k if pd.notna(k) else 'sin anotar'}: {v}" for k, v in conteo.items()]
+    st.caption("Respecto de la tendencia del diario — " + " · ".join(partes))
+    if est.aviso:
+        st.caption(f"*{est.aviso}*")
+
+    st.markdown(
+        f"**Meta para la semana del {semana + pd.Timedelta(days=7):%d-%m-%Y}.** "
+        f"Una sola frase, medible. Se guarda contra la semana que estás revisando "
+        f"(la del {semana:%d-%m}), y rige para la siguiente."
+    )
+    try:
+        previa = pd.read_sql(
+            "SELECT meta, nota FROM trading_revision_semanal WHERE semana_inicio = %(s)s",
+            engine, params={"s": semana})
+    except Exception:
+        previa = pd.DataFrame()
+    meta_actual = previa.iloc[0]["meta"] if not previa.empty else ""
+    nota_actual = previa.iloc[0]["nota"] if not previa.empty else ""
+
+    nueva_meta = st.text_input("Meta", value=meta_actual or "", key="trd_rev_meta")
+    nueva_nota = st.text_area("Qué cambio concreto hago", value=nota_actual or "",
+                              key="trd_rev_nota")
+    if st.button("Guardar la revisión", key="trd_rev_guardar"):
+        try:
+            with engine.begin() as conn:
+                conn.execute(text(
+                    "INSERT INTO trading_revision_semanal (semana_inicio, meta, nota) "
+                    "VALUES (:s,:m,:n) ON CONFLICT (semana_inicio) DO UPDATE SET "
+                    "meta = EXCLUDED.meta, nota = EXCLUDED.nota, actualizado_en = NOW()"
+                ), {"s": semana, "m": nueva_meta or None, "n": nueva_nota or None})
+            _trd_invalidar()
+            st.success("Revisión guardada.")
+        except Exception as e:
+            st.error(f"No se pudo guardar: {e}")
 
 
 def render_divisas():
@@ -4125,7 +4471,7 @@ def render_divisas():
         else:
             st.info(
                 f"**Margen: pendiente.** No hay margen cargado para {instrumento}. "
-                f"Abrí el ticket en XTB, mirá el margen de 0,01 lotes y cargalo en el "
+                f"Abre el ticket en XTB, mira el margen de 0,01 lotes y cárgalo en el "
                 f"catálogo. No se estima con una fórmula de apalancamiento supuesta."
             )
 
@@ -4167,10 +4513,10 @@ def render_divisas():
             # posiciones abiertas, y una fila sin ese dato dejaba el control
             # pintado de verde por falta de información.
             d_riesgo = st.number_input(
-                "Riesgo si salta el stop (CLP) — dejar en 0 para que lo calcule",
+                "Riesgo si salta el stop (CLP) — déjalo en 0 para que lo calcule",
                 0.0, step=1000.0, key="trd_op_riesgo",
                 help="En 0 se calcula desde la entrada, el stop, los lotes y el valor del "
-                     "pip. Escribilo a mano si XTB te muestra otro número.")
+                     "pip. Escríbelo a mano si XTB te muestra otro número.")
             d_notas = st.text_area("Notas", key="trd_op_notas")
             st.caption(
                 "**Fuera de divisas** (índices, materias primas, cripto) el riesgo y el "
@@ -4189,10 +4535,40 @@ def render_divisas():
                                        key="trd_op_salida")
             d_resultado = i4.number_input("Resultado (CLP)", step=1000.0, key="trd_op_resultado")
 
+            # --- Proceso: lo que se anota AL ABRIR, para poder medir después
+            # si las operaciones a favor de la tendencia o las de convicción
+            # alta funcionan mejor. Son opcionales; sin ellas la operación se
+            # guarda igual, solo que no entra en esos cortes.
+            p1, p2, p3 = st.columns(3)
+            # Por defecto "(sin anotar)": antes quedaba fijo en 2 y el diario se
+            # llenaba de una convicción que nadie eligió, justo el dato con el
+            # que después se cortan las estadísticas.
+            d_conviccion = p1.select_slider(
+                "Convicción", options=["(sin anotar)", 1, 2, 3], value="(sin anotar)",
+                key="trd_op_conviccion",
+                help="1 = baja, 3 = alta. Se anota al abrir, no después.")
+            d_tendencia = p2.selectbox(
+                "Tendencia del gráfico diario", ["(sin anotar)"] + list(TENDENCIAS),
+                key="trd_op_tendencia",
+                help="Si la operación va a favor, en contra o es neutral respecto "
+                     "de la tendencia del diario en el momento de entrar.")
+            nombres_eventos = ["ninguno"] + [n for n, _f, _nota in eventos_torneo_con_fecha()] + ["otro"]
+            d_evento = p3.selectbox("Evento del día", nombres_eventos, key="trd_op_evento")
+
+            # Ligar la operación a un plan ya escrito. Apunta a
+            # evento_checklist.id (una fila por evento), sin clave foránea y
+            # opcional: si todavía no respondiste el checklist de ese evento,
+            # la operación se guarda igual.
+            planes_guardados = _trd_checklists_guardados()
+            opciones_plan = ["(sin ligar)"] + list(planes_guardados.keys())
+            d_plan = st.selectbox(
+                "Ligar a un plan de evento (opcional)", opciones_plan, key="trd_op_plan",
+                help="Solo aparecen los eventos cuyo checklist ya guardaste.")
+
             d_catalizador = st.text_input("Catalizador", key="trd_op_cat")
             d_invalida = st.text_input("Condición de invalidación", key="trd_op_inval")
             d_tesis = st.text_area("Tesis", key="trd_op_tesis",
-                                   help="Lo que escribas acá es lo que sirve para los premios "
+                                   help="Lo que escribas aquí es lo que sirve para los premios "
                                         "semanales de análisis y aprendizaje.")
 
             if st.form_submit_button("Guardar operación"):
@@ -4217,7 +4593,24 @@ def render_divisas():
                             f"lotes = {riesgo_guardado:,.0f} CLP",
                         ]
 
-                if d_entrada <= 0:
+                # Validación de los campos de proceso ANTES de tocar la base:
+                # la base también los valida con CHECK, pero un error de
+                # restricción es un mensaje ilegible para quien está cargando.
+                tendencia_guardar = None if d_tendencia == "(sin anotar)" else d_tendencia
+                plan_ligado = planes_guardados.get(d_plan)
+                conviccion_guardar = None if d_conviccion == "(sin anotar)" else int(d_conviccion)
+                errores_proceso = []
+                if conviccion_guardar is not None and conviccion_guardar not in (1, 2, 3):
+                    errores_proceso.append("La convicción tiene que ser 1, 2 o 3.")
+                if tendencia_guardar is not None and tendencia_guardar not in TENDENCIAS:
+                    errores_proceso.append(
+                        f"Tendencia inválida: {tendencia_guardar!r}. Las opciones son "
+                        f"{', '.join(TENDENCIAS)}.")
+
+                if errores_proceso:
+                    for e in errores_proceso:
+                        st.error(e)
+                elif d_entrada <= 0:
                     st.error("El precio de entrada tiene que ser mayor que cero.")
                 elif d_cerrada and d_salida <= 0:
                     st.error("Una operación cerrada necesita precio de salida.")
@@ -4230,8 +4623,10 @@ def render_divisas():
                                 "INSERT INTO trading_operaciones (instrumento, categoria, "
                                 "direccion, fecha_apertura, fecha_cierre, precio_entrada, "
                                 "precio_salida, stop, objetivo, lotes, margen_clp, riesgo_clp, "
-                                "resultado_clp, catalizador, condicion_invalidacion, tesis, notas) "
-                                "VALUES (:i,:c,:d,:fa,:fc,:pe,:ps,:st,:ob,:lo,:ma,:ri,:re,:ca,:iv,:te,:no)"
+                                "resultado_clp, catalizador, condicion_invalidacion, tesis, notas, "
+                                "conviccion, tendencia_diario, evento_dia, evento_plan_id) "
+                                "VALUES (:i,:c,:d,:fa,:fc,:pe,:ps,:st,:ob,:lo,:ma,:ri,:re,:ca,:iv,:te,:no,"
+                                ":cv,:td,:ev,:pl)"
                             ), {
                                 "i": d_inst, "c": categoria, "d": d_dir,
                                 "fa": apertura, "fc": cierre, "pe": d_entrada,
@@ -4241,6 +4636,9 @@ def render_divisas():
                                 "re": d_resultado if d_cerrada else None,
                                 "ca": d_catalizador or None, "iv": d_invalida or None,
                                 "te": d_tesis or None, "no": d_notas or None,
+                                "cv": conviccion_guardar, "td": tendencia_guardar,
+                                "ev": None if d_evento == "ninguno" else d_evento,
+                                "pl": plan_ligado,
                             })
                         _trd_invalidar()
                         if detalle_riesgo:
@@ -4274,12 +4672,30 @@ def render_divisas():
             cp = c3.number_input("Precio de salida", 0.0, step=0.00001, format="%.5f",
                                  key="trd_cerrar_precio")
             cr = c4.number_input("Resultado (CLP)", step=1000.0, key="trd_cerrar_resultado")
+
+            # --- Lo que se evalúa AL CERRAR: la calidad de la DECISIÓN, que es
+            # distinta del resultado. Con pocas operaciones el resultado es en
+            # buena parte azar, así que premiarse por un buen resultado de una
+            # decisión mala es la forma más rápida de aprender lo contrario de
+            # lo que conviene.
+            st.caption(
+                "**¿La decisión fue buena?** Responde mirando el proceso, no el "
+                "resultado: ¿el tamaño era adecuado?, ¿tenía tesis y evidencia?, "
+                "¿seguí mi plan?"
+            )
+            cq = st.radio("Calidad de la decisión", ["(sin evaluar)"] + list(CALIDADES),
+                          horizontal=True, key="trd_cerrar_calidad")
+            cn = st.text_area("Nota al cerrar (qué aprendí)", key="trd_cerrar_nota")
+
             if st.button("Cerrar la operación", key="trd_cerrar_btn"):
                 id_op = etiquetas[elegida]
                 momento = _trd_desde_formulario(cf, ch)
                 fila = abiertas_lista[abiertas_lista["id"] == id_op].iloc[0]
                 apertura = _trd_a_chile(fila["fecha_apertura"])
-                if cp <= 0:
+                calidad_guardar = None if cq == "(sin evaluar)" else cq
+                if calidad_guardar is not None and calidad_guardar not in CALIDADES:
+                    st.error(f"Calidad inválida: {calidad_guardar!r}.")
+                elif cp <= 0:
                     st.error("Una operación cerrada necesita precio de salida.")
                 elif apertura is not None and momento < apertura:
                     st.error(
@@ -4290,8 +4706,11 @@ def render_divisas():
                         with engine.begin() as conn:
                             conn.execute(text(
                                 "UPDATE trading_operaciones SET fecha_cierre=:fc, "
-                                "precio_salida=:ps, resultado_clp=:re WHERE id=:id"
-                            ), {"fc": momento, "ps": cp, "re": cr, "id": id_op})
+                                "precio_salida=:ps, resultado_clp=:re, "
+                                "calidad_decision=:cq, nota_post=:cn WHERE id=:id"
+                            ), {"fc": momento, "ps": cp, "re": cr, "id": id_op,
+                                "cq": None if cq == "(sin evaluar)" else cq,
+                                "cn": cn or None})
                         _trd_invalidar()
                         st.success(f"Operación #{id_op} cerrada.")
                         st.rerun()
@@ -4312,6 +4731,14 @@ def render_divisas():
         vista = operaciones.drop(columns=["id"]).copy()
         for col in ("fecha_apertura", "fecha_cierre"):
             vista[col] = vista[col].map(_trd_a_chile)
+        # El R se DERIVA, no se guarda: es resultado_clp / riesgo_clp, y
+        # guardarlo dejaría dos fuentes que se desincronizan si después se
+        # corrige el riesgo de una operación.
+        vista.insert(0, "R", [
+            r_multiplo(f["resultado_clp"], f["riesgo_clp"])
+            for _, f in operaciones.iterrows()
+        ])
+        vista["R"] = vista["R"].map(lambda x: None if x is None else round(float(x), 2))
         st.caption("Las fechas y horas se muestran en hora de Chile.")
         st.dataframe(vista, use_container_width=True, hide_index=True)
         st.download_button(
@@ -4320,6 +4747,12 @@ def render_divisas():
             file_name=f"diario_trading_{hoy:%Y%m%d}.csv",
             mime="text/csv",
         )
+
+    cerradas_proceso = (operaciones[operaciones["fecha_cierre"].notna()]
+                        if not operaciones.empty else pd.DataFrame())
+    _trd_estadisticas_proceso(cerradas_proceso)
+    _trd_planes_evento()
+    _trd_revision_semanal(cerradas_proceso)
 
     # --------------------------------------------------- panel de reglas
     st.divider()

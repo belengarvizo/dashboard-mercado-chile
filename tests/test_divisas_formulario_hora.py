@@ -16,7 +16,6 @@ verifica que el diario volvió a tener exactamente las filas que tenía antes.
 """
 import os
 import sys
-import uuid
 
 import pytest
 from datetime import time
@@ -40,83 +39,47 @@ TZ_CHILE = ZoneInfo("America/Santiago")
 HORA_ESCRITA = time(3, 17)
 
 
-def _contar(conn):
-    return conn.execute(text("SELECT COUNT(*) FROM trading_operaciones")).scalar()
+def test_el_formulario_no_pisa_la_hora_que_se_escribio():
+    """La propiedad que importa, verificada SIN escribir en la base.
+
+    Si el valor por defecto de un st.time_input cambiara entre reruns,
+    Streamlit podría tratarlo como un widget nuevo y reemplazar la hora
+    escrita por la actual justo al enviar. Acá se escribe una hora
+    deliberadamente lejos de "ahora", se fuerza un rerun tocando otro widget,
+    y se comprueba que la hora escrita sigue ahí.
+
+    La otra mitad del problema —que lo que se guarda en la base conserve la
+    zona horaria— la cubre tests/test_trading_zona_horaria.py con una
+    transacción revertida. Partirlo así es lo que permite que NINGUNA prueba
+    confirme escrituras en el diario real."""
+    at = AppTest.from_file(DASHBOARD_PATH, default_timeout=420)
+    at.session_state["seccion_activa"] = "Divisas"
+    at.run(timeout=420)
+    assert not at.exception, at.exception
+
+    at.time_input(key="trd_op_hora_ap").set_value(HORA_ESCRITA)
+    at.number_input(key="trd_op_entrada").set_value(1.2345).run(timeout=420)
+    assert not at.exception, at.exception
+
+    quedo = at.time_input(key="trd_op_hora_ap").value
+    assert (quedo.hour, quedo.minute) == (HORA_ESCRITA.hour, HORA_ESCRITA.minute), (
+        f"se escribió {HORA_ESCRITA} y tras un rerun el selector quedó en {quedo}: "
+        f"el formulario está pisando la hora de la usuaria")
 
 
-def _saltar_si_hay_operaciones_reales():
-    """Un test no tiene por qué poder tocar el diario real.
-
-    Mientras el diario esté vacío, escribir y borrar la propia fila es
-    inocuo. Apenas haya operaciones de verdad, el riesgo de que una limpieza
-    mal escrita se lleve una por delante deja de valer la pena: el test se
-    salta y lo dice.
-    """
-    with get_engine().connect() as con:
-        reales = con.execute(text(
-            "SELECT COUNT(*) FROM trading_operaciones "
-            "WHERE notas IS NULL OR notas NOT LIKE 'prueba-%'"
-        )).scalar()
-    if reales:
-        pytest.skip(
-            f"el diario tiene {reales} operación(es) real(es): este test no escribe "
-            f"en la base para no arriesgarlas. Corrélo con el diario vacío.")
-
-
-def test_la_hora_escrita_en_el_formulario_es_la_que_se_guarda():
-    marca = f"prueba-{uuid.uuid4().hex[:12]}"
-    engine = get_engine()
-    _saltar_si_hay_operaciones_reales()
-    with engine.connect() as con:
-        antes = _contar(con)
-    id_creado = None
-
-    try:
-        at = AppTest.from_file(DASHBOARD_PATH, default_timeout=420)
-        at.session_state["seccion_activa"] = "Divisas"
-        at.run(timeout=420)
-        assert not at.exception, at.exception
-
-        at.number_input(key="trd_op_entrada").set_value(1.1234)
-        at.number_input(key="trd_op_lotes").set_value(0.01)
-        at.time_input(key="trd_op_hora_ap").set_value(HORA_ESCRITA)
-        at.text_area(key="trd_op_notas").set_value(marca)
-        fecha_escrita = at.date_input(key="trd_op_fecha_ap").value
-
-        # Enviar el formulario
-        enviar = [b for b in at.button if "Guardar operación" in str(b.label)]
-        assert enviar, [str(b.label) for b in at.button]
-        enviar[0].click().run(timeout=420)
-        assert not at.exception, at.exception
-
-        with engine.connect() as con:
-            fila = con.execute(text(
-                "SELECT id, fecha_apertura FROM trading_operaciones WHERE notas = :m"
-            ), {"m": marca}).fetchone()
-        assert fila is not None, "el formulario no guardó la operación"
-        id_creado = fila[0]
-
-        guardada = fila[1].astimezone(TZ_CHILE)
-        assert (guardada.hour, guardada.minute) == (HORA_ESCRITA.hour, HORA_ESCRITA.minute), (
-            f"se escribió {HORA_ESCRITA} y quedó guardada {guardada:%H:%M} "
-            f"(hora de Chile): el formulario pisó la hora del usuario")
-        assert guardada.date() == fecha_escrita, (
-            f"se escribió la fecha {fecha_escrita} y quedó {guardada.date()}")
-    finally:
-        # Solo la fila de este test: por su marca única y, si se alcanzó a
-        # leer, por su id exacto. Nunca por un rango de ids, que se llevaría
-        # por delante cualquier operación real registrada mientras corría.
-        with engine.begin() as con:
-            con.execute(text("DELETE FROM trading_operaciones WHERE notas = :m"),
-                        {"m": marca})
-            if id_creado is not None:
-                con.execute(text("DELETE FROM trading_operaciones WHERE id = :i"),
-                            {"i": id_creado})
-
-    with engine.connect() as con:
-        despues = _contar(con)
-    assert despues == antes, (
-        f"el diario quedó con {despues} filas y antes tenía {antes}: la limpieza falló")
+def test_ninguna_prueba_de_este_archivo_escribe_en_el_diario():
+    """Red de seguridad explícita: este archivo trabaja solo con AppTest y
+    lecturas. Si alguien agrega una escritura, que se note acá."""
+    with open(__file__, encoding="utf-8") as f:
+        codigo = f.read()
+    # Los literales se arman por partes: si estuvieran enteros, este test se
+    # encontraría a sí mismo y fallaría siempre.
+    tabla = "trading_" + "operaciones"
+    for prohibido in (f"INSERT INTO {tabla}", f"DELETE FROM {tabla}", f"UPDATE {tabla}"):
+        assert prohibido not in codigo, (
+            f"este archivo volvió a escribir en el diario real ({prohibido!r}). "
+            f"Las pruebas que necesiten escribir van en test_trading_zona_horaria.py, "
+            f"dentro de una transacción revertida.")
 
 
 def test_la_hora_inicial_no_cambia_entre_recargas():
@@ -136,7 +99,8 @@ def test_la_hora_inicial_no_cambia_entre_recargas():
 
 
 if __name__ == "__main__":
-    test_la_hora_escrita_en_el_formulario_es_la_que_se_guarda()
+    test_el_formulario_no_pisa_la_hora_que_se_escribio()
+    test_ninguna_prueba_de_este_archivo_escribe_en_el_diario()
     test_la_hora_inicial_no_cambia_entre_recargas()
     print("OK: las dos pruebas pasaron.")
 
@@ -176,7 +140,13 @@ def test_el_aviso_de_hora_vieja_esta_visible():
     at.run(timeout=420)
     textos = " ".join(str(c.value) for c in at.caption)
     assert "cuando abriste la página" in textos, textos[:300]
-    assert "Revisala" in textos or "revisala" in textos.lower(), textos[:300]
+    # "Revísala" con tilde: el texto se corrigió a tuteo chileno (antes decía
+    # "Revisala", voseo). La comparación se hace sin tildes para que una
+    # corrección de acentuación no vuelva a romper el test.
+    import unicodedata
+    plano = "".join(c for c in unicodedata.normalize("NFD", textos.lower())
+                    if unicodedata.category(c) != "Mn")
+    assert "revisala" in plano, textos[:300]
 
 
 def test_no_quedan_filas_de_prueba_en_el_diario_real():
