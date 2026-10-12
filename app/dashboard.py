@@ -1256,7 +1256,7 @@ def render_laboratorio_financiero():
         st.info(
             "Esta pestaña hace varios cálculos (optimización de fronteras, CAPM, "
             "Sharpe/Treynor, asignación óptima) que no corren automáticamente para "
-            "no ralentizar el resto del dashboard. Apretá el botón de arriba para cargarla."
+            "no ralentizar el resto del dashboard. Aprieta el botón de arriba para cargarla."
         )
     else:
         try:
@@ -2165,7 +2165,7 @@ def render_laboratorio_financiero():
                 st.session_state["calcular_estructura_tasas"] = True
 
             if not st.session_state["calcular_estructura_tasas"]:
-                st.info("Apretá el botón de arriba para correr el ajuste (tarda unos segundos).")
+                st.info("Aprieta el botón de arriba para correr el ajuste (tarda unos segundos).")
             else:
                 try:
                     df_macro_treasury = _filtrar_macro_por_nombre(df_macro_lab, NOMBRE_A_PLAZO_TREASURY)
@@ -2227,7 +2227,7 @@ def render_laboratorio_financiero():
                             "En general, el término extra de Svensson (un segundo parámetro de "
                             "curvatura con su propio τ) ayuda más cuando la curva tiene una forma "
                             "compleja — invertida o con más de una \"joroba\" — y menos cuando la "
-                            "curva es suave y sube monótonamente. Cambiá el año de la sección 1 para "
+                            "curva es suave y sube monótonamente. Cambia el año de la sección 1 para "
                             "ver la forma real de la curva en cada caso y confirmarlo vos mismo."
                         )
 

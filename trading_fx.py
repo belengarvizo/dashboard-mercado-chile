@@ -198,7 +198,7 @@ def valor_pip_clp(nombre_xtb: str, lotes, pip_tamano, cotizaciones: dict,
     if tasa is None:
         return ResultadoCalculo(
             None, f"No hay forma de convertir {cotizacion} a CLP con las cotizaciones "
-                  f"disponibles. Ingresá la tasa {cotizacion}/CLP a mano.")
+                  f"disponibles. Ingresa la tasa {cotizacion}/CLP a mano.")
 
     lotes = Decimal(str(lotes))
     pip_tamano = Decimal(str(pip_tamano))
@@ -234,7 +234,7 @@ def valor_posicion_clp(nombre_xtb: str, lotes, precio, cotizaciones: dict,
     if tasa is None:
         return ResultadoCalculo(
             None, f"No hay forma de convertir {base} a CLP con las cotizaciones "
-                  f"disponibles. Ingresá la tasa {base}/CLP a mano.")
+                  f"disponibles. Ingresa la tasa {base}/CLP a mano.")
 
     lotes = Decimal(str(lotes))
     unidades = TAMANO_CONTRATO_ESTANDAR * lotes

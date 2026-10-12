@@ -108,7 +108,7 @@ def test_ninguna_funcion_cacheada_lee_el_reloj_adentro():
         "queda congelada en el caché y el dashboard usará el 'hoy' de ayer durante "
         "la primera hora después de medianoche:\n"
         + "\n".join(f"  - {n}: {', '.join(r)}" for n, r in sorted(nuevos.items()))
-        + "\n\nArreglo: sacá el reloj de la función y pasá la fecha como argumento "
+        + "\n\nArreglo: saca el reloj de la función y pasa la fecha como argumento "
           "(ver _hoy_normalizado en app/dashboard.py), para que forme parte de la "
           "clave del caché."
     )
