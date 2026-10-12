@@ -19,9 +19,11 @@ DASHBOARD_PATH = os.path.join(os.path.dirname(__file__), "..", "app", "dashboard
 SECCION = "Divisas"
 
 
-def _correr():
+def _correr(**estado):
     at = AppTest.from_file(DASHBOARD_PATH, default_timeout=420)
     at.session_state["seccion_activa"] = SECCION
+    for clave, valor in estado.items():
+        at.session_state[clave] = valor
     # La pestaña ahora pide contraseña. Estas pruebas son del CONTENIDO, no
     # de la puerta: se desbloquea por session_state para no depender de una
     # variable de entorno. La puerta tiene sus propias pruebas en
@@ -120,6 +122,84 @@ def test_el_panel_muestra_los_controles_del_reglamento():
     for control in ["Operaciones cerradas", "menos de 2 minutos", "piso de descalificación",
                     "Margen por subyacente", "Concentración por categoría"]:
         assert control in texto, f"falta el control {control!r} en el panel"
+
+
+def test_el_limite_por_operacion_avisa_cuando_te_pasas():
+    """Sin equity registrado la base es el capital inicial de 10.000.000. Al
+    5% el riesgo son 500.000 contra un límite de 200.000: rojo."""
+    at = _correr()
+    at.number_input(key="trd_calc_pct").set_value(5.0).run(timeout=420)
+    assert not at.exception, at.exception
+    texto = _todo_el_texto(at)
+    assert "Riesgo de esta operación" in texto
+    assert "🔴" in texto, "debería estar en rojo"
+    # En pesos y en porcentaje del capital, como se pidió.
+    assert "500,000 CLP" in texto and "5.00%" in texto, texto[-1200:]
+    assert "10,000,000" in texto
+    # Y cuántas operaciones así llegan al piso: 5.000.000 / 500.000 = 10.
+    assert "10 operaciones así seguidas" in texto, texto[-1200:]
+    assert "5,000,000" in texto
+    # No es una regla del torneo y tiene que decirlo.
+    assert "no del reglamento del torneo" in texto
+
+
+def test_el_limite_por_operacion_esta_en_verde_con_el_riesgo_por_defecto():
+    """Al 1% son 100.000 contra un límite de 200.000."""
+    texto = _todo_el_texto(_correr())
+    assert "Riesgo de esta operación" in texto
+    assert "100,000 CLP" in texto and "1.00%" in texto
+
+
+def test_el_limite_por_operacion_es_editable():
+    """Si fuera una constante del código, cambiarlo exigiría un deploy."""
+    at = _correr()
+    claves = {w.key for w in at.number_input}
+    assert "trd_tope_operacion_pct" in claves, claves
+    # El mismo 1% de riesgo, con el límite bajado a 0,5%: pasa a rojo.
+    at.number_input(key="trd_tope_operacion_pct").set_value(0.5).run(timeout=420)
+    assert not at.exception, at.exception
+    texto = _todo_el_texto(at)
+    assert "🔴" in texto, "con el límite en 0,5% debería avisar"
+    assert "50,000" in texto, texto[-900:]
+
+
+def test_avisa_si_la_operacion_que_registraste_supera_el_limite():
+    """El formulario deja el aviso en session_state antes del rerun, porque
+    el rerun borra todo lo que se dibuje ahí. Acá se inyecta ese mismo
+    estado: la prueba NO escribe en la base."""
+    from decimal import Decimal
+
+    at = _correr(trd_aviso_riesgo_guardado=(Decimal("500000"), "EURUSD"))
+    texto = _todo_el_texto(at)
+    assert "acabas de registrar en EURUSD" in texto, texto[-1200:]
+    assert "supera" in texto
+    assert "500,000 CLP" in texto
+    assert "10 operaciones así seguidas" in texto
+
+
+def test_el_aviso_de_la_operacion_registrada_no_se_repite():
+    """Se consume con pop: si quedara en la sesión, reaparecería en cada
+    rerun aunque ya no corresponda."""
+    from decimal import Decimal
+
+    at = _correr(trd_aviso_riesgo_guardado=(Decimal("500000"), "EURUSD"))
+    assert "acabas de registrar" in _todo_el_texto(at)
+    at.number_input(key="trd_calc_stop").set_value(40.0).run(timeout=420)
+    assert "acabas de registrar" not in _todo_el_texto(at)
+
+
+def test_el_limite_por_operacion_no_bloquea_nada():
+    """La lógica vive en trading_reglas.py, que es un módulo puro: ni
+    siquiera importa Streamlit, así que no tiene forma de impedir nada."""
+    ruta_reglas = os.path.join(os.path.dirname(__file__), "..", "trading_reglas.py")
+    with open(ruta_reglas, encoding="utf-8") as f:
+        reglas = f.read()
+    assert "import streamlit" not in reglas
+    bloque = reglas[reglas.index("def riesgo_por_operacion("):
+                    reglas.index("\ndef stops_hasta_el_piso(")]
+    for prohibido in ("st.stop()", "raise ", "return False", "disabled=True"):
+        assert prohibido not in bloque, (
+            f"el chequeo de riesgo por operación contiene {prohibido!r}: avisa, no bloquea")
 
 
 def test_la_tabla_de_recuperacion_aparece_en_el_calculador():

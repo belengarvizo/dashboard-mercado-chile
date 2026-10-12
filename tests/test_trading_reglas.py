@@ -185,3 +185,119 @@ def test_una_posicion_abierta_sin_dato_no_puede_pintar_verde():
     assert sin_m.estado == SIN_DATOS, sin_m.estado
     assert "Falta cargar el margen en 1" in sin_m.detalle
     assert margen_por_subyacente({}, equity, sin_dato=3).estado == SIN_DATOS
+
+
+# ================================ límite de riesgo por operación (Parte II.5)
+# Es un límite PROPIO, no del reglamento del torneo. Avisa y nunca bloquea.
+# Lo que se prueba son los bordes donde un veredicto plausible sería falso:
+# sin capital, sin riesgo, justo en el límite y con el límite editado.
+from trading_reglas import (  # noqa: E402
+    AMARILLO,
+    TOPE_RIESGO_ABIERTO_POR_DEFECTO,
+    TOPE_RIESGO_POR_OPERACION_POR_DEFECTO,
+    riesgo_por_operacion,
+)
+
+EQUITY = Decimal("10000000")
+TOPE_2 = TOPE_RIESGO_POR_OPERACION_POR_DEFECTO       # 2% -> 200.000 sobre 10M
+
+
+def test_el_tope_por_operacion_por_defecto_es_el_2_por_ciento():
+    assert TOPE_RIESGO_POR_OPERACION_POR_DEFECTO == Decimal("0.02")
+    # Y por debajo del presupuesto de riesgo de toda la cuenta: una sola
+    # operación no debería agotarlo sola.
+    assert TOPE_RIESGO_POR_OPERACION_POR_DEFECTO < TOPE_RIESGO_ABIERTO_POR_DEFECTO
+
+
+def test_sin_riesgo_cargado_no_se_puede_evaluar():
+    """Gris, no verde: verde afirmaría que está dentro del límite."""
+    for vacio in (None, 0, Decimal(0), -5000, float("nan")):
+        c = riesgo_por_operacion(vacio, EQUITY)
+        assert c.estado == SIN_DATOS, f"{vacio!r} dio {c.estado}"
+
+
+def test_sin_limite_tampoco():
+    assert riesgo_por_operacion(100000, EQUITY, None).estado == SIN_DATOS
+    assert riesgo_por_operacion(100000, EQUITY, Decimal(0)).estado == SIN_DATOS
+    assert riesgo_por_operacion(100000, EQUITY, float("nan")).estado == SIN_DATOS
+
+
+def test_sin_equity_usa_el_capital_inicial_y_lo_dice():
+    """Antes de registrar el primer equity, el capital del torneo es el
+    inicial. Apagar el control sería peor que calcularlo sobre ese número,
+    pero hay que decir cuál se usó."""
+    c = riesgo_por_operacion(Decimal("100000"), None)
+    assert c.estado == VERDE
+    assert "capital inicial" in c.detalle
+    assert f"{CAPITAL_INICIAL_CLP:,.0f}" in c.detalle
+    # con equity cargado no aparece esa aclaración
+    con_equity = riesgo_por_operacion(Decimal("100000"), EQUITY)
+    assert "capital inicial" not in con_equity.detalle
+
+
+def test_justo_en_el_limite_queda_amarillo_y_no_rojo():
+    """No lo superó, pero no queda margen. Para el rojo se exige
+    estrictamente mayor."""
+    en_el_limite = riesgo_por_operacion(Decimal("200000"), EQUITY, TOPE_2)
+    assert en_el_limite.estado == AMARILLO
+
+    un_peso_mas = riesgo_por_operacion(Decimal("200001"), EQUITY, TOPE_2)
+    assert un_peso_mas.estado == ROJO
+
+
+def test_el_amarillo_empieza_pasado_el_80_por_ciento_del_limite():
+    justo_en_el_80 = riesgo_por_operacion(Decimal("160000"), EQUITY, TOPE_2)
+    assert justo_en_el_80.estado == VERDE, "el 80% exacto todavía es verde"
+    assert riesgo_por_operacion(Decimal("160001"), EQUITY, TOPE_2).estado == AMARILLO
+    assert riesgo_por_operacion(Decimal("100000"), EQUITY, TOPE_2).estado == VERDE
+
+
+def test_editar_el_limite_cambia_el_veredicto():
+    """El mismo riesgo, dos límites distintos."""
+    riesgo = Decimal("150000")
+    assert riesgo_por_operacion(riesgo, EQUITY, Decimal("0.02")).estado == VERDE
+    assert riesgo_por_operacion(riesgo, EQUITY, Decimal("0.01")).estado == ROJO
+    assert riesgo_por_operacion(riesgo, EQUITY, Decimal("0.016")).estado == AMARILLO
+
+
+def test_el_detalle_dice_los_pesos_y_el_porcentaje():
+    c = riesgo_por_operacion(Decimal("250000"), EQUITY, TOPE_2)
+    assert "250,000 CLP" in c.detalle
+    assert "2.50%" in c.detalle, c.detalle
+    assert "10,000,000" in c.detalle
+    assert "200,000" in c.detalle and "2.0%" in c.detalle
+
+
+def test_la_nota_dice_cuantas_operaciones_llevan_al_piso():
+    """(10.000.000 - 5.000.000) / 100.000 = 50."""
+    c = riesgo_por_operacion(Decimal("100000"), EQUITY, TOPE_2)
+    assert "50 operaciones" in c.nota, c.nota
+    assert f"{PISO_EQUITY_CLP:,.0f}" in c.nota
+    # con el doble de riesgo, la mitad de operaciones
+    doble = riesgo_por_operacion(Decimal("200000"), EQUITY, TOPE_2)
+    assert "25 operaciones" in doble.nota, doble.nota
+
+
+def test_si_ya_estas_en_el_piso_lo_dice_en_vez_de_contar():
+    c = riesgo_por_operacion(Decimal("100000"), PISO_EQUITY_CLP, TOPE_2)
+    assert "Ya estás en el piso" in c.nota, c.nota
+    bajo_el_piso = riesgo_por_operacion(Decimal("100000"), Decimal("4000000"), TOPE_2)
+    assert "Ya estás en el piso" in bajo_el_piso.nota
+
+
+def test_siempre_dice_que_el_limite_es_propio():
+    """No sale del reglamento del torneo, y confundirlo sería grave: XTB no
+    descalifica por esto."""
+    for riesgo in (Decimal("50000"), Decimal("250000"), None):
+        c = riesgo_por_operacion(riesgo, EQUITY, TOPE_2)
+        assert "no del reglamento del torneo" in c.nota, c.nota
+
+
+def test_el_chequeo_describe_y_no_bloquea():
+    """Devuelve un Chequeo igual que el resto del panel: no tiene forma de
+    impedir nada."""
+    c = riesgo_por_operacion(Decimal("500000"), EQUITY, TOPE_2)
+    assert c.estado == ROJO
+    assert c.valor == Decimal("500000")
+    assert c.limite == Decimal("200000")
+    assert c.nombre == "Riesgo de esta operación"

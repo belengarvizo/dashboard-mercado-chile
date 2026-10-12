@@ -109,6 +109,7 @@ from trading_proceso import (
     validar_probabilidades,
 )
 from trading_reglas import (
+    TOPE_RIESGO_POR_OPERACION_POR_DEFECTO,
     concentracion_por_categoria,
     limite_margen_por_subyacente,
     margen_por_subyacente,
@@ -116,6 +117,7 @@ from trading_reglas import (
     minimo_operaciones,
     operaciones_cortas,
     piso_de_equity,
+    riesgo_por_operacion,
     riesgo_total_abierto,
     stops_hasta_el_piso,
 )
@@ -4806,7 +4808,7 @@ def render_divisas():
 
     solo_fx = catalogo[catalogo["categoria"] == "divisas"]
     nombres_fx = sorted(solo_fx["nombre_xtb"].tolist())
-    col1, col2, col3 = st.columns(3)
+    col1, col2, col3, col4 = st.columns(4)
     instrumento = col1.selectbox("Par", nombres_fx,
                                  index=nombres_fx.index("EURUSD") if "EURUSD" in nombres_fx else 0,
                                  key="trd_calc_par")
@@ -4814,6 +4816,14 @@ def render_divisas():
                                    key="trd_calc_pct")
     stop_pips = col3.number_input("Distancia al stop (pips)", 1.0, 1000.0, 30.0, 1.0,
                                   key="trd_calc_stop")
+    # El límite vive acá, pegado al riesgo, y el formulario del diario lo lee
+    # de session_state: así hay un solo número y no dos que se contradigan.
+    pct_tope_op = col4.number_input(
+        "Límite por operación (% del capital)", 0.1, 10.0,
+        float(TOPE_RIESGO_POR_OPERACION_POR_DEFECTO * 100), 0.1,
+        key="trd_tope_operacion_pct",
+        help="Tuyo y editable. No sale del reglamento del torneo: XTB no exige "
+             "un máximo por operación. Avisa, no impide nada.")
 
     fila_cat = solo_fx[solo_fx["nombre_xtb"] == instrumento].iloc[0]
     pip_guardado = fila_cat["pip_tamano"]
@@ -4868,12 +4878,35 @@ def render_divisas():
     # Va FUERA del else: el riesgo en pesos sale del porcentaje y del capital,
     # así que la tabla sirve igual aunque el cálculo de lotes se haya negado
     # por falta del tamaño del pip.
+    _trd_pinta(riesgo_por_operacion(
+        riesgo_clp, equity_actual, Decimal(str(pct_tope_op)) / Decimal(100)))
+
     _trd_tabla_recuperacion(riesgo_clp, base_riesgo)
     _trd_aviso_antimartingala(riesgo_clp, operaciones)
 
     # -------------------------------------------------------------- diario
     st.divider()
     st.markdown("### Diario de operaciones")
+
+    # Aviso de la operación que se acaba de registrar: se evalúa contra el
+    # mismo límite del calculador. Nunca impidió guardarla; ya está guardada.
+    pendiente = st.session_state.pop("trd_aviso_riesgo_guardado", None)
+    if pendiente is not None:
+        riesgo_guardado_aviso, instrumento_guardado = pendiente
+        chequeo_guardado = riesgo_por_operacion(
+            riesgo_guardado_aviso, equity_actual,
+            Decimal(str(st.session_state.get(
+                "trd_tope_operacion_pct",
+                float(TOPE_RIESGO_POR_OPERACION_POR_DEFECTO * 100)))) / Decimal(100))
+        if chequeo_guardado.estado in ("rojo", "amarillo"):
+            icono = "🔴" if chequeo_guardado.estado == "rojo" else "🟡"
+            pintar = st.error if chequeo_guardado.estado == "rojo" else st.warning
+            pintar(
+                f"{icono} **La operación que acabas de registrar en "
+                f"{instrumento_guardado} {'supera' if chequeo_guardado.estado == 'rojo' else 'roza'} "
+                f"tu límite por operación.** {chequeo_guardado.detalle}. "
+                f"{chequeo_guardado.nota}"
+            )
 
     with st.expander("Registrar una operación", expanded=operaciones.empty):
         nombres_todos = sorted(catalogo["nombre_xtb"].tolist())
@@ -5032,6 +5065,11 @@ def render_divisas():
                                 "pl": plan_ligado,
                             })
                         _trd_invalidar()
+                        # El st.rerun() de más abajo borra cualquier cosa que
+                        # se dibuje acá, así que el aviso viaja por
+                        # session_state y se pinta arriba del diario.
+                        st.session_state["trd_aviso_riesgo_guardado"] = (
+                            riesgo_guardado, d_inst)
                         if detalle_riesgo:
                             st.success("Operación registrada. Riesgo calculado así:\n\n"
                                        + "\n".join("- " + x for x in detalle_riesgo))

@@ -23,6 +23,11 @@ SEGUNDOS_OPERACION_CORTA = 120
 TOPE_MARGEN_POR_SUBYACENTE = Decimal("0.30")
 TOPE_TRADE_SOBRE_GANANCIA = Decimal("0.40")
 TOPE_RIESGO_ABIERTO_POR_DEFECTO = Decimal("0.03")
+# Límite PROPIO de cuánto puede arriesgar UNA operación, como fracción del
+# capital. No sale del reglamento del torneo: XTB no lo exige. Por debajo del
+# tope de riesgo total abierto (3%), porque una sola operación nunca debería
+# agotar sola el presupuesto de riesgo de toda la cuenta.
+TOPE_RIESGO_POR_OPERACION_POR_DEFECTO = Decimal("0.02")
 # Umbral intermedio: avisar en amarillo antes de llegar al límite duro.
 AVISO_MARGEN_POR_SUBYACENTE = Decimal("0.20")
 
@@ -42,6 +47,21 @@ class Chequeo:
 
 def _d(x) -> Decimal:
     return x if isinstance(x, Decimal) else Decimal(str(x))
+
+
+def _d_o_nada(x):
+    """Como _d, pero devuelve None en vez de reventar con los faltantes.
+
+    pandas entrega NaN para los NULL de SQL, y NaN es el único valor distinto
+    de sí mismo: un chequeo `is None` no lo ve.
+    """
+    if x is None:
+        return None
+    try:
+        d = _d(x)
+    except Exception:
+        return None
+    return None if d != d else d
 
 
 def minimo_operaciones(cerradas: int) -> Chequeo:
@@ -218,6 +238,63 @@ def riesgo_total_abierto(riesgos: list, equity_clp,
         f"{total:,.0f} CLP de {tope:,.0f} permitidos ({_d(tope_pct) * 100:.1f}% de {base:,.0f})",
         total, tope,
         nota="Límite propio, no del reglamento del torneo.")
+
+
+def riesgo_por_operacion(riesgo_clp, equity_clp,
+                         tope_pct=TOPE_RIESGO_POR_OPERACION_POR_DEFECTO) -> Chequeo:
+    """Lo que arriesga UNA operación contra el límite propio.
+
+    AVISA, NO BLOQUEA: devuelve un Chequeo, igual que el resto del panel.
+    Amarillo desde el 80% del límite, rojo al pasarlo.
+
+    Justo EN el límite queda amarillo, no rojo: no lo superó, pero no queda
+    margen. Para el rojo se exige estrictamente mayor.
+
+    Si no hay equity registrado se usa el capital inicial y se dice en el
+    texto, en vez de devolver gris: antes de registrar el primer equity, el
+    capital del torneo es el inicial, y dejar el control apagado sería peor
+    que calcularlo sobre un número declarado.
+    """
+    nombre = "Riesgo de esta operación"
+    nota = "Límite propio, no del reglamento del torneo."
+
+    riesgo = _d_o_nada(riesgo_clp)
+    if riesgo is None or riesgo <= 0:
+        return Chequeo(nombre, SIN_DATOS,
+                       "Falta el riesgo de la operación o quedó en cero", nota=nota)
+
+    fraccion = _d_o_nada(tope_pct)
+    if fraccion is None or fraccion <= 0:
+        return Chequeo(nombre, SIN_DATOS, "Falta el límite por operación", nota=nota)
+
+    base = _d_o_nada(equity_clp)
+    sobre_el_inicial = base is None or base <= 0
+    if sobre_el_inicial:
+        base = CAPITAL_INICIAL_CLP
+
+    tope = base * fraccion
+    porcentaje = riesgo / base * 100
+
+    if riesgo > tope:
+        estado = ROJO
+    elif riesgo > tope * Decimal("0.8"):
+        estado = AMARILLO
+    else:
+        estado = VERDE
+
+    de_donde = (f"capital inicial de {base:,.0f} (todavía no registras el equity)"
+                if sobre_el_inicial else f"capital de {base:,.0f}")
+    detalle = (f"{riesgo:,.0f} CLP, {porcentaje:.2f}% del {de_donde}. "
+               f"Tu límite son {tope:,.0f} ({fraccion * 100:.1f}%)")
+
+    if base <= PISO_EQUITY_CLP:
+        nota = f"Ya estás en el piso de {PISO_EQUITY_CLP:,.0f} o por debajo. " + nota
+    else:
+        cuantas = int((base - PISO_EQUITY_CLP) / riesgo)
+        nota = (f"{cuantas} operaciones así seguidas, todas perdedoras, te dejarían "
+                f"en el piso de {PISO_EQUITY_CLP:,.0f}. ") + nota
+
+    return Chequeo(nombre, estado, detalle, riesgo, tope, nota=nota)
 
 
 def stops_hasta_el_piso(equity_clp, riesgo_por_operacion_clp) -> Chequeo:
