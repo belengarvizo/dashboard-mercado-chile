@@ -126,13 +126,13 @@ def test_avisa_cuando_la_tasa_de_la_base_esta_vieja():
     cot = dict(COT, **{"USDCLP=X": (Decimal("975.06"), vieja)})
     r = valor_pip_clp("EURUSD", "0.01", "0.0001", cot, HOY)
     assert r.valor is not None, "una tasa vieja avisa, no bloquea"
-    assert any("revisala contra XTB" in a for a in r.avisos), r.avisos
+    assert any("revísala contra XTB" in a for a in r.avisos), r.avisos
 
     # Y en el borde exacto NO avisa, para no gritar todos los lunes.
     justo = HOY - timedelta(days=DIAS_TASA_VIEJA)
     r2 = valor_pip_clp("EURUSD", "0.01", "0.0001",
                        dict(COT, **{"USDCLP=X": (Decimal("975.06"), justo)}), HOY)
-    assert not any("revisala" in a for a in r2.avisos), r2.avisos
+    assert not any("revísala" in a for a in r2.avisos), r2.avisos
 
 
 def test_marca_como_supuesto_el_contrato_de_los_pares_no_verificados():

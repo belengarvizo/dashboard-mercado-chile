@@ -70,11 +70,18 @@ from constants import (
     TICKERS_LABORATORIO_ADICIONALES,
     TICKERS_LABORATORIO_ADICIONAL_DESCARGA,
 )
+from sqlalchemy import text
+
 from retry_utils import con_reintentos_db
 # Los 13 pares + el índice dólar del módulo de trading. Se importan del
 # catálogo (fuente única) en vez de repetirse acá, para que la lista del
 # cron no pueda desincronizarse de los tickers validados.
 from catalogo_instrumentos import TICKERS_YAHOO_FASE_1
+from trading_atr import (
+    cierres_fuera_de_rango,
+    filas_validas,
+    solo_ruedas_cerradas,
+)
 
 # dict.fromkeys en vez de una lista simple: varias de las "7 Magníficas"
 # (AAPL, MSFT, GOOGL, AMZN, NVDA) también son parte del Dow Jones — se
@@ -208,6 +215,61 @@ def guardar_historico(session, ticker: str, historico):
     return contador, reajuste_historico
 
 
+# ---------------------------------------------------------------- rango FX
+# Los 14 pares del módulo de trading, como conjunto, para preguntar rápido.
+TICKERS_FX = frozenset(TICKERS_YAHOO_FASE_1)
+
+SQL_RANGO_FX = text("""
+    INSERT INTO precios_fx_rango (ticker, fecha, maximo, minimo, cierre)
+    VALUES (:ticker, :fecha, :maximo, :minimo, :cierre)
+    ON CONFLICT (ticker, fecha) DO UPDATE SET
+        maximo = EXCLUDED.maximo,
+        minimo = EXCLUDED.minimo,
+        cierre = EXCLUDED.cierre,
+        actualizado_en = NOW()
+""")
+
+
+def guardar_rango_fx(session, ticker: str, historico, hoy=None):
+    """Guarda máximo, mínimo y cierre de las ruedas CERRADAS de un par.
+
+    Devuelve (guardadas, descartadas_por_incompletas, cierres_fuera_de_rango).
+
+    El tercer número NO son filas descartadas: son ruedas que se guardan
+    igual pero traen el cierre fuera de su propio [mínimo, máximo]. Ver
+    filas_validas() para por qué no se tiran.
+
+    NO toca precios_acciones: escribe solo en precios_fx_rango. El cierre se
+    guarda porque el rango verdadero de una rueda necesita el cierre de la
+    anterior, y derivarlo de la fila previa de esta misma tabla evita que el
+    dato quede duplicado y pueda contradecirse.
+
+    La vela del día en curso se descarta: Yahoo la entrega con el máximo y
+    el mínimo de lo que va corrido de la sesión, y guardarla sería contar
+    medio día como rueda completa.
+    """
+    if historico is None or len(historico) == 0:
+        return 0, 0, 0
+
+    hoy = hoy or date.today()
+    antes = len(historico)
+    cerradas = solo_ruedas_cerradas(historico, hoy)
+    incompletas = antes - len(cerradas)
+    buenas = filas_validas(cerradas)
+    fuera = cierres_fuera_de_rango(buenas)
+    if len(buenas) == 0:
+        return 0, incompletas, fuera
+
+    filas = [
+        {"ticker": ticker, "fecha": idx.date(),
+         "maximo": float(fila["High"]), "minimo": float(fila["Low"]),
+         "cierre": float(fila["Close"])}
+        for idx, fila in buenas.iterrows()
+    ]
+    session.execute(SQL_RANGO_FX, filas)
+    return len(filas), incompletas, fuera
+
+
 def _descargar_y_guardar(session, ticker, periodo, tickers_fallidos):
     """Baja `ticker` con la ventana `periodo`, lo guarda, y devuelve
     (contador, reajuste_historico) o None si el ticker falló (ya registrado
@@ -217,6 +279,16 @@ def _descargar_y_guardar(session, ticker, periodo, tickers_fallidos):
 
         def _guardar_y_commitear(ticker=ticker, historico=historico):
             resultado_local = guardar_historico(session, ticker, historico)
+            # Los pares de divisas guardan además máximo y mínimo, que
+            # guardar_historico descarta. Va en la MISMA transacción, así que
+            # o quedan las dos cosas o no queda ninguna.
+            if ticker in TICKERS_FX:
+                guardados, incompletas, fuera = guardar_rango_fx(
+                    session, ticker, historico)
+                if guardados:
+                    print(f"  -> rango FX: {guardados} ruedas"
+                          + (f", {fuera} con el cierre fuera del rango" if fuera else "")
+                          + (f", {incompletas} sin cerrar" if incompletas else ""))
             session.commit()
             return resultado_local
 

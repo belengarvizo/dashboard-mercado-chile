@@ -62,6 +62,15 @@ from market_data import (
 )
 from calendario_economico import proximos_eventos, cobertura_por_tipo, INDICADOR_POR_TIPO, CALENDARIO_VERIFICADO_AL
 from catalogo_instrumentos import TICKERS_YAHOO_FASE_1
+from trading_atr import (
+    FACTOR_DIA_SOSPECHOSO,
+    MULTIPLO_STOP_POR_DEFECTO,
+    PERIODO_ATR,
+    RUEDAS_PARA_DESACTUALIZADO,
+    atr_de_rangos,
+    stop_demasiado_cerca,
+    stop_sugerido,
+)
 from trading_correlacion import (
     MINIMO_OBSERVACIONES,
     TICKERS_SIN_CONVENCION_COMUN,
@@ -4018,6 +4027,31 @@ def cargar_estado_cuenta_trading(version: int = 0) -> pd.DataFrame:
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
+def cargar_rangos_fx(hoy: date) -> pd.DataFrame:
+    """Máximos, mínimos y cierres diarios de los pares, para el ATR.
+
+    Sale de precios_fx_rango, que llena el cron con las ruedas CERRADAS. No
+    se consulta Yahoo acá: la página no debe depender de una llamada de red.
+
+    `hoy` entra como argumento para que la fecha forme parte de la clave de
+    caché; si se leyera el reloj adentro, quedaría congelada durante el TTL.
+    """
+    return pd.read_sql(
+        "SELECT ticker, fecha, maximo, minimo, cierre FROM precios_fx_rango "
+        "ORDER BY ticker, fecha",
+        engine,
+    )
+
+
+def _trd_atr(ticker, rangos: pd.DataFrame, pip_tamano, hoy: date):
+    """El ATR de un par, o un resultado sin valor si no hay con qué."""
+    if rangos.empty or ticker is None or (isinstance(ticker, float) and ticker != ticker):
+        return atr_de_rangos(str(ticker), [], pip_tamano, hoy=hoy)
+    propias = rangos[rangos["ticker"] == ticker]
+    return atr_de_rangos(str(ticker), propias.to_dict("records"), pip_tamano, hoy=hoy)
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
 def cargar_correlacion_fx(hoy: date):
     """(matriz, observaciones, fecha_del_ultimo_cierre) de los pares de la
     Fase 1, sobre los retornos diarios YA GUARDADOS en la base.
@@ -4399,6 +4433,158 @@ def _trd_revision_semanal(cerradas) -> None:
             st.success("Revisión guardada.")
         except Exception as e:
             st.error(f"No se pudo guardar: {e}")
+
+
+def _trd_bloque_atr(atr, instrumento, riesgo_clp, pip_guardado, cotizaciones,
+                    hoy, tasa_manual) -> None:
+    """ATR del par y stop sugerido como múltiplo del ATR.
+
+    ES PARA DIMENSIONAR EL STOP, NO UNA SEÑAL: no dice si comprar o vender,
+    ni cuándo. Y es una REFERENCIA: no toca el campo "Distancia al stop", que
+    sigue siendo el que tú escribas.
+    """
+    st.markdown(f"#### ATR de Wilder ({PERIODO_ATR})")
+
+    if not atr.hay_atr:
+        st.info(
+            f"**{instrumento}: sin ATR.** {atr.motivo.capitalize()}. No se "
+            f"muestra un número inventado: sin el dato no hay con qué "
+            f"dimensionar el stop."
+        )
+        return
+
+    # La principal va como métrica grande; la segunda cifra queda al lado y
+    # más chica, porque es para comparar y no para dimensionar.
+    c1, c2 = st.columns([1, 2])
+    c1.metric(
+        f"ATR de Wilder ({PERIODO_ATR})",
+        f"{atr.pips:,.1f} pips" if atr.pips is not None else f"{atr.valor:.6f}",
+        help="Rango verdadero: el mayor entre el rango del día y las dos "
+             "distancias contra el cierre previo, suavizado al modo de Wilder.")
+
+    solo_dia = (f"{atr.pips_solo_dia:,.1f} pips" if atr.pips_solo_dia is not None
+                else (f"{atr.valor_solo_dia:.6f}" if atr.valor_solo_dia is not None
+                      else "—"))
+    c2.caption(
+        f"**Solo rango del día: {solo_dia}** — la misma cuenta sin los saltos "
+        f"entre cierres, con el mismo suavizado de Wilder.  \n"
+        f"En precio: **{atr.valor:.6f}**"
+        + (f" · {atr.valor_solo_dia:.6f} solo rango del día"
+           if atr.valor_solo_dia is not None else "")
+        + f"  \nSobre el precio: **{atr.porcentaje:.2f}%** · último dato del par: "
+          f"**{atr.ultima_fecha:%d-%m-%Y}**"
+    )
+    st.caption(
+        "*El rango verdadero incluye saltos entre cierres; en divisas parte "
+        "puede ser desfase de datos de Yahoo.*"
+    )
+
+    if atr.aviso_pips:
+        st.caption(
+            f"**{instrumento}:** {atr.aviso_pips}. El ATR en precio y en "
+            f"porcentaje sí está; los pips no se calculan porque habría que "
+            f"inventar el divisor."
+        )
+    if atr.desactualizado:
+        st.warning(
+            f"El último dato de {instrumento} es del "
+            f"{atr.ultima_fecha:%d-%m-%Y}: **{atr.ruedas_sin_actualizar} ruedas "
+            f"sin actualizar** (el aviso salta pasadas "
+            f"{RUEDAS_PARA_DESACTUALIZADO}). El ATR que ves es de esa fecha."
+        )
+    if atr.sospechosos:
+        st.warning(
+            f"**{atr.sospechosos} día(s) con rango anormal** en las "
+            f"{atr.ruedas} ruedas del par: más de {FACTOR_DIA_SOSPECHOSO} veces "
+            f"el rango mediano. Pueden ser movimientos reales o desfases de la "
+            f"fuente; en cualquier caso levantan el ATR."
+        )
+    if atr.huecos:
+        st.caption(
+            f"{atr.huecos} hueco(s) de más de 5 días entre ruedas guardadas. "
+            f"El rango verdadero del día siguiente a un hueco queda inflado, "
+            f"porque el cierre previo es de varios días antes."
+        )
+
+    # ----------------------------------------------------- el stop sugerido
+    multiplo = st.number_input(
+        "Múltiplo del ATR para el stop", 0.5, 5.0,
+        float(MULTIPLO_STOP_POR_DEFECTO), 0.1, key="trd_atr_multiplo",
+        help="1,5 por defecto. Es una referencia de distancia, no un nivel: "
+             "dice cuánto espacio dejarle al ruido normal del par, no dónde "
+             "está el soporte.")
+    stop_precio, stop_pips = stop_sugerido(atr, Decimal(str(multiplo)))
+    if stop_pips is None:
+        st.caption(
+            f"Stop sugerido en precio: **±{stop_precio:.6f}** desde la entrada. "
+            f"En pips no se puede: {atr.aviso_pips}.")
+        return
+
+    partes = [
+        f"**Stop sugerido: {stop_pips:,.0f} pips** "
+        f"({multiplo:.1f} × ATR, ±{stop_precio:.6f} desde el precio de entrada)."
+    ]
+    # Qué tamaño daría ESE stop con el riesgo elegido. No cambia el campo de
+    # arriba: es una cuenta paralela para comparar.
+    con_ese_stop = lotes_para_riesgo(instrumento, riesgo_clp, float(stop_pips),
+                                     pip_guardado, cotizaciones, hoy, tasa_manual)
+    if con_ese_stop.valor is not None:
+        partes.append(
+            f"Con ese stop y tu riesgo de {riesgo_clp:,.0f} CLP serían "
+            f"**{con_ese_stop.valor:.2f} lotes**."
+        )
+    partes.append(
+        "*No cambia el campo \"Distancia al stop\": ese sigue siendo el que "
+        "escribas tú. Esto es solo para dimensionar.*"
+    )
+    st.markdown(" ".join(partes))
+
+
+def _trd_stops_cerca_del_atr(abiertas, catalogo, rangos, hoy) -> None:
+    """Avisa de las posiciones abiertas con el stop a menos de 1 ATR.
+
+    Un stop dentro del movimiento normal de una rueda lo más probable es que
+    salte por ruido y no porque la tesis se haya roto. Avisa; no cierra ni
+    modifica nada.
+    """
+    if abiertas is None or abiertas.empty or catalogo.empty:
+        return
+    ticker_de = dict(zip(catalogo["nombre_xtb"], catalogo["ticker_yahoo"]))
+    pip_de = dict(zip(catalogo["nombre_xtb"], catalogo["pip_tamano"]))
+
+    cercanos, sin_atr = [], []
+    for _, fila in abiertas.iterrows():
+        instrumento = fila.get("instrumento")
+        if fila.get("stop") is None or pd.isna(fila.get("stop")):
+            continue
+        ticker = ticker_de.get(instrumento)
+        if ticker is None or pd.isna(ticker):
+            continue
+        atr = _trd_atr(ticker, rangos, pip_de.get(instrumento), hoy)
+        if not atr.hay_atr:
+            sin_atr.append(str(instrumento))
+            continue
+        cerca, en_atr = stop_demasiado_cerca(fila.get("precio_entrada"),
+                                             fila.get("stop"), atr)
+        if cerca:
+            cercanos.append(
+                f"- **{instrumento}**: el stop está a **{en_atr:.2f} ATR** de la "
+                f"entrada ({abs(Decimal(str(fila['precio_entrada'])) - Decimal(str(fila['stop']))):.6f} "
+                f"contra un ATR de {atr.valor:.6f})"
+            )
+
+    if cercanos:
+        st.warning(
+            "**Stop dentro del movimiento normal del par.**\n\n"
+            + "\n".join(cercanos)
+            + "\n\nUn stop a menos de 1 ATR de la entrada lo más probable es que "
+              "salte por ruido y no porque la tesis se haya roto. Es un aviso: "
+              "no cierra ni modifica nada."
+        )
+    if sin_atr:
+        st.caption(
+            f"Sin ATR para comprobar el stop de: {', '.join(sorted(set(sin_atr)))}."
+        )
 
 
 def _trd_aviso_antimartingala(riesgo_clp, operaciones) -> None:
@@ -4881,6 +5067,11 @@ def render_divisas():
     _trd_pinta(riesgo_por_operacion(
         riesgo_clp, equity_actual, Decimal(str(pct_tope_op)) / Decimal(100)))
 
+    rangos_fx = cargar_rangos_fx(hoy)
+    atr_par = _trd_atr(fila_cat["ticker_yahoo"], rangos_fx, pip_guardado, hoy)
+    _trd_bloque_atr(atr_par, instrumento, riesgo_clp, pip_guardado, cotizaciones,
+                    hoy, tasa_manual)
+
     _trd_tabla_recuperacion(riesgo_clp, base_riesgo)
     _trd_aviso_antimartingala(riesgo_clp, operaciones)
 
@@ -5081,6 +5272,7 @@ def render_divisas():
 
     abiertas_lista = (operaciones[operaciones["fecha_cierre"].isna()]
                       if not operaciones.empty else pd.DataFrame())
+    _trd_stops_cerca_del_atr(abiertas_lista, catalogo, cargar_rangos_fx(hoy), hoy)
     if not abiertas_lista.empty:
         with st.expander(f"Cerrar una operación ({len(abiertas_lista)} abiertas)", expanded=False):
             etiquetas = {

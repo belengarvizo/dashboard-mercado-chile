@@ -60,9 +60,35 @@ def _presente_voseo(infinitivo: str) -> str:
                    else ACENTUADA["e"] + "s")
 
 
+# Pronombres enclíticos frecuentes en textos de interfaz.
+PRONOMBRES = ("lo", "la", "los", "las", "me")
+
+# Verbos que al pegarles un enclítico producen una palabra real del español y
+# no sirven para detectar nada: "tomar" + "te" da "tomate".
+SIN_ENCLITICO = {"tomar", "contar", "pasar"}
+
+
+def _enclitico_voseo(infinitivo: str, pronombre: str) -> str:
+    """cargar + lo -> cargalo (voseo). El tuteo sería "cárgalo", CON tilde.
+
+    POR QUÉ HACE FALTA ESTA FAMILIA APARTE. El voseo con pronombre pegado
+    pierde la tilde escrita, así que un detector que busca vocales acentuadas
+    no lo ve. Se coló así en dos textos vivos: "Cargalo desde el ticket de
+    XTB" y "revisala contra XTB o ingresala a mano". La marca de que es
+    voseo no es el acento sino su AUSENCIA: la forma de tuteo siempre lleva
+    tilde (cárgalo, revísala, ingrésala).
+    """
+    return infinitivo[:-1] + pronombre
+
+
 def formas_de_voseo() -> set:
     formas = {_imperativo_voseo(v) for v in INFINITIVOS_IMPERATIVO}
     formas |= {_presente_voseo(v) for v in INFINITIVOS_PRESENTE}
+    formas |= {
+        _enclitico_voseo(v, p)
+        for v in INFINITIVOS_IMPERATIVO if v not in SIN_ENCLITICO
+        for p in PRONOMBRES
+    }
     return formas
 
 
@@ -82,7 +108,12 @@ def test_las_formas_se_construyen_bien():
     assert _imperativo_voseo("poner") == "pon" + ACENTUADA["e"]
     assert _presente_voseo("tener") == "ten" + ACENTUADA["e"] + "s"
     assert _presente_voseo("necesitar") == "necesit" + ACENTUADA["a"] + "s"
-    assert len(formas_de_voseo()) > 30
+    # El enclítico NO lleva tilde: esa es justamente su marca.
+    assert _enclitico_voseo("cargar", "lo") == "carga" + "lo"
+    assert _enclitico_voseo("revisar", "la") == "revisa" + "la"
+    assert all(ACENTUADA[v] not in _enclitico_voseo("cargar", "lo")
+               for v in ACENTUADA)
+    assert len(formas_de_voseo()) > 100
 
 
 def test_no_hay_voseo_en_el_codigo():

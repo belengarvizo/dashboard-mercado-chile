@@ -202,6 +202,112 @@ def test_el_limite_por_operacion_no_bloquea_nada():
             f"el chequeo de riesgo por operación contiene {prohibido!r}: avisa, no bloquea")
 
 
+def test_el_atr_aparece_en_el_calculador():
+    """EURUSD tiene un ano de ruedas guardadas, asi que sale con numero."""
+    texto = _todo_el_texto(_correr())
+    assert "ATR de Wilder (14)" in texto
+    assert "Solo rango del día" in texto or "solo rango del día" in texto
+    assert "último dato del par" in texto, texto[-1500:]
+    assert "Stop sugerido" in texto
+    # La nota que pidió la usuaria, con esas palabras.
+    assert ("rango verdadero incluye saltos entre cierres" in texto
+            and "desfase de datos de Yahoo" in texto)
+    # Es para dimensionar, no una señal.
+    assert "No cambia el campo" in texto
+
+
+def test_el_multiplo_del_stop_es_editable():
+    at = _correr()
+    claves = {w.key for w in at.number_input}
+    assert "trd_atr_multiplo" in claves, claves
+    at.number_input(key="trd_atr_multiplo").set_value(2.0).run(timeout=420)
+    assert not at.exception, at.exception
+    assert "2.0 × ATR" in _todo_el_texto(at)
+
+
+def test_el_atr_no_sobrescribe_el_stop_que_escribo():
+    """El campo 'Distancia al stop' tiene que seguir en lo que yo puse,
+    aunque el stop sugerido sea otro número."""
+    at = _correr()
+    at.number_input(key="trd_calc_stop").set_value(17.0).run(timeout=420)
+    assert not at.exception, at.exception
+    assert at.number_input(key="trd_calc_stop").value == 17.0
+    at.number_input(key="trd_atr_multiplo").set_value(3.0).run(timeout=420)
+    assert at.number_input(key="trd_calc_stop").value == 17.0, (
+        "el stop sugerido pisó el stop escrito a mano")
+
+
+def test_un_par_sin_pip_muestra_precio_y_porcentaje_pero_no_pips():
+    """USDCLP, USDBRL, USDIDX y USDMXN no tienen tamaño de pip en el
+    catálogo. No se inventa el divisor."""
+    at = _correr()
+    at.selectbox(key="trd_calc_par").set_value("USDCLP").run(timeout=420)
+    assert not at.exception, at.exception
+    texto = _todo_el_texto(at)
+    assert "ATR de Wilder (14)" in texto
+    assert "falta tamaño del pip en el catálogo" in texto, texto[-1500:]
+    # El precio y el porcentaje SÍ están: lo único que falta son los pips.
+    assert "Sobre el precio" in texto, texto[-1500:]
+    assert "En precio:" in texto
+    valores = {m.label: m.value for m in at.metric}
+    principal = valores.get("ATR de Wilder (14)", "")
+    assert principal and "pips" not in principal, (
+        f"mostró pips para un par sin tamaño de pip: {principal!r}")
+
+
+def test_avisa_si_el_stop_de_una_posicion_abierta_esta_a_menos_de_un_ATR(monkeypatch):
+    """Posiciones simuladas con ATR REAL de la base.
+
+    EURUSD lleva el stop a 0,0030 de la entrada; con un ATR de ~0,0065 son
+    ~0,46 ATR y avisa. GBPUSD lo lleva a 0,0350, que son ~5 ATR, y no avisa.
+    La prueba no escribe en la base: solo intercepta las lecturas del diario.
+    """
+    import pandas as pd
+
+    import datos_simulados_divisas as sim
+
+    monkeypatch.setattr(pd, "read_sql", sim.interceptar(pd))
+    texto = _todo_el_texto(_correr())
+    assert "Stop dentro del movimiento normal del par" in texto, texto[-1800:]
+    assert "EURUSD" in texto
+    assert "ATR de la entrada" in texto
+    # El de GBPUSD está lejos: no debe aparecer en ESE aviso.
+    bloque = texto[texto.index("Stop dentro del movimiento normal"):]
+    bloque = bloque[:bloque.index("||")] if "||" in bloque else bloque
+    assert "GBPUSD" not in bloque, bloque
+    # Y queda claro que no hace nada por su cuenta.
+    assert "no cierra ni modifica nada" in texto
+
+
+def test_el_aviso_de_stop_cerca_no_bloquea_nada():
+    with open(DASHBOARD_PATH, encoding="utf-8") as f:
+        codigo = f.read()
+    inicio = codigo.index("def _trd_stops_cerca_del_atr(")
+    bloque = codigo[inicio:codigo.index("\ndef _trd_aviso_antimartingala(")]
+    for prohibido in ("st.stop()", "raise ", "return False", "disabled=True",
+                      "UPDATE", "DELETE"):
+        assert prohibido not in bloque, (
+            f"el aviso de stop cerca contiene {prohibido!r}: avisa, no actúa")
+
+
+def test_el_bloque_del_atr_no_da_senales_ni_bloquea():
+    with open(DASHBOARD_PATH, encoding="utf-8") as f:
+        codigo = f.read()
+    inicio = codigo.index("def _trd_bloque_atr(")
+    bloque = codigo[inicio:codigo.index("\ndef _trd_stops_cerca_del_atr(")]
+    for prohibido in ("st.stop()", "raise ", "return False", "disabled=True"):
+        assert prohibido not in bloque, f"el bloque del ATR contiene {prohibido!r}"
+    # Buscar las palabras "comprar" o "vender" no sirve: el propio descargo
+    # del bloque dice que NO dice si comprar o vender. Lo que se comprueba es
+    # que ese descargo esté, y que el texto no recomiende una dirección.
+    assert "no dice si comprar o vender" in bloque
+    assert "dimensionar el stop" in bloque.lower()
+    for recomendacion in ("deberías comprar", "deberías vender", "conviene comprar",
+                          "conviene vender", "señal de compra", "señal de venta"):
+        assert recomendacion not in bloque.lower(), (
+            f"el bloque del ATR recomienda una dirección: {recomendacion!r}")
+
+
 def test_la_tabla_de_recuperacion_aparece_en_el_calculador():
     """Sin equity registrado la base es el capital inicial de 10.000.000, y
     el riesgo por defecto es 1%: 100.000 CLP, que exigen ganar 1,01%."""

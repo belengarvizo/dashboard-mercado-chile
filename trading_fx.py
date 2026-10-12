@@ -175,7 +175,7 @@ def _avisos_de_tasa(tasa: Tasa, hoy: date, etiqueta: str) -> list[str]:
     if tasa.esta_vieja(hoy):
         dias = (hoy - tasa.fecha_mas_vieja).days
         return [f"La tasa de {etiqueta} es del {tasa.fecha_mas_vieja} ({dias} días): "
-                f"revisala contra XTB o ingresala a mano."]
+                f"revísala contra XTB o ingrésala a mano."]
     return []
 
 
@@ -192,7 +192,7 @@ def valor_pip_clp(nombre_xtb: str, lotes, pip_tamano, cotizaciones: dict,
             None,
             f"El tamaño del pip de {nombre_xtb} está PENDIENTE. No se calcula con un "
             f"supuesto: en este par, errar el pip por un factor de 100 erraría el "
-            f"tamaño de la posición por 100. Cargalo desde el ticket de XTB.")
+            f"tamaño de la posición por 100. Cárgalo desde el ticket de XTB.")
 
     tasa = tasa_a_clp(cotizacion, cotizaciones, tasa_manual)
     if tasa is None:

@@ -160,13 +160,18 @@ def test_el_aviso_de_hora_vieja_esta_visible():
     at.run(timeout=420)
     textos = " ".join(str(c.value) for c in at.caption)
     assert "cuando abriste la página" in textos, textos[:300]
-    # "Revísala" con tilde: el texto se corrigió a tuteo chileno (antes decía
-    # "Revisala", voseo). La comparación se hace sin tildes para que una
-    # corrección de acentuación no vuelva a romper el test.
+    # La comparación se hace sin tildes para que una corrección de
+    # acentuación no rompa el test. La aguja se DERIVA de la forma correcta
+    # en tuteo, no se escribe la incorrecta: si estuviera escrita, el
+    # guardián de tests/test_tuteo_chileno.py la encontraría acá dentro.
     import unicodedata
-    plano = "".join(c for c in unicodedata.normalize("NFD", textos.lower())
-                    if unicodedata.category(c) != "Mn")
-    assert "revisala" in plano, textos[:300]
+
+    def _sin_tildes(texto):
+        return "".join(c for c in unicodedata.normalize("NFD", texto.lower())
+                       if unicodedata.category(c) != "Mn")
+
+    plano = _sin_tildes(textos)
+    assert _sin_tildes("Revísala") in plano, textos[:300]
 
 
 def test_no_quedan_filas_de_prueba_en_el_diario_real():

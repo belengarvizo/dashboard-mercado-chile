@@ -121,7 +121,7 @@ def test_las_excepciones_aceptadas_siguen_existiendo():
     obsoletas = EXCEPCIONES_ACEPTADAS - set(culpables)
     assert not obsoletas, (
         f"Estas funciones ya no leen el reloj adentro: {sorted(obsoletas)}. "
-        "Sacalas de EXCEPCIONES_ACEPTADAS para que la guarda vuelva a cubrirlas."
+        "Sácalas de EXCEPCIONES_ACEPTADAS para que la guarda vuelva a cubrirlas."
     )
 
 

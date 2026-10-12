@@ -22,11 +22,15 @@ import pandas as pd
 # Riesgo agrupado del grupo = 150.000 + 120.000 - 40.000 = 230.000
 # Riesgo bruto del grupo    = 310.000
 # Riesgo total abierto      = 400.000   (compras 310.000 / ventas 90.000)
+# El quinto valor es el STOP, para el aviso de "stop a menos de 1 ATR".
+# EURUSD lo lleva a 0,0030 de la entrada: con un ATR de ~0,0065 son ~0,46
+# ATR, bien bajo el umbral de 1 aunque el ATR real se mueva un 30%.
+# GBPUSD lo lleva a 0,0350, que son ~5 ATR: ese NO debe avisar.
 POSICIONES = [
-    ("EURUSD", "compra", 150000.0, 1.1180),
-    ("GBPUSD", "compra", 120000.0, 1.3350),
-    ("USDCHF", "compra", 40000.0, 0.7960),
-    ("USDJPY", "venta", 90000.0, 152.400),
+    ("EURUSD", "compra", 150000.0, 1.1180, 1.1150),
+    ("GBPUSD", "compra", 120000.0, 1.3350, 1.3000),
+    ("USDCHF", "compra", 40000.0, 0.7960, None),
+    ("USDJPY", "venta", 90000.0, 152.400, None),
 ]
 EQUITY = 9500000.0
 
@@ -54,7 +58,8 @@ def operaciones() -> pd.DataFrame:
     """Las cuatro posiciones, todas ABIERTAS (fecha_cierre nula)."""
     momento = pd.Timestamp("2026-10-12 09:30:00", tz="America/Santiago")
     filas = []
-    for i, (instrumento, direccion, riesgo, precio) in enumerate(POSICIONES, start=1):
+    for i, (instrumento, direccion, riesgo, precio, stop) in enumerate(
+            POSICIONES, start=1):
         fila = {c: None for c in COLUMNAS_OPERACIONES}
         fila.update({
             "id": i,
@@ -64,6 +69,7 @@ def operaciones() -> pd.DataFrame:
             "fecha_apertura": momento - pd.Timedelta(hours=i),
             "fecha_cierre": None,
             "precio_entrada": precio,
+            "stop": stop,
             "lotes": 0.10,
             "margen_clp": 180000.0,
             "riesgo_clp": riesgo,
