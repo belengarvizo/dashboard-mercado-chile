@@ -22,6 +22,11 @@ SECCION = "Divisas"
 def _correr():
     at = AppTest.from_file(DASHBOARD_PATH, default_timeout=420)
     at.session_state["seccion_activa"] = SECCION
+    # La pestaña ahora pide contraseña. Estas pruebas son del CONTENIDO, no
+    # de la puerta: se desbloquea por session_state para no depender de una
+    # variable de entorno. La puerta tiene sus propias pruebas en
+    # tests/test_trading_acceso.py.
+    at.session_state["trd_desbloqueado"] = True
     at.run(timeout=420)
     assert not at.exception, f"la sección lanzó una excepción: {at.exception}"
     return at

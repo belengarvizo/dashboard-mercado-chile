@@ -12,6 +12,7 @@ import os
 import random
 import re
 import sys
+import time
 from collections import Counter
 from decimal import Decimal
 from zoneinfo import ZoneInfo
@@ -62,6 +63,14 @@ from market_data import (
 from calendario_economico import proximos_eventos, cobertura_por_tipo, INDICADOR_POR_TIPO, CALENDARIO_VERIFICADO_AL
 from catalogo_instrumentos import TICKERS_YAHOO_FASE_1
 from trading_fx import divisas_del_par, lotes_para_riesgo, valor_pip_clp
+from trading_acceso import (
+    MAX_INTENTOS,
+    SEGUNDOS_BLOQUEO,
+    VARIABLE_ENTORNO as VARIABLE_PASSWORD,
+    estado_bloqueo,
+    instrucciones_variable,
+    password_configurada,
+)
 from trading_proceso import (
     AVISO_CHECKLIST,
     AVISO_POCAS,
@@ -4348,8 +4357,70 @@ def _trd_revision_semanal(cerradas) -> None:
             st.error(f"No se pudo guardar: {e}")
 
 
+def _trd_puerta_de_acceso() -> bool:
+    """True si la pestaña está desbloqueada en esta sesión.
+
+    Se llama ANTES de cualquier consulta a la base. Eso importa más de lo que
+    parece: los cargadores están cacheados con @st.cache_data y esa caché es
+    del PROCESO, compartida entre visitantes. Si se consultara primero y se
+    protegiera después, el diario quedaría en memoria del servidor igual.
+    """
+    import trading_acceso
+
+    if st.session_state.get("trd_desbloqueado"):
+        col_a, col_b = st.columns([5, 1])
+        col_a.caption("Pestaña desbloqueada en esta sesión.")
+        if col_b.button("Cerrar sesión", key="trd_cerrar_sesion"):
+            st.session_state["trd_desbloqueado"] = False
+            st.rerun()
+        return True
+
+    if not password_configurada():
+        # Falla CERRADA: sin la variable configurada la pestaña no se abre.
+        st.error(
+            f"**Esta pestaña no está disponible.** Falta configurar la variable de "
+            f"entorno `{VARIABLE_PASSWORD}` en el servidor. Mientras no exista, la "
+            f"sección no se muestra: no se abre sin contraseña."
+        )
+        st.caption(instrucciones_variable())
+        return False
+
+    st.info(
+        "Esta sección es privada: muestra el diario de operaciones, el equity y "
+        "los planes. El resto del dashboard sigue siendo público."
+    )
+    bloqueado, restante = estado_bloqueo()
+    if bloqueado:
+        st.error(
+            f"Demasiados intentos fallidos. Espera {restante} segundos antes de "
+            f"volver a probar. El límite es de {MAX_INTENTOS} intentos seguidos y "
+            f"el bloqueo dura {SEGUNDOS_BLOQUEO} segundos."
+        )
+        return False
+
+    with st.form("trd_form_acceso"):
+        intento = st.text_input("Contraseña", type="password", key="trd_password")
+        if st.form_submit_button("Entrar"):
+            acerto, motivo = trading_acceso.verificar(intento)
+            if acerto:
+                st.session_state["trd_desbloqueado"] = True
+                st.rerun()
+            else:
+                # Pausa corta: encarece probar contraseñas de a una sin
+                # molestar a quien simplemente se equivocó al tipear.
+                time.sleep(trading_acceso.PAUSA_TRAS_FALLO)
+                st.error(motivo)
+    return False
+
+
 def render_divisas():
     st.subheader("Divisas — apoyo al Alpha Trading Challenge")
+
+    # LA PUERTA VA ACÁ: antes del caption descriptivo y, sobre todo, antes de
+    # las cuatro consultas de más abajo.
+    if not _trd_puerta_de_acceso():
+        return
+
     st.caption(
         "Herramienta de contexto y control. **No opera, no se conecta a XTB y no "
         "genera órdenes**: las decisiones y las órdenes son tuyas, en la plataforma. "

@@ -54,6 +54,11 @@ def test_el_formulario_no_pisa_la_hora_que_se_escribio():
     confirme escrituras en el diario real."""
     at = AppTest.from_file(DASHBOARD_PATH, default_timeout=420)
     at.session_state["seccion_activa"] = "Divisas"
+    # La pestaña ahora pide contraseña. Estas pruebas son del CONTENIDO, no
+    # de la puerta: se desbloquea por session_state para no depender de una
+    # variable de entorno. La puerta tiene sus propias pruebas en
+    # tests/test_trading_acceso.py.
+    at.session_state["trd_desbloqueado"] = True
     at.run(timeout=420)
     assert not at.exception, at.exception
 
@@ -87,6 +92,11 @@ def test_la_hora_inicial_no_cambia_entre_recargas():
     recalculara en cada rerun, el widget cambiaría de identidad."""
     at = AppTest.from_file(DASHBOARD_PATH, default_timeout=420)
     at.session_state["seccion_activa"] = "Divisas"
+    # La pestaña ahora pide contraseña. Estas pruebas son del CONTENIDO, no
+    # de la puerta: se desbloquea por session_state para no depender de una
+    # variable de entorno. La puerta tiene sus propias pruebas en
+    # tests/test_trading_acceso.py.
+    at.session_state["trd_desbloqueado"] = True
     at.run(timeout=420)
     primera = at.session_state["trd_hora_inicial"]
     assert primera.second == 0 and primera.microsecond == 0, (
@@ -112,6 +122,11 @@ def test_el_boton_ahora_actualiza_la_hora_por_defecto():
     eso, y acá se comprueba que de verdad la mueve."""
     at = AppTest.from_file(DASHBOARD_PATH, default_timeout=420)
     at.session_state["seccion_activa"] = "Divisas"
+    # La pestaña ahora pide contraseña. Estas pruebas son del CONTENIDO, no
+    # de la puerta: se desbloquea por session_state para no depender de una
+    # variable de entorno. La puerta tiene sus propias pruebas en
+    # tests/test_trading_acceso.py.
+    at.session_state["trd_desbloqueado"] = True
     at.run(timeout=420)
     assert not at.exception, at.exception
 
@@ -137,6 +152,11 @@ def test_el_boton_ahora_actualiza_la_hora_por_defecto():
 def test_el_aviso_de_hora_vieja_esta_visible():
     at = AppTest.from_file(DASHBOARD_PATH, default_timeout=420)
     at.session_state["seccion_activa"] = "Divisas"
+    # La pestaña ahora pide contraseña. Estas pruebas son del CONTENIDO, no
+    # de la puerta: se desbloquea por session_state para no depender de una
+    # variable de entorno. La puerta tiene sus propias pruebas en
+    # tests/test_trading_acceso.py.
+    at.session_state["trd_desbloqueado"] = True
     at.run(timeout=420)
     textos = " ".join(str(c.value) for c in at.caption)
     assert "cuando abriste la página" in textos, textos[:300]
