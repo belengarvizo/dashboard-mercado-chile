@@ -71,6 +71,10 @@ from constants import (
     TICKERS_LABORATORIO_ADICIONAL_DESCARGA,
 )
 from retry_utils import con_reintentos_db
+# Los 13 pares + el índice dólar del módulo de trading. Se importan del
+# catálogo (fuente única) en vez de repetirse acá, para que la lista del
+# cron no pueda desincronizarse de los tickers validados.
+from catalogo_instrumentos import TICKERS_YAHOO_FASE_1
 
 # dict.fromkeys en vez de una lista simple: varias de las "7 Magníficas"
 # (AAPL, MSFT, GOOGL, AMZN, NVDA) también son parte del Dow Jones — se
@@ -86,6 +90,7 @@ TICKERS_A_DESCARGAR = list(dict.fromkeys(
     + TICKERS_LABORATORIO_ADICIONALES
     + TICKERS_LABORATORIO_ADICIONAL_DESCARGA
     + [TICKER_PETROLEO_WTI, TICKER_DOW_JONES, TICKER_NASDAQ, TICKER_VIX]
+    + TICKERS_YAHOO_FASE_1
 ))
 
 
