@@ -13,6 +13,8 @@ import random
 import re
 import sys
 from collections import Counter
+from decimal import Decimal
+from zoneinfo import ZoneInfo
 from datetime import date, datetime
 
 sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
@@ -58,6 +60,19 @@ from market_data import (
     INDICADORES_PREMERCADO,
 )
 from calendario_economico import proximos_eventos, cobertura_por_tipo, INDICADOR_POR_TIPO, CALENDARIO_VERIFICADO_AL
+from catalogo_instrumentos import TICKERS_YAHOO_FASE_1
+from trading_fx import divisas_del_par, lotes_para_riesgo, valor_pip_clp
+from trading_reglas import (
+    concentracion_por_categoria,
+    limite_margen_por_subyacente,
+    margen_por_subyacente,
+    mayor_trade_sobre_ganancia,
+    minimo_operaciones,
+    operaciones_cortas,
+    piso_de_equity,
+    riesgo_total_abierto,
+    stops_hasta_el_piso,
+)
 from glosario import (
     nombre_completo,
     explicacion_rendimiento,
@@ -2289,7 +2304,7 @@ except Exception:
 # instantáneo; a cambio, cualquier interacción deja de pagar las otras 10.
 SECCIONES = [
     "Brief Premercado", "Indicadores macro", "Acciones IPSA", "Atribución IPSA", "Acciones Dow Jones",
-    "Riesgo", "Benchmark", "Laboratorio Financiero", "Modelo de Recesión EEUU", "Simulación Mesa de Dinero",
+    "Riesgo", "Divisas", "Benchmark", "Laboratorio Financiero", "Modelo de Recesión EEUU", "Simulación Mesa de Dinero",
     "🎯 Defensa Top-Down",
 ]
 _seccion = st.segmented_control(
@@ -3832,6 +3847,541 @@ if _seccion == "Riesgo":
 
     except Exception as e:
         st.error(f"No se pudieron calcular las métricas de riesgo: {e}")
+
+
+
+# ===========================================================================
+# DIVISAS — apoyo al Alpha Trading Challenge de XTB
+# ===========================================================================
+# Etapa 1: catálogo, calculador de tamaño de posición, diario y control de
+# reglas. El panorama de divisas y las señales vienen en etapas siguientes.
+#
+# ESTE MÓDULO NO OPERA NI SE CONECTA A XTB. Es una herramienta de contexto y
+# de control: las órdenes las pone el usuario a mano en la plataforma.
+
+# La sesión de PostgreSQL corre en Etc/UTC (verificado con SHOW TimeZone),
+# así que un datetime INGENUO insertado en una columna TIMESTAMPTZ se guarda
+# como si fuera UTC. Una operación abierta a las 10:00 de Chile quedaba
+# registrada a las 07:00: tres horas de error en el diario. Todas las fechas
+# que entran o salen de la base pasan por acá.
+TZ_CHILE = ZoneInfo("America/Santiago")
+
+
+def _trd_ahora_chile():
+    return datetime.now(TZ_CHILE)
+
+
+def _trd_a_chile(momento):
+    """Un instante de la base (aware, en UTC) mostrado en hora de Chile."""
+    if momento is None or pd.isna(momento):
+        return None
+    if momento.tzinfo is None:
+        momento = momento.replace(tzinfo=ZoneInfo("UTC"))
+    return momento.astimezone(TZ_CHILE)
+
+
+def _trd_hora_inicial():
+    """Hora de Chile para INICIALIZAR los selectores del formulario.
+
+    Dos cuidados, los dos por el mismo motivo. Se trunca al minuto y se
+    calcula UNA sola vez por sesión, guardada en session_state, en lugar de
+    llamar a now() en cada recarga.
+
+    Si el `value` por defecto de un st.time_input cambia entre reruns (y
+    llamando a now() cambia siempre, por los segundos), Streamlit puede
+    tratarlo como un widget distinto y reemplazar lo que el usuario escribió
+    por la hora actual justo al enviar el formulario. En un diario de
+    operaciones eso significa registrar una hora falsa sin que nadie lo note,
+    y la hora es lo que define la regla de los 2 minutos.
+    """
+    if "trd_hora_inicial" not in st.session_state:
+        ahora = _trd_ahora_chile()
+        st.session_state["trd_hora_inicial"] = ahora.replace(second=0, microsecond=0)
+    return st.session_state["trd_hora_inicial"]
+
+
+def _trd_poner_hora_ahora(clave_fecha: str, clave_hora: str) -> None:
+    """Lleva los selectores de fecha y hora al instante actual de Chile.
+
+    Hace falta porque la hora por defecto se fija UNA vez por sesión (para
+    que el widget no cambie de identidad entre reruns y pise lo que el
+    usuario escribió). El efecto secundario es que, con la página abierta
+    varias horas, ese valor por defecto envejece: sin este botón se podría
+    registrar una hora equivocada sin notarlo.
+    """
+    ahora = _trd_ahora_chile().replace(second=0, microsecond=0)
+    st.session_state["trd_hora_inicial"] = ahora
+    st.session_state[clave_fecha] = ahora.date()
+    st.session_state[clave_hora] = ahora.time()
+
+
+def _trd_aviso_hora(clave_fecha: str, clave_hora: str, sufijo: str) -> None:
+    inicial = _trd_hora_inicial()
+    columna_boton, columna_texto = st.columns([1, 5])
+    columna_boton.button("🕐 Ahora", key=f"trd_ahora_{sufijo}",
+                         on_click=_trd_poner_hora_ahora, args=(clave_fecha, clave_hora))
+    columna_texto.caption(
+        f"Hora por defecto: **{inicial:%H:%M}**, la de cuando abriste la página. "
+        f"**Revisala** — si la pestaña lleva rato abierta, ya no es la hora actual."
+    )
+
+
+def _trd_desde_formulario(fecha, hora):
+    """Lo que el usuario escribe es hora de Chile, y así se guarda."""
+    return datetime.combine(fecha, hora).replace(tzinfo=TZ_CHILE)
+
+
+TRD_PISO_EQUITY = Decimal("5000000")
+TRD_CAPITAL_INICIAL = Decimal("10000000")
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def cargar_catalogo_trading(version: int = 0) -> pd.DataFrame:
+    """Catálogo de instrumentos desde la tabla (no desde el módulo semilla):
+    la tabla es la fuente de verdad porque el usuario edita márgenes y pips
+    desde la UI."""
+    return pd.read_sql(
+        "SELECT nombre_xtb, categoria, elegible_torneo, ticker_yahoo, pip_tamano, "
+        "margen_001_clp, valor_punto_clp, notas FROM trading_instrumentos "
+        "ORDER BY categoria, nombre_xtb",
+        engine,
+    )
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def cargar_operaciones_trading(version: int = 0) -> pd.DataFrame:
+    return pd.read_sql(
+        "SELECT id, instrumento, categoria, direccion, fecha_apertura, fecha_cierre, "
+        "precio_entrada, precio_salida, stop, objetivo, lotes, margen_clp, riesgo_clp, "
+        "resultado_clp, duracion_segundos, catalizador, condicion_invalidacion, tesis, notas "
+        "FROM trading_operaciones ORDER BY fecha_apertura DESC",
+        engine,
+    )
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def cargar_estado_cuenta_trading(version: int = 0) -> pd.DataFrame:
+    return pd.read_sql(
+        "SELECT momento, equity_clp, margen_disponible_clp, nota "
+        "FROM trading_estado_cuenta ORDER BY momento DESC",
+        engine,
+    )
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def cargar_cotizaciones_fx() -> dict:
+    """Último cierre de cada par de la Fase 1, desde la BASE (no de Yahoo en
+    vivo: la página no debe depender de una llamada de red en cada carga)."""
+    df = cargar_precios_acciones(tickers=tuple(TICKERS_YAHOO_FASE_1))
+    if df.empty:
+        return {}
+    ultimos = df.sort_values("fecha").groupby("ticker").tail(1)
+    return {
+        fila["ticker"]: (Decimal(str(fila["precio_cierre"])), fila["fecha"])
+        for _, fila in ultimos.iterrows()
+    }
+
+
+def _trd_version() -> int:
+    return st.session_state.get("trd_cache_version", 0)
+
+
+def _trd_invalidar():
+    st.session_state["trd_cache_version"] = _trd_version() + 1
+
+
+def _trd_pinta(chequeo) -> None:
+    """Un chequeo del panel de cumplimiento, en una sola llamada a st.*."""
+    icono = {"verde": "🟢", "amarillo": "🟡", "rojo": "🔴", "sin_datos": "⚪"}[chequeo.estado]
+    lineas = [f"{icono} **{chequeo.nombre}** — {chequeo.detalle}"]
+    if chequeo.nota:
+        lineas.append(f"&nbsp;&nbsp;*{chequeo.nota}*")
+    st.markdown("  \n".join(lineas), unsafe_allow_html=True)
+    if chequeo.desglose:
+        with st.expander("ver el cálculo", expanded=False):
+            st.markdown("\n".join(f"- {d}" for d in chequeo.desglose))
+
+
+def render_divisas():
+    st.subheader("Divisas — apoyo al Alpha Trading Challenge")
+    st.caption(
+        "Herramienta de contexto y control. **No opera, no se conecta a XTB y no "
+        "genera órdenes**: las decisiones y las órdenes son tuyas, en la plataforma. "
+        "Tampoco da recomendaciones de inversión."
+    )
+
+    version = _trd_version()
+    try:
+        catalogo = cargar_catalogo_trading(version)
+        operaciones = cargar_operaciones_trading(version)
+        estado_cuenta = cargar_estado_cuenta_trading(version)
+        cotizaciones = cargar_cotizaciones_fx()
+    except Exception as e:
+        st.error(f"No se pudo leer el módulo de trading: {e}")
+        return
+
+    hoy = _hoy_normalizado().date()
+    equity_actual = (
+        Decimal(str(estado_cuenta.iloc[0]["equity_clp"])) if not estado_cuenta.empty else None
+    )
+
+    # ---------------------------------------------------------------- cuenta
+    st.markdown("### Estado de la cuenta")
+    with st.expander("Registrar el equity que ves en XTB", expanded=equity_actual is None):
+        st.caption(
+            "El equity se ingresa a mano porque el dashboard no se conecta a XTB. "
+            "Cada registro queda guardado con su fecha y arma la curva de equity."
+        )
+        col_a, col_b = st.columns(2)
+        nuevo_equity = col_a.number_input(
+            "Equity actual (CLP)", min_value=0.0, step=10000.0,
+            value=float(equity_actual) if equity_actual is not None else float(TRD_CAPITAL_INICIAL),
+            key="trd_equity_input",
+        )
+        nuevo_margen = col_b.number_input(
+            "Margen disponible (CLP, opcional)", min_value=0.0, step=10000.0, value=0.0,
+            key="trd_margen_input",
+        )
+        nota_equity = st.text_input("Nota (opcional)", key="trd_nota_equity")
+        if st.button("Guardar lectura de equity", key="trd_guardar_equity"):
+            try:
+                with engine.begin() as conn:
+                    conn.execute(
+                        text("INSERT INTO trading_estado_cuenta "
+                             "(equity_clp, margen_disponible_clp, nota) "
+                             "VALUES (:e, :m, :n)"),
+                        {"e": nuevo_equity,
+                         "m": nuevo_margen if nuevo_margen > 0 else None,
+                         "n": nota_equity or None},
+                    )
+                _trd_invalidar()
+                st.success("Equity registrado.")
+                st.rerun()
+            except Exception as e:
+                st.error(f"No se pudo guardar: {e}")
+
+    if equity_actual is None:
+        st.warning(
+            "Todavía no registraste el equity. Varios controles no pueden evaluarse "
+            "sin ese dato y van a aparecer en gris."
+        )
+    else:
+        desde = estado_cuenta.iloc[0]["momento"]
+        st.caption(f"Último equity registrado: **{equity_actual:,.0f} CLP** ({desde:%d-%m-%Y %H:%M}).")
+
+    # ----------------------------------------------------------- calculador
+    st.divider()
+    st.markdown("### Calculador de tamaño de posición")
+
+    solo_fx = catalogo[catalogo["categoria"] == "divisas"]
+    nombres_fx = sorted(solo_fx["nombre_xtb"].tolist())
+    col1, col2, col3 = st.columns(3)
+    instrumento = col1.selectbox("Par", nombres_fx,
+                                 index=nombres_fx.index("EURUSD") if "EURUSD" in nombres_fx else 0,
+                                 key="trd_calc_par")
+    pct_riesgo = col2.number_input("Riesgo por operación (% del capital)", 0.1, 10.0, 1.0, 0.1,
+                                   key="trd_calc_pct")
+    stop_pips = col3.number_input("Distancia al stop (pips)", 1.0, 1000.0, 30.0, 1.0,
+                                  key="trd_calc_stop")
+
+    fila_cat = solo_fx[solo_fx["nombre_xtb"] == instrumento].iloc[0]
+    pip_guardado = fila_cat["pip_tamano"]
+
+    base_riesgo = equity_actual if equity_actual is not None else TRD_CAPITAL_INICIAL
+    riesgo_clp = base_riesgo * Decimal(str(pct_riesgo)) / Decimal(100)
+
+    usar_manual = st.checkbox("Ingresar la tasa de conversión a mano (la que ves en XTB)",
+                              key="trd_calc_manual")
+    tasa_manual = None
+    if usar_manual:
+        par_divisas = divisas_del_par(instrumento)
+        cotiza = par_divisas[1] if par_divisas else "?"
+        valor_manual = st.number_input(f"Tasa {cotiza}/CLP", min_value=0.0, step=0.01,
+                                       value=0.0, key="trd_calc_tasa_manual")
+        tasa_manual = Decimal(str(valor_manual)) if valor_manual > 0 else None
+
+    resultado = lotes_para_riesgo(instrumento, riesgo_clp, stop_pips, pip_guardado,
+                                  cotizaciones, hoy, tasa_manual)
+    if resultado.valor is None:
+        st.error(f"**No se puede calcular.** {resultado.motivo}")
+    else:
+        pip = valor_pip_clp(instrumento, 1, pip_guardado, cotizaciones, hoy, tasa_manual)
+        col_r1, col_r2, col_r3 = st.columns(3)
+        col_r1.metric("Lotes", f"{resultado.valor:.2f}")
+        col_r2.metric("Riesgo", f"{riesgo_clp:,.0f} CLP")
+        col_r3.metric("Valor del pip (1 lote)", f"{pip.valor:,.0f} CLP")
+
+        margen_001 = fila_cat["margen_001_clp"]
+        if pd.notna(margen_001) and margen_001 is not None:
+            margen_est = Decimal(str(margen_001)) * resultado.valor / Decimal("0.01")
+            limite, pasos_limite = limite_margen_por_subyacente(equity_actual)
+            pct_lim = margen_est / limite * 100 if limite > 0 else Decimal(0)
+            nivel = "🔴" if pct_lim >= 100 else ("🟡" if pct_lim >= 67 else "🟢")
+            st.markdown(
+                f"{nivel} **Margen estimado: {margen_est:,.0f} CLP** "
+                f"({pct_lim:.0f}% del límite de {limite:,.0f} por subyacente). "
+                f"Escalado linealmente desde el margen por 0,01 lotes del ticket."
+            )
+        else:
+            st.info(
+                f"**Margen: pendiente.** No hay margen cargado para {instrumento}. "
+                f"Abrí el ticket en XTB, mirá el margen de 0,01 lotes y cargalo en el "
+                f"catálogo. No se estima con una fórmula de apalancamiento supuesta."
+            )
+
+        with st.expander("Ver la cuenta completa", expanded=False):
+            st.markdown("\n".join(f"- {p}" for p in resultado.pasos))
+        for aviso in resultado.avisos:
+            st.warning(aviso)
+
+    # -------------------------------------------------------------- diario
+    st.divider()
+    st.markdown("### Diario de operaciones")
+
+    with st.expander("Registrar una operación", expanded=operaciones.empty):
+        nombres_todos = sorted(catalogo["nombre_xtb"].tolist())
+        # El botón va FUERA del st.form: Streamlit solo admite submit buttons
+        # dentro de un formulario.
+        _trd_aviso_hora("trd_op_fecha_ap", "trd_op_hora_ap", "registro")
+        with st.form("trd_form_operacion"):
+            f1, f2, f3 = st.columns(3)
+            d_inst = f1.selectbox("Instrumento", nombres_todos, key="trd_op_inst")
+            d_dir = f2.selectbox("Dirección", ["compra", "venta"], key="trd_op_dir")
+            d_lotes = f3.number_input("Lotes", 0.01, 1000.0, 0.01, 0.01, key="trd_op_lotes")
+
+            g1, g2, g3, g4 = st.columns(4)
+            d_entrada = g1.number_input("Precio de entrada", 0.0, step=0.00001, format="%.5f",
+                                        key="trd_op_entrada")
+            d_stop = g2.number_input("Stop", 0.0, step=0.00001, format="%.5f", key="trd_op_stop")
+            d_obj = g3.number_input("Objetivo", 0.0, step=0.00001, format="%.5f", key="trd_op_obj")
+            d_margen = g4.number_input("Margen usado (CLP)", 0.0, step=1000.0, key="trd_op_margen")
+
+            ahora_cl = _trd_hora_inicial()
+            h1, h2 = st.columns(2)
+            d_fecha_ap = h1.date_input("Fecha de apertura (hora de Chile)",
+                                       value=ahora_cl.date(), key="trd_op_fecha_ap")
+            d_hora_ap = h2.time_input("Hora de apertura (Chile)", value=ahora_cl.time(),
+                                      key="trd_op_hora_ap")
+
+            # El riesgo se CALCULA y se GUARDA: el panel suma riesgo_clp de las
+            # posiciones abiertas, y una fila sin ese dato dejaba el control
+            # pintado de verde por falta de información.
+            d_riesgo = st.number_input(
+                "Riesgo si salta el stop (CLP) — dejar en 0 para que lo calcule",
+                0.0, step=1000.0, key="trd_op_riesgo",
+                help="En 0 se calcula desde la entrada, el stop, los lotes y el valor del "
+                     "pip. Escribilo a mano si XTB te muestra otro número.")
+            d_notas = st.text_area("Notas", key="trd_op_notas")
+            st.caption(
+                "**Fuera de divisas** (índices, materias primas, cripto) el riesgo y el "
+                "margen se escriben a mano: el cálculo automático de pips solo aplica a "
+                "pares de divisas. El **margen hay que copiarlo del ticket de XTB** — no "
+                "se estima con una fórmula de apalancamiento supuesta."
+            )
+
+            d_cerrada = st.checkbox("La operación ya está cerrada", key="trd_op_cerrada")
+            i1, i2, i3, i4 = st.columns(4)
+            d_fecha_ci = i1.date_input("Fecha de cierre", value=ahora_cl.date(),
+                                       key="trd_op_fecha_ci")
+            d_hora_ci = i2.time_input("Hora de cierre", value=ahora_cl.time(),
+                                      key="trd_op_hora_ci")
+            d_salida = i3.number_input("Precio de salida", 0.0, step=0.00001, format="%.5f",
+                                       key="trd_op_salida")
+            d_resultado = i4.number_input("Resultado (CLP)", step=1000.0, key="trd_op_resultado")
+
+            d_catalizador = st.text_input("Catalizador", key="trd_op_cat")
+            d_invalida = st.text_input("Condición de invalidación", key="trd_op_inval")
+            d_tesis = st.text_area("Tesis", key="trd_op_tesis",
+                                   help="Lo que escribas acá es lo que sirve para los premios "
+                                        "semanales de análisis y aprendizaje.")
+
+            if st.form_submit_button("Guardar operación"):
+                cat_inst = catalogo[catalogo["nombre_xtb"] == d_inst]
+                categoria = cat_inst.iloc[0]["categoria"] if not cat_inst.empty else "divisas"
+                apertura = _trd_desde_formulario(d_fecha_ap, d_hora_ap)
+                cierre = _trd_desde_formulario(d_fecha_ci, d_hora_ci) if d_cerrada else None
+
+                riesgo_guardado = Decimal(str(d_riesgo)) if d_riesgo > 0 else None
+                detalle_riesgo = []
+                if riesgo_guardado is None and d_stop > 0 and d_entrada > 0:
+                    fila_i = catalogo[catalogo["nombre_xtb"] == d_inst]
+                    pip_i = fila_i.iloc[0]["pip_tamano"] if not fila_i.empty else None
+                    pip_calc = valor_pip_clp(d_inst, 1, pip_i, cotizaciones, hoy)
+                    if pip_calc.valor is not None:
+                        distancia = abs(Decimal(str(d_entrada)) - Decimal(str(d_stop)))
+                        pips = distancia / Decimal(str(pip_i))
+                        riesgo_guardado = pips * pip_calc.valor * Decimal(str(d_lotes))
+                        detalle_riesgo = [
+                            f"distancia al stop: |{d_entrada} - {d_stop}| = {pips:.1f} pips",
+                            f"{pips:.1f} pips x {pip_calc.valor:,.0f} CLP/pip x {d_lotes} "
+                            f"lotes = {riesgo_guardado:,.0f} CLP",
+                        ]
+
+                if d_entrada <= 0:
+                    st.error("El precio de entrada tiene que ser mayor que cero.")
+                elif d_cerrada and d_salida <= 0:
+                    st.error("Una operación cerrada necesita precio de salida.")
+                elif cierre is not None and cierre < apertura:
+                    st.error("El cierre no puede ser anterior a la apertura.")
+                else:
+                    try:
+                        with engine.begin() as conn:
+                            conn.execute(text(
+                                "INSERT INTO trading_operaciones (instrumento, categoria, "
+                                "direccion, fecha_apertura, fecha_cierre, precio_entrada, "
+                                "precio_salida, stop, objetivo, lotes, margen_clp, riesgo_clp, "
+                                "resultado_clp, catalizador, condicion_invalidacion, tesis, notas) "
+                                "VALUES (:i,:c,:d,:fa,:fc,:pe,:ps,:st,:ob,:lo,:ma,:ri,:re,:ca,:iv,:te,:no)"
+                            ), {
+                                "i": d_inst, "c": categoria, "d": d_dir,
+                                "fa": apertura, "fc": cierre, "pe": d_entrada,
+                                "ps": d_salida if d_cerrada else None,
+                                "st": d_stop or None, "ob": d_obj or None, "lo": d_lotes,
+                                "ma": d_margen or None, "ri": riesgo_guardado,
+                                "re": d_resultado if d_cerrada else None,
+                                "ca": d_catalizador or None, "iv": d_invalida or None,
+                                "te": d_tesis or None, "no": d_notas or None,
+                            })
+                        _trd_invalidar()
+                        if detalle_riesgo:
+                            st.success("Operación registrada. Riesgo calculado así:\n\n"
+                                       + "\n".join("- " + x for x in detalle_riesgo))
+                        else:
+                            st.success("Operación registrada.")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"No se pudo guardar: {e}")
+
+    abiertas_lista = (operaciones[operaciones["fecha_cierre"].isna()]
+                      if not operaciones.empty else pd.DataFrame())
+    if not abiertas_lista.empty:
+        with st.expander(f"Cerrar una operación ({len(abiertas_lista)} abiertas)", expanded=False):
+            etiquetas = {
+                f"#{int(f['id'])} · {f['instrumento']} · {f['direccion']} · "
+                f"{f['lotes']} lotes · abierta "
+                f"{_trd_a_chile(f['fecha_apertura']):%d-%m %H:%M}": int(f["id"])
+                for _, f in abiertas_lista.iterrows()
+            }
+            elegida = st.selectbox("Posición abierta", list(etiquetas.keys()),
+                                   key="trd_cerrar_cual")
+            ahora_cl = _trd_hora_inicial()
+            _trd_aviso_hora("trd_cerrar_fecha", "trd_cerrar_hora", "cierre")
+            c1, c2, c3, c4 = st.columns(4)
+            cf = c1.date_input("Fecha de cierre (Chile)", value=ahora_cl.date(),
+                               key="trd_cerrar_fecha")
+            ch = c2.time_input("Hora de cierre (Chile)", value=ahora_cl.time(),
+                               key="trd_cerrar_hora")
+            cp = c3.number_input("Precio de salida", 0.0, step=0.00001, format="%.5f",
+                                 key="trd_cerrar_precio")
+            cr = c4.number_input("Resultado (CLP)", step=1000.0, key="trd_cerrar_resultado")
+            if st.button("Cerrar la operación", key="trd_cerrar_btn"):
+                id_op = etiquetas[elegida]
+                momento = _trd_desde_formulario(cf, ch)
+                fila = abiertas_lista[abiertas_lista["id"] == id_op].iloc[0]
+                apertura = _trd_a_chile(fila["fecha_apertura"])
+                if cp <= 0:
+                    st.error("Una operación cerrada necesita precio de salida.")
+                elif apertura is not None and momento < apertura:
+                    st.error(
+                        f"El cierre ({momento:%d-%m %H:%M}) no puede ser anterior a la "
+                        f"apertura ({apertura:%d-%m %H:%M}).")
+                else:
+                    try:
+                        with engine.begin() as conn:
+                            conn.execute(text(
+                                "UPDATE trading_operaciones SET fecha_cierre=:fc, "
+                                "precio_salida=:ps, resultado_clp=:re WHERE id=:id"
+                            ), {"fc": momento, "ps": cp, "re": cr, "id": id_op})
+                        _trd_invalidar()
+                        st.success(f"Operación #{id_op} cerrada.")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"No se pudo cerrar: {e}")
+
+    if operaciones.empty:
+        st.info("Todavía no hay operaciones registradas.")
+    else:
+        abiertas = operaciones[operaciones["fecha_cierre"].isna()]
+        cerradas = operaciones[operaciones["fecha_cierre"].notna()]
+        st.caption(f"{len(operaciones)} operaciones · {len(abiertas)} abiertas · {len(cerradas)} cerradas")
+        # UNA sola llamada para toda la tabla: cada st.* es un mensaje por el
+        # WebSocket y la cola tiene un tope fijo de 500 (ver el incidente de
+        # los titulares en el Brief).
+        # Las fechas vienen de la base en UTC: se muestran en hora de Chile,
+        # que es la que la usuaria escribió al registrarlas.
+        vista = operaciones.drop(columns=["id"]).copy()
+        for col in ("fecha_apertura", "fecha_cierre"):
+            vista[col] = vista[col].map(_trd_a_chile)
+        st.caption("Las fechas y horas se muestran en hora de Chile.")
+        st.dataframe(vista, use_container_width=True, hide_index=True)
+        st.download_button(
+            "Descargar el diario en CSV",
+            vista.to_csv(index=False).encode("utf-8"),
+            file_name=f"diario_trading_{hoy:%Y%m%d}.csv",
+            mime="text/csv",
+        )
+
+    # --------------------------------------------------- panel de reglas
+    st.divider()
+    st.markdown("### Control de reglas del torneo")
+    st.warning(
+        "**Esto es un espejo de lo que registraste a mano, no un guardián.** Refleja "
+        "solo las operaciones cargadas en el diario, con el retraso con que las hayas "
+        "cargado. En particular, **el piso de 5.000.000 CLP lo controla XTB en tiempo "
+        "real sobre tu cuenta** y puede dispararse sin que este panel se entere."
+    )
+
+    cerradas = operaciones[operaciones["fecha_cierre"].notna()] if not operaciones.empty else pd.DataFrame()
+    abiertas = operaciones[operaciones["fecha_cierre"].isna()] if not operaciones.empty else pd.DataFrame()
+    n_cortas = int((cerradas["duracion_segundos"] < 120).sum()) if not cerradas.empty else 0
+    resultados = cerradas["resultado_clp"].dropna().tolist() if not cerradas.empty else []
+    margenes = (abiertas.dropna(subset=["margen_clp"]).groupby("instrumento")["margen_clp"].sum().to_dict()
+                if not abiertas.empty else {})
+    por_categoria = (abiertas.dropna(subset=["margen_clp"]).groupby("categoria")["margen_clp"].sum().to_dict()
+                     if not abiertas.empty else {})
+    riesgos = abiertas["riesgo_clp"].dropna().tolist() if not abiertas.empty else []
+    # Cuántas posiciones abiertas NO tienen el dato cargado. Con una sola que
+    # falte, el chequeo correspondiente pasa a gris en vez de verde: sumar
+    # solo lo que sí se cargó y pintarlo de verde sería afirmar que la regla
+    # se cumple sin haber mirado todo.
+    sin_margen = int(abiertas["margen_clp"].isna().sum()) if not abiertas.empty else 0
+    sin_riesgo = int(abiertas["riesgo_clp"].isna().sum()) if not abiertas.empty else 0
+
+    for chequeo in [
+        minimo_operaciones(len(cerradas)),
+        operaciones_cortas(n_cortas),
+        piso_de_equity(equity_actual),
+        mayor_trade_sobre_ganancia(resultados),
+        margen_por_subyacente(margenes, equity_actual, sin_dato=sin_margen),
+        riesgo_total_abierto(riesgos, equity_actual, sin_dato=sin_riesgo),
+        stops_hasta_el_piso(equity_actual, riesgo_clp),
+        concentracion_por_categoria(por_categoria),
+    ]:
+        _trd_pinta(chequeo)
+
+    if not cerradas.empty and cerradas["resultado_clp"].notna().any():
+        st.markdown("#### Desempeño")
+        res = cerradas["resultado_clp"].dropna().astype(float)
+        ganadoras = (res > 0).sum()
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("Resultado neto", f"{res.sum():,.0f} CLP")
+        m2.metric("Tasa de acierto", f"{ganadoras / len(res) * 100:.0f}%")
+        m3.metric("Ganancia media", f"{res[res > 0].mean():,.0f} CLP" if ganadoras else "—")
+        m4.metric("Pérdida media", f"{res[res < 0].mean():,.0f} CLP" if (res < 0).any() else "—")
+
+    if not estado_cuenta.empty and len(estado_cuenta) > 1:
+        st.markdown("#### Curva de equity")
+        curva = estado_cuenta.sort_values("momento")
+        fig_eq = px.line(curva, x="momento", y="equity_clp", markers=True)
+        fig_eq.add_hline(y=float(TRD_PISO_EQUITY), line_dash="dash", line_color="red",
+                         annotation_text="piso de descalificación")
+        fig_eq.update_layout(height=320, margin=dict(t=20, b=20))
+        st.plotly_chart(fig_eq, use_container_width=True)
+
+
+if _seccion == "Divisas":
+    render_divisas()
+
 
 # --- Tab 4: Benchmark (incluye 7 Magníficas) ---
 if _seccion == "Benchmark":
