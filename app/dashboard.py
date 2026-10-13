@@ -76,6 +76,7 @@ from trading_atr import (
     stop_demasiado_cerca,
     stop_sugerido,
     stop_sugerido_para,
+    stop_sugerido_redondeado,
     tramo_del_stop,
 )
 from trading_correlacion import (
@@ -4599,7 +4600,7 @@ def _trd_bloque_atr(atr, instrumento, riesgo_clp, pip_guardado, cotizaciones,
 
 
 def _trd_aviso_stop_ruido(instrumento, direccion, entrada, stop, atr,
-                          clave: str) -> None:
+                          clave: str, pip_tamano=None) -> None:
     """Dónde cae el stop respecto del movimiento típico del par.
 
     VA FUERA DEL st.form a propósito: dentro de un formulario Streamlit no
@@ -4641,13 +4642,17 @@ def _trd_aviso_stop_ruido(instrumento, direccion, entrada, stop, atr,
 
     # El stop sugerido se muestra SIEMPRE que haya ATR y entrada, aunque el
     # stop escrito esté mal: es justamente cuando más sirve.
-    sugerido = resultado.stop_sugerido or stop_sugerido_para(
-        entrada, direccion, atr.valor)
+    #
+    # YA REDONDEADO a los decimales del instrumento y alejando de la entrada.
+    # Se muestra el mismo número que carga el botón: si la pantalla mostrara
+    # el valor exacto y el botón cargara otro, el aviso cambiaría de tramo
+    # después de usar la propia sugerencia.
+    sugerido = stop_sugerido_redondeado(entrada, direccion, atr.valor, pip_tamano)
     if sugerido is None:
         return
     col_txt, col_btn = st.columns([4, 1])
     col_txt.markdown(
-        f"Stop sugerido a 1,5 × ATR: **{sugerido:.5f}** "
+        f"Stop sugerido a 1,5 × ATR: **{sugerido}** "
         f"({'debajo' if direccion == 'compra' else 'encima'} de la entrada). "
         f"Es una distancia de referencia, no un nivel del gráfico."
     )
@@ -4655,7 +4660,7 @@ def _trd_aviso_stop_ruido(instrumento, direccion, entrada, stop, atr,
     # modificar la clave de un widget después de haberlo creado, y el campo
     # del stop ya existe cuando se llega hasta acá. El callback corre antes
     # de la re-ejecución, cuando el widget todavía no se instanció.
-    def _usar_sugerido(destino=clave, valor=float(round(sugerido, 5))):
+    def _usar_sugerido(destino=clave, valor=float(sugerido)):
         st.session_state[destino] = valor
 
     col_btn.button("Usar stop sugerido", key=f"trd_usar_stop_{clave}",
@@ -5596,7 +5601,9 @@ def render_divisas():
         _trd_aviso_stop_ruido(v_inst, v_dir,
                               Decimal(str(v_entrada)) if v_entrada > 0 else None,
                               Decimal(str(v_stop)) if v_stop > 0 else None,
-                              atr_ruido, "trd_ruido_stop")
+                              atr_ruido, "trd_ruido_stop",
+                              fila_r.iloc[0]["pip_tamano"] if not fila_r.empty
+                              else None)
 
     with st.expander("Registrar una operación", expanded=operaciones.empty):
         nombres_todos = sorted(catalogo["nombre_xtb"].tolist())

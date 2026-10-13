@@ -679,6 +679,54 @@ def test_el_boton_usa_el_stop_sugerido_y_lo_carga_en_el_campo():
     assert "dentro del ruido" not in _todo_el_texto(at)
 
 
+def test_usar_stop_sugerido_deja_el_tramo_en_fuera_del_ruido():
+    """El defecto que esto corrige: el botón cargaba 1,11167 (redondeo al
+    más cercano) y la pantalla decía "Stop justo" justo después de usar su
+    propia sugerencia. Ahora redondea alejándose de la entrada."""
+    at = _correr()
+    _ruido(at, 1.1200, 1.1180)          # arranca dentro del ruido
+    assert "dentro del ruido" in _todo_el_texto(at)
+
+    boton = [b for b in at.button if "Usar stop sugerido" in str(b.label)]
+    assert boton, [str(b.label) for b in at.button]
+    boton[0].click().run(timeout=420)
+    assert not at.exception, at.exception
+
+    texto = _todo_el_texto(at)
+    assert "Stop fuera del ruido" in texto, texto[-900:]
+    assert "Stop justo" not in texto, "el redondeo lo dejó corto otra vez"
+    cargado = at.number_input(key="trd_ruido_stop").value
+    assert cargado < 1.1200, f"en compra el sugerido va debajo: {cargado}"
+
+
+def test_usar_stop_sugerido_tambien_en_venta():
+    at = _correr()
+    _ruido(at, 1.1200, 1.1220, direccion="venta")
+    assert "dentro del ruido" in _todo_el_texto(at)
+    [b for b in at.button if "Usar stop sugerido" in str(b.label)][0].click().run(
+        timeout=420)
+    assert not at.exception, at.exception
+    texto = _todo_el_texto(at)
+    assert "Stop fuera del ruido" in texto, texto[-900:]
+    cargado = at.number_input(key="trd_ruido_stop").value
+    assert cargado > 1.1200, f"en venta el sugerido va encima: {cargado}"
+
+
+def test_la_pantalla_muestra_el_MISMO_numero_que_carga_el_boton():
+    """Si mostrara el exacto y cargara el redondeado, el tramo cambiaría
+    después de pulsar."""
+    at = _correr()
+    _ruido(at, 1.1200, 1.1180)
+    texto = _todo_el_texto(at)
+    i = texto.index("Stop sugerido a 1,5")
+    mostrado = texto[i:i + 80]
+    [b for b in at.button if "Usar stop sugerido" in str(b.label)][0].click().run(
+        timeout=420)
+    cargado = at.number_input(key="trd_ruido_stop").value
+    assert f"{cargado}" in mostrado or f"{cargado:.5f}" in mostrado, (
+        f"la pantalla mostraba {mostrado!r} y el botón cargó {cargado}")
+
+
 def test_un_par_sin_atr_lo_dice_y_no_opina():
     at = _correr()
     at.selectbox(key="trd_ruido_par").set_value("EURCZK").run(timeout=420)

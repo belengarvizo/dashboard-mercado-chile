@@ -667,3 +667,119 @@ def test_una_direccion_desconocida_no_sugiere_un_lado_al_azar():
 def test_guarda_la_distancia_para_poder_mostrarla():
     r = tramo_del_stop(ENTRADA, Decimal("1.1170"), ATR_EURUSD, "compra")
     assert float(r.distancia) == pytest.approx(0.0030, abs=1e-9)
+
+
+# ============ el stop sugerido redondeado hacia afuera de la entrada
+from trading_atr import (  # noqa: E402
+    TRAMO_FUERA_DEL_RUIDO,
+    decimales_del_precio,
+    stop_sugerido_redondeado,
+)
+
+
+def test_los_decimales_salen_del_pip_del_catalogo():
+    """0,0001 da 5 decimales y 0,01 da 3: el pip más la pipeta, como cotiza
+    XTB."""
+    assert decimales_del_precio(Decimal("0.0001")) == 5
+    assert decimales_del_precio(Decimal("0.01")) == 3
+
+
+def test_sin_pip_los_decimales_salen_del_precio_escrito():
+    """Cripto, índices, materias primas y 41 pares no tienen pip en el
+    catálogo. Inventar 5 decimales para un índice que cotiza en enteros
+    daría un stop con cuatro ceros al final."""
+    assert decimales_del_precio(None, Decimal("4000.25")) == 2
+    assert decimales_del_precio(None, Decimal("18500")) == 0
+    assert decimales_del_precio(None, Decimal("0.123456")) == 6
+    # sin nada de donde sacarlo, un valor por defecto razonable
+    assert decimales_del_precio(None, None) == 5
+
+
+def test_en_compra_redondea_ALEJANDO_el_stop_de_la_entrada():
+    """Redondear al más cercano lo acercaría la mitad de las veces, y el
+    stop cargado quedaría a menos de 1,5 ATR."""
+    entrada, atr = Decimal("1.1200"), Decimal("0.005555")
+    exacto = entrada - atr * Decimal("1.5")        # 1,1116675
+    redondeado = stop_sugerido_redondeado(entrada, "compra", atr, Decimal("0.0001"))
+    assert redondeado < exacto, f"{redondeado} deberia estar MAS abajo que {exacto}"
+    assert redondeado == Decimal("1.11166")
+
+
+def test_en_venta_redondea_para_el_otro_lado():
+    entrada, atr = Decimal("1.1200"), Decimal("0.005555")
+    exacto = entrada + atr * Decimal("1.5")        # 1,1283325
+    redondeado = stop_sugerido_redondeado(entrada, "venta", atr, Decimal("0.0001"))
+    assert redondeado > exacto
+    assert redondeado == Decimal("1.12834")
+
+
+def test_un_par_de_yenes_usa_tres_decimales():
+    entrada, atr = Decimal("158.628"), Decimal("1.1789")
+    compra = stop_sugerido_redondeado(entrada, "compra", atr, Decimal("0.01"))
+    venta = stop_sugerido_redondeado(entrada, "venta", atr, Decimal("0.01"))
+    assert -compra.as_tuple().exponent == 3, compra
+    assert -venta.as_tuple().exponent == 3, venta
+    assert compra == Decimal("156.859") and venta == Decimal("160.397")
+
+
+def test_un_instrumento_de_dos_decimales():
+    entrada, atr = Decimal("4000.25"), Decimal("35.5")
+    stop = stop_sugerido_redondeado(entrada, "compra", atr)
+    assert -stop.as_tuple().exponent == 2, stop
+    assert stop == Decimal("3947.00")
+
+
+def test_PROPIEDAD_el_stop_redondeado_nunca_queda_mas_cerca_de_1_5_ATR():
+    """La propiedad que motivó todo el cambio: con la sugerencia ya
+    redondeada, el ratio es siempre >= 1,5 y el tramo es "fuera del ruido".
+
+    Se barre a mano una grilla amplia en vez de usar azar: una prueba que
+    falla una vez de cada veinte no sirve para fijar una propiedad.
+    """
+    casos = 0
+    for pip, entrada in (
+        (Decimal("0.0001"), Decimal("1.1200")),
+        (Decimal("0.0001"), Decimal("0.65432")),
+        (Decimal("0.0001"), Decimal("1.33333")),
+        (Decimal("0.01"), Decimal("158.628")),
+        (Decimal("0.01"), Decimal("195.507")),
+        (None, Decimal("4000.25")),
+        (None, Decimal("18500")),
+        (None, Decimal("0.123456")),
+    ):
+        for atr_txt in ("0.0001", "0.000777", "0.005555", "0.0123",
+                        "1.1789", "7.5075", "35.5", "123.456"):
+            atr = Decimal(atr_txt)
+            for direccion in ("compra", "venta"):
+                stop = stop_sugerido_redondeado(entrada, direccion, atr, pip)
+                if stop is None or stop <= 0:
+                    continue   # un ATR enorme puede dejar el stop en negativo
+                r = tramo_del_stop(entrada, stop, atr, direccion)
+                if r.tramo == ERROR:
+                    continue   # el stop cruzó la entrada: otro caso, ya probado
+                casos += 1
+                assert r.ratio >= TRAMO_FUERA_DEL_RUIDO, (
+                    f"{direccion} entrada={entrada} atr={atr} pip={pip} "
+                    f"stop={stop} ratio={r.ratio}")
+                assert r.tramo == FUERA, (
+                    f"{direccion} entrada={entrada} atr={atr} stop={stop} "
+                    f"dio {r.tramo}")
+    assert casos > 100, f"solo se probaron {casos} combinaciones"
+
+
+def test_el_redondeo_usa_Decimal_y_no_coma_flotante():
+    """Con round() de Python, 1,1116675 a 5 decimales da 1,11167, que deja
+    el ratio en 1,49955 y cae al tramo de abajo. Ese era el defecto."""
+    entrada, atr = Decimal("1.1200"), Decimal("0.005555")
+    con_round = Decimal(str(round(float(entrada - atr * Decimal("1.5")), 5)))
+    assert tramo_del_stop(entrada, con_round, atr, "compra").tramo == JUSTO, (
+        "si esto deja de ser cierto, el defecto original ya no se reproduce")
+    bien = stop_sugerido_redondeado(entrada, "compra", atr, Decimal("0.0001"))
+    assert tramo_del_stop(entrada, bien, atr, "compra").tramo == FUERA
+
+
+def test_sin_atr_no_hay_stop_redondeado():
+    for atr in (None, Decimal("0"), Decimal("-1"), float("nan")):
+        assert stop_sugerido_redondeado(Decimal("1.12"), "compra", atr) is None
+    assert stop_sugerido_redondeado(Decimal("1.12"), "lo que sea",
+                                    Decimal("0.005")) is None

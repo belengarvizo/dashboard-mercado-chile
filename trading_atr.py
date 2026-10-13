@@ -60,7 +60,7 @@ ATR inventado haría poner un stop con una confianza que no existe.
 """
 from dataclasses import dataclass
 from datetime import date
-from decimal import Decimal
+from decimal import ROUND_CEILING, ROUND_FLOOR, Decimal
 
 import numpy as np
 import pandas as pd
@@ -509,6 +509,54 @@ def stop_sugerido_para(entrada, direccion: str, atr_valor,
     if direccion == VENTA_DIR:
         return e + a * m
     return None
+
+
+DECIMALES_POR_DEFECTO = 5
+
+
+def decimales_del_precio(pip_tamano=None, referencia=None,
+                         por_defecto: int = DECIMALES_POR_DEFECTO) -> int:
+    """Con cuántos decimales se cotiza un instrumento.
+
+    Del tamaño del pip cuando el catálogo lo tiene: 0,0001 da 5 decimales y
+    0,01 da 3, que es el pip más la pipeta, como cotiza XTB.
+
+    Cuando no lo tiene —cripto, índices, materias primas y 41 pares— se usa
+    la precisión del precio que escribió la usuaria, que es la que de verdad
+    maneja ese instrumento. Inventar 5 decimales para un índice que cotiza en
+    enteros daría un stop con cuatro ceros al final.
+    """
+    pip = _d(pip_tamano)
+    if pip is not None and pip > 0:
+        return max(0, -pip.as_tuple().exponent) + 1
+    ref = _d(referencia)
+    if ref is not None:
+        return max(0, -ref.as_tuple().exponent)
+    return por_defecto
+
+
+def stop_sugerido_redondeado(entrada, direccion: str, atr_valor,
+                             pip_tamano=None,
+                             multiplo=MULTIPLO_STOP_POR_DEFECTO):
+    """El stop sugerido, redondeado a los decimales del instrumento y SIEMPRE
+    alejándolo de la entrada.
+
+    POR QUÉ EL LADO IMPORTA. Redondear al más cercano acerca el stop a la
+    entrada la mitad de las veces, y entonces el stop que carga el botón
+    queda a menos de 1,5 ATR: la pantalla diría "Stop justo" justo después de
+    que usaste su propia sugerencia. Con el redondeo hacia afuera —abajo en
+    una compra, arriba en una venta— la distancia nunca baja de 1,5 ATR.
+
+    Se redondea con Decimal y no con round(), que trabaja en coma flotante:
+    un ratio exacto de 1,5 puede terminar en 1,49999 y caer al tramo de
+    abajo por un error de representación.
+    """
+    crudo = stop_sugerido_para(entrada, direccion, atr_valor, multiplo)
+    if crudo is None:
+        return None
+    paso = Decimal(1).scaleb(-decimales_del_precio(pip_tamano, entrada))
+    modo = ROUND_FLOOR if direccion == COMPRA_DIR else ROUND_CEILING
+    return crudo.quantize(paso, rounding=modo)
 
 
 def tramo_del_stop(entrada, stop, atr_valor, direccion: str,
