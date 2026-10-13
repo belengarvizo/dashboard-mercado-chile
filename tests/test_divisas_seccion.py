@@ -19,6 +19,11 @@ DASHBOARD_PATH = os.path.join(os.path.dirname(__file__), "..", "app", "dashboard
 SECCION = "Divisas"
 
 
+def pd_vacio():
+    import pandas as pd
+    return pd.DataFrame()
+
+
 def _correr(**estado):
     at = AppTest.from_file(DASHBOARD_PATH, default_timeout=420)
     at.session_state["seccion_activa"] = SECCION
@@ -293,6 +298,86 @@ def test_el_aviso_de_stop_cerca_no_bloquea_nada():
                       "UPDATE", "DELETE"):
         assert prohibido not in bloque, (
             f"el aviso de stop cerca contiene {prohibido!r}: avisa, no actúa")
+
+
+def test_la_tabla_de_atr_lista_los_pares_con_datos():
+    at = _correr()
+    texto = _todo_el_texto(at)
+    assert "Cuánto se mueve cada par" in texto
+    tablas = [t for t in at.dataframe
+              if "Par" in list(getattr(t, "value", pd_vacio()).columns)]
+    assert tablas, "no se dibujó la tabla del ATR"
+    tabla = tablas[0].value
+    columnas = list(tabla.columns)
+    for esperada in ("Par", "ATR del rango del día", "% del precio",
+                     "Último dato", "Marcas"):
+        assert esperada in columnas, columnas
+    assert any(c.startswith("Stop ") for c in columnas), columnas
+    # Hay al menos los pares de la Fase 1 que tienen un año de ruedas.
+    assert len(tabla) >= 10, f"solo {len(tabla)} pares en la tabla"
+    assert "EURUSD" in set(tabla["Par"])
+
+
+def test_la_tabla_de_atr_va_ordenada_por_porcentaje_de_mayor_a_menor():
+    at = _correr()
+    tabla = [t.value for t in at.dataframe
+             if "% del precio" in list(getattr(t, "value", pd_vacio()).columns)][0]
+    pct = [float(v.rstrip("%")) for v in tabla["% del precio"]]
+    assert pct == sorted(pct, reverse=True), pct
+
+
+def test_los_pares_sin_pip_dicen_sin_pips_y_no_un_numero():
+    """USDCLP, USDBRL, USDIDX y USDMXN no tienen tamaño de pip."""
+    at = _correr()
+    tabla = [t.value for t in at.dataframe
+             if "Par" in list(getattr(t, "value", pd_vacio()).columns)][0]
+    sin_pip = tabla[tabla["Par"].isin(["USDCLP", "USDBRL", "USDIDX", "USDMXN"])]
+    assert len(sin_pip) >= 1, "ninguno de los pares sin pip llegó a la tabla"
+    columna_stop = [c for c in tabla.columns if c.startswith("Stop ")][0]
+    for _, f in sin_pip.iterrows():
+        assert "sin pips" in f["ATR del rango del día"], f.to_dict()
+        assert f[columna_stop] == "sin pips", f.to_dict()
+    # Y los que sí tienen pip muestran pips de verdad.
+    con_pip = tabla[tabla["Par"] == "EURUSD"].iloc[0]
+    assert "pips" in con_pip["ATR del rango del día"]
+    assert "sin pips" not in con_pip["ATR del rango del día"]
+
+
+def test_la_tabla_de_atr_sigue_el_multiplo_del_calculador():
+    at = _correr()
+    at.number_input(key="trd_atr_multiplo").set_value(2.0).run(timeout=420)
+    assert not at.exception, at.exception
+    tabla = [t.value for t in at.dataframe
+             if "Par" in list(getattr(t, "value", pd_vacio()).columns)][0]
+    assert any(c == "Stop 2.0× ATR" for c in tabla.columns), list(tabla.columns)
+    assert "2.0×" in _todo_el_texto(at)
+
+
+def test_la_tabla_de_atr_no_da_senales_ni_se_puede_editar():
+    with open(DASHBOARD_PATH, encoding="utf-8") as f:
+        codigo = f.read()
+    inicio = codigo.index("def _trd_tabla_atr(")
+    bloque = codigo[inicio:codigo.index("\ndef _trd_stops_cerca_del_atr(")]
+    # st.dataframe es de solo lectura; st.data_editor no.
+    assert "st.data_editor" not in bloque
+    assert "st.dataframe" in bloque
+    for prohibido in ("st.stop()", "raise ", "return False", "disabled=True"):
+        assert prohibido not in bloque, f"la tabla contiene {prohibido!r}"
+    # Buscar palabras sueltas como "oportunidad" no sirve: el propio descargo
+    # del bloque dice que NO ordena por oportunidad. Se comprueba que ese
+    # descargo esté y que no haya una recomendación de dirección.
+    # El fragmento va cortado porque en el código la frase está partida entre
+    # dos lineas de f-string.
+    assert "par operar ni en qué dirección" in bloque
+    assert "para dimensionar el stop" in bloque.lower()
+    for recomendacion in ("deberías comprar", "deberías vender", "conviene comprar",
+                          "conviene vender", "señal de compra", "señal de venta",
+                          "mejor oportunidad", "la más atractiva"):
+        assert recomendacion not in bloque.lower(), (
+            f"la tabla sugiere qué operar: {recomendacion!r}")
+    # No recalcula el ATR por su cuenta: usa las funciones del módulo.
+    assert "_trd_atr(" in bloque and "stop_sugerido(" in bloque
+    assert "atr_wilder" not in bloque and "rango_del_dia" not in bloque
 
 
 def test_el_bloque_del_atr_no_da_senales_ni_bloquea():

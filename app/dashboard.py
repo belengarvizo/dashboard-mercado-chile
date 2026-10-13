@@ -4546,6 +4546,74 @@ def _trd_bloque_atr(atr, instrumento, riesgo_clp, pip_guardado, cotizaciones,
     st.markdown(" ".join(partes))
 
 
+def _trd_tabla_atr(catalogo, rangos, hoy) -> None:
+    """Tabla de solo lectura con el ATR de los pares que tienen datos.
+
+    Usa LAS MISMAS funciones que el calculador (_trd_atr y stop_sugerido), no
+    recalcula nada por su cuenta: si alguna vez cambia la definición del ATR,
+    cambia en los dos lugares a la vez.
+
+    ES PARA DIMENSIONAR EL STOP. No ordena por "oportunidad" ni sugiere qué
+    operar: ordena por cuánto se mueve cada par, que es lo que decide el
+    tamaño del stop.
+    """
+    if catalogo.empty or rangos.empty:
+        return
+    solo_fx = catalogo[catalogo["categoria"] == "divisas"]
+    if solo_fx.empty:
+        return
+
+    # El múltiplo es el que esté puesto arriba, en el calculador.
+    multiplo = Decimal(str(st.session_state.get(
+        "trd_atr_multiplo", float(MULTIPLO_STOP_POR_DEFECTO))))
+
+    filas = []
+    for _, fila in solo_fx.iterrows():
+        ticker = fila["ticker_yahoo"]
+        if ticker is None or pd.isna(ticker):
+            continue
+        atr = _trd_atr(ticker, rangos, fila["pip_tamano"], hoy)
+        if not atr.hay_atr:
+            continue
+        _precio_stop, stop_pips = stop_sugerido(atr, multiplo)
+
+        marcas = []
+        if atr.sospechosos:
+            marcas.append(f"⚠ {atr.sospechosos} día(s) de rango anormal")
+        if atr.desactualizado:
+            marcas.append(f"⏳ {atr.ruedas_sin_actualizar} ruedas sin actualizar")
+
+        filas.append({
+            "Par": fila["nombre_xtb"],
+            # En pips si el catálogo tiene el tamaño del pip; si no, en precio.
+            # Nunca un número de pips inventado.
+            "ATR del rango del día": (f"{atr.pips:,.1f} pips" if atr.pips is not None
+                                      else f"{atr.valor:.6f} (sin pips)"),
+            "% del precio": f"{atr.porcentaje:.2f}%",
+            f"Stop {multiplo:.1f}× ATR": (f"{stop_pips:,.0f} pips"
+                                          if stop_pips is not None else "sin pips"),
+            "Último dato": f"{atr.ultima_fecha:%d-%m-%Y}",
+            "Marcas": " · ".join(marcas),
+            "_orden": float(atr.porcentaje),
+        })
+
+    if not filas:
+        return
+
+    st.markdown("#### Cuánto se mueve cada par")
+    tabla = pd.DataFrame(filas).sort_values("_orden", ascending=False)
+    st.dataframe(tabla.drop(columns="_orden"), hide_index=True,
+                 use_container_width=True)
+    st.caption(
+        f"Ordenada por el ATR como porcentaje del precio, de mayor a menor: "
+        f"arriba están los pares que más se mueven, que son los que piden un "
+        f"stop más ancho en pips. El stop usa el múltiplo que tengas puesto "
+        f"arriba ({multiplo:.1f}×). Es para dimensionar el stop: no dice qué "
+        f"par operar ni en qué dirección. Los pares sin tamaño de pip en el "
+        f"catálogo muestran el ATR en precio."
+    )
+
+
 def _trd_stops_cerca_del_atr(abiertas, catalogo, rangos, hoy) -> None:
     """Avisa de las posiciones abiertas con el stop a menos de 1 ATR.
 
@@ -5078,6 +5146,7 @@ def render_divisas():
     atr_par = _trd_atr(fila_cat["ticker_yahoo"], rangos_fx, pip_guardado, hoy)
     _trd_bloque_atr(atr_par, instrumento, riesgo_clp, pip_guardado, cotizaciones,
                     hoy, tasa_manual)
+    _trd_tabla_atr(catalogo, rangos_fx, hoy)
 
     _trd_tabla_recuperacion(riesgo_clp, base_riesgo)
     _trd_aviso_antimartingala(riesgo_clp, operaciones)
