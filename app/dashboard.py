@@ -4439,11 +4439,14 @@ def _trd_bloque_atr(atr, instrumento, riesgo_clp, pip_guardado, cotizaciones,
                     hoy, tasa_manual) -> None:
     """ATR del par y stop sugerido como múltiplo del ATR.
 
+    La cifra PRINCIPAL es la del rango del día; la del rango verdadero queda
+    al lado, más chica, para comparar.
+
     ES PARA DIMENSIONAR EL STOP, NO UNA SEÑAL: no dice si comprar o vender,
     ni cuándo. Y es una REFERENCIA: no toca el campo "Distancia al stop", que
     sigue siendo el que tú escribas.
     """
-    st.markdown(f"#### ATR de Wilder ({PERIODO_ATR})")
+    st.markdown(f"#### ATR de Wilder ({PERIODO_ATR}) — rango del día")
 
     if not atr.hay_atr:
         st.info(
@@ -4457,26 +4460,29 @@ def _trd_bloque_atr(atr, instrumento, riesgo_clp, pip_guardado, cotizaciones,
     # más chica, porque es para comparar y no para dimensionar.
     c1, c2 = st.columns([1, 2])
     c1.metric(
-        f"ATR de Wilder ({PERIODO_ATR})",
+        f"ATR del rango del día ({PERIODO_ATR})",
         f"{atr.pips:,.1f} pips" if atr.pips is not None else f"{atr.valor:.6f}",
-        help="Rango verdadero: el mayor entre el rango del día y las dos "
-             "distancias contra el cierre previo, suavizado al modo de Wilder.")
+        help="Máximo menos mínimo de cada rueda, suavizado al modo de Wilder. "
+             "Medido contra xStation el 12-10-2026 se parece más a su ATR que "
+             "la cifra del rango verdadero; eso no es decir que coincida.")
 
-    solo_dia = (f"{atr.pips_solo_dia:,.1f} pips" if atr.pips_solo_dia is not None
-                else (f"{atr.valor_solo_dia:.6f}" if atr.valor_solo_dia is not None
-                      else "—"))
+    verdadero = (f"{atr.pips_rango_verdadero:,.1f} pips"
+                 if atr.pips_rango_verdadero is not None
+                 else (f"{atr.valor_rango_verdadero:.6f}"
+                       if atr.valor_rango_verdadero is not None else "—"))
     c2.caption(
-        f"**Solo rango del día: {solo_dia}** — la misma cuenta sin los saltos "
-        f"entre cierres, con el mismo suavizado de Wilder.  \n"
+        f"**Rango verdadero: {verdadero}** — la misma cuenta contando además "
+        f"los saltos entre cierres, con el mismo suavizado de Wilder.  \n"
         f"En precio: **{atr.valor:.6f}**"
-        + (f" · {atr.valor_solo_dia:.6f} solo rango del día"
-           if atr.valor_solo_dia is not None else "")
+        + (f" · {atr.valor_rango_verdadero:.6f} con rango verdadero"
+           if atr.valor_rango_verdadero is not None else "")
         + f"  \nSobre el precio: **{atr.porcentaje:.2f}%** · último dato del par: "
           f"**{atr.ultima_fecha:%d-%m-%Y}**"
     )
     st.caption(
         "*El rango verdadero incluye saltos entre cierres; en divisas parte "
-        "puede ser desfase de datos de Yahoo.*"
+        "puede ser desfase de datos de Yahoo. Por eso la cifra principal es la "
+        "del rango del día.*"
     )
 
     if atr.aviso_pips:
@@ -4510,9 +4516,9 @@ def _trd_bloque_atr(atr, instrumento, riesgo_clp, pip_guardado, cotizaciones,
     multiplo = st.number_input(
         "Múltiplo del ATR para el stop", 0.5, 5.0,
         float(MULTIPLO_STOP_POR_DEFECTO), 0.1, key="trd_atr_multiplo",
-        help="1,5 por defecto. Es una referencia de distancia, no un nivel: "
-             "dice cuánto espacio dejarle al ruido normal del par, no dónde "
-             "está el soporte.")
+        help="1,5 por defecto, sobre el ATR del rango del día. Es una "
+             "referencia de distancia, no un nivel: dice cuánto espacio dejarle "
+             "al ruido normal del par, no dónde está el soporte.")
     stop_precio, stop_pips = stop_sugerido(atr, Decimal(str(multiplo)))
     if stop_pips is None:
         st.caption(
@@ -4568,7 +4574,8 @@ def _trd_stops_cerca_del_atr(abiertas, catalogo, rangos, hoy) -> None:
                                              fila.get("stop"), atr)
         if cerca:
             cercanos.append(
-                f"- **{instrumento}**: el stop está a **{en_atr:.2f} ATR** de la "
+                f"- **{instrumento}**: el stop está a **{en_atr:.2f} ATR** (rango "
+                f"del día) de la "
                 f"entrada ({abs(Decimal(str(fila['precio_entrada'])) - Decimal(str(fila['stop']))):.6f} "
                 f"contra un ATR de {atr.valor:.6f})"
             )

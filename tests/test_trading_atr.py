@@ -292,40 +292,78 @@ def test_los_huecos_entre_ruedas_se_cuentan():
     assert contar_huecos([]) == 0
 
 
-# ------------------------------- la segunda cifra: solo el rango del día
+# --------------------- cuál cifra es la principal y cuál la secundaria
 def test_el_rango_del_dia_ignora_el_hueco():
     """Es la diferencia con el rango verdadero: acá un salto entre cierres no
     cuenta."""
     assert list(rango_del_dia([10, 20], [8, 19])) == [2, 1]
 
 
-def test_las_dos_cifras_usan_el_MISMO_suavizado():
-    """Para que la comparación mida la diferencia entre las dos definiciones
-    de rango, no entre dos formas de promediar. Con velas sin huecos, las
-    dos cifras coinciden."""
-    r = atr_de_rangos("EURUSD=X", _velas(30), pip_tamano=Decimal("0.0001"), hoy=HOY)
-    assert r.valor == r.valor_solo_dia
-    assert r.pips == r.pips_solo_dia
-
-
-def test_con_huecos_la_principal_es_mayor_que_la_del_dia():
-    """El rango verdadero nunca puede ser menor que el rango del día: toma el
-    mayor de tres y uno de ellos ES el rango del día."""
+def _velas_con_salto():
+    """30 velas con un salto de nivel a mitad, que SOLO ve el rango verdadero."""
     velas = _velas(30)
-    # un salto de nivel a mitad de la serie
     for v in velas[15:]:
         v["maximo"] += 0.05
         v["minimo"] += 0.05
         v["cierre"] += 0.05
-    r = atr_de_rangos("EURUSD=X", velas, pip_tamano=Decimal("0.0001"), hoy=HOY)
-    assert r.valor > r.valor_solo_dia
-    assert r.pips > r.pips_solo_dia
+    return velas
+
+
+def test_la_cifra_principal_es_la_del_rango_del_dia():
+    """Se cambió tras medir contra xStation el 12-10-2026: su ATR(14) queda
+    mucho más cerca del rango del día (EURUSD -4%, USDJPY -10%) que del rango
+    verdadero (+23% y +31%). `valor` y `pips` son la principal."""
+    r = atr_de_rangos("EURUSD=X", _velas_con_salto(), pip_tamano=Decimal("0.0001"),
+                      hoy=HOY)
+    assert r.valor < r.valor_rango_verdadero, (
+        "la principal tiene que ser la del rango del día, que es la menor")
+    assert r.pips < r.pips_rango_verdadero
+    # Y la principal no se mueve con el salto: es solo máximo menos mínimo.
+    sin_salto = atr_de_rangos("EURUSD=X", _velas(30), pip_tamano=Decimal("0.0001"),
+                              hoy=HOY)
+    assert r.valor == sin_salto.valor
+
+
+def test_las_dos_cifras_usan_el_MISMO_suavizado():
+    """Para que la comparación mida la diferencia entre las dos definiciones
+    de rango, no entre dos formas de promediar. Sin huecos coinciden."""
+    r = atr_de_rangos("EURUSD=X", _velas(30), pip_tamano=Decimal("0.0001"), hoy=HOY)
+    assert r.valor == r.valor_rango_verdadero
+    assert r.pips == r.pips_rango_verdadero
+
+
+def test_el_rango_verdadero_nunca_es_menor_que_el_del_dia():
+    """Toma el mayor de tres y uno de ellos ES el rango del día."""
+    r = atr_de_rangos("EURUSD=X", _velas_con_salto(), pip_tamano=Decimal("0.0001"),
+                      hoy=HOY)
+    assert r.valor_rango_verdadero > r.valor
 
 
 def test_sin_tamano_de_pip_las_dos_cifras_quedan_sin_pips():
     r = atr_de_rangos("USDBRL=X", _velas(30), pip_tamano=None, hoy=HOY)
-    assert r.valor is not None and r.valor_solo_dia is not None
-    assert r.pips is None and r.pips_solo_dia is None
+    assert r.valor is not None and r.valor_rango_verdadero is not None
+    assert r.pips is None and r.pips_rango_verdadero is None
+
+
+def test_el_stop_sugerido_usa_la_principal_y_no_el_rango_verdadero():
+    """Con el rango verdadero el stop saldría más ancho de lo pedido."""
+    r = atr_de_rangos("EURUSD=X", _velas_con_salto(), pip_tamano=Decimal("0.0001"),
+                      hoy=HOY)
+    precio, _pips = stop_sugerido(r, Decimal("1.5"))
+    assert precio == r.valor * Decimal("1.5")
+    assert precio < r.valor_rango_verdadero * Decimal("1.5")
+
+
+def test_el_aviso_de_stop_cerca_usa_la_principal():
+    """Una distancia entre las dos cifras: lejos según la principal, cerca
+    según el rango verdadero. Tiene que mandar la principal."""
+    r = atr_de_rangos("EURUSD=X", _velas_con_salto(), pip_tamano=Decimal("0.0001"),
+                      hoy=HOY)
+    distancia = (r.valor + r.valor_rango_verdadero) / 2
+    cerca, en_atr = stop_demasiado_cerca(Decimal("1.1000"),
+                                         Decimal("1.1000") - distancia, r)
+    assert cerca is False, "con la principal esa distancia supera 1 ATR"
+    assert en_atr == distancia / r.valor
 
 
 # ----------------------------------------------------- días sospechosos
@@ -401,7 +439,8 @@ def test_sin_pips_el_stop_sale_solo_en_precio():
 # ------------------------------------------- el stop de una posición abierta
 def test_avisa_si_el_stop_esta_a_menos_de_un_atr():
     """Dentro del movimiento normal de una rueda: lo más probable es que
-    salte por ruido y no porque la tesis se haya roto."""
+    salte por ruido y no porque la tesis se haya roto. Se mide contra la
+    cifra PRINCIPAL, la del rango del día."""
     r = atr_de_rangos("EURUSD=X", _velas(30), pip_tamano=Decimal("0.0001"), hoy=HOY)
     cerca, en_atr = stop_demasiado_cerca(Decimal("1.1000"), Decimal("1.0975"), r)
     assert cerca is True

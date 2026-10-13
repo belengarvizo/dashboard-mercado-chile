@@ -1,10 +1,37 @@
-"""ATR de Wilder (14) sobre el rango verdadero de cada rueda.
+"""ATR de Wilder (14) para dimensionar el stop.
+
+CUÁL ES LA CIFRA PRINCIPAL, Y POR QUÉ. La principal es el ATR del RANGO DEL
+DÍA (máximo menos mínimo). La del rango verdadero queda como secundaria.
+
+Se eligió así después de medir contra xStation el 12-10-2026, ATR(14)
+diario, penúltima vela:
+
+    par       xStation   rango del día   rango verdadero
+    EURUSD     53,4 pips   55,6  (-4%)     65,5  (+23%)
+    USDJPY     90,3 pips  100,0 (-10%)    117,9  (+31%)
+
+El rango del día SE PARECE MÁS. No se afirma que coincida: son dos pares en
+una fecha, y la diferencia que queda puede venir de que xStation incluya el
+lunes y de cómo promedia.
+
+Esto es consistente con lo que ya se había medido por otro lado: el término
+de hueco aporta entre 14% y 39% del ATR en los pares =X y solo 1,4% en el
+índice dólar, que es el único ticker del grupo que NO es una serie =X y el
+único sin cierres fuera de rango. Las divisas operan casi 24 horas, así que
+deberían tener huecos MÁS chicos que un instrumento que cierra y reabre: que
+pase lo contrario apunta a que parte de ese hueco es desfase de la fuente.
+
+Las dos cifras usan el mismo suavizado de Wilder, para que la comparación
+mida la diferencia entre las dos definiciones de rango y no entre dos formas
+de promediar.
+
 
 PARA QUÉ SIRVE Y PARA QUÉ NO. Esto dimensiona el stop: dice cuánto se mueve
 un par en una rueda típica, para no poner el stop dentro del ruido normal.
 NO es una señal: no dice si comprar o vender, ni cuándo.
 
-EL RANGO VERDADERO de una rueda es el mayor de tres distancias:
+EL RANGO VERDADERO de una rueda, que es la cifra SECUNDARIA, es el mayor de
+tres distancias:
 
     máximo - mínimo
     |máximo - cierre previo|
@@ -201,15 +228,20 @@ def atr_wilder(rangos, periodo: int = PERIODO_ATR):
 class ResultadoATR:
     """El ATR de un par y todo lo que hace falta para leerlo con criterio.
 
-    `valor` en unidades de precio; None cuando no se pudo calcular, y
-    entonces `motivo` dice por qué. `pips` es None cuando el catálogo no
-    tiene el tamaño del pip de ese par: no se inventa un divisor.
+    `valor` es el ATR del RANGO DEL DÍA, que es la cifra principal, en
+    unidades de precio; None cuando no se pudo calcular, y entonces `motivo`
+    dice por qué. `valor_rango_verdadero` es la secundaria.
+
+    `pips` es None cuando el catálogo no tiene el tamaño del pip de ese par:
+    no se inventa un divisor.
     """
     ticker: str
+    # PRINCIPAL: sobre el rango del día (máximo - mínimo).
     valor: Decimal = None
-    valor_solo_dia: Decimal = None      # el mismo suavizado, sobre máx-mín
     pips: Decimal = None
-    pips_solo_dia: Decimal = None
+    # SECUNDARIA: sobre el rango verdadero, con el mismo suavizado.
+    valor_rango_verdadero: Decimal = None
+    pips_rango_verdadero: Decimal = None
     sospechosos: int = 0
     porcentaje: Decimal = None
     ultima_fecha: date = None
@@ -289,12 +321,12 @@ def atr_de_rangos(ticker: str, filas, pip_tamano=None, hoy: date = None,
     maximos = [f["maximo"] for f in filas]
     minimos = [f["minimo"] for f in filas]
     cierres = [f["cierre"] for f in filas]
-    tr = rango_verdadero(maximos, minimos, cierres)
-    valor = atr_wilder(tr, periodo)
-    # La segunda cifra usa EL MISMO suavizado de Wilder, para que la
-    # comparación mida la diferencia entre las dos definiciones de rango y no
-    # entre dos formas de promediar.
-    valor_dia = atr_wilder(rango_del_dia(maximos, minimos), periodo)
+    # PRINCIPAL: el rango del día. SECUNDARIA: el rango verdadero. Las dos
+    # con el mismo suavizado de Wilder, para que la comparación mida la
+    # diferencia entre las dos definiciones de rango y no entre dos formas de
+    # promediar.
+    valor = atr_wilder(rango_del_dia(maximos, minimos), periodo)
+    valor_tr = atr_wilder(rango_verdadero(maximos, minimos, cierres), periodo)
     sospechosos = dias_sospechosos(maximos, minimos)
     if valor is None:
         return ResultadoATR(ticker, ultima_fecha=ultima, ruedas=len(filas),
@@ -305,14 +337,14 @@ def atr_de_rangos(ticker: str, filas, pip_tamano=None, hoy: date = None,
     pip = _d(pip_tamano)
     hay_pip = bool(pip and pip > 0)
     pips = valor / pip if hay_pip else None
-    pips_dia = valor_dia / pip if hay_pip and valor_dia is not None else None
+    pips_tr = valor_tr / pip if hay_pip and valor_tr is not None else None
     aviso = "" if pips is not None else AVISO_SIN_PIP
 
     ultimo_cierre = _d(filas[-1]["cierre"])
     porcentaje = (valor / ultimo_cierre * 100
                   if ultimo_cierre and ultimo_cierre > 0 else None)
 
-    return ResultadoATR(ticker, valor, valor_dia, pips, pips_dia, sospechosos,
+    return ResultadoATR(ticker, valor, pips, valor_tr, pips_tr, sospechosos,
                         porcentaje, ultima, len(filas),
                         aviso_pips=aviso, dias_sin_actualizar=dias,
                         ruedas_sin_actualizar=ruedas_atras, huecos=huecos)
@@ -320,7 +352,8 @@ def atr_de_rangos(ticker: str, filas, pip_tamano=None, hoy: date = None,
 
 # ------------------------------------------------------------ el stop
 def stop_sugerido(atr: ResultadoATR, multiplo=MULTIPLO_STOP_POR_DEFECTO):
-    """(stop_en_precio, stop_en_pips). None donde no se pueda.
+    """(stop_en_precio, stop_en_pips) sobre la cifra PRINCIPAL. None donde no
+    se pueda.
 
     Es una REFERENCIA de distancia, no un nivel: dice cuánto espacio dejarle
     al ruido normal del par, no dónde está el soporte.
@@ -336,7 +369,8 @@ def stop_sugerido(atr: ResultadoATR, multiplo=MULTIPLO_STOP_POR_DEFECTO):
 
 
 def stop_demasiado_cerca(precio_entrada, stop, atr: ResultadoATR):
-    """(esta_cerca, distancia_en_atr). None cuando falta algo.
+    """(esta_cerca, distancia_en_atr) sobre la cifra PRINCIPAL. None cuando
+    falta algo.
 
     Un stop a menos de 1 ATR de la entrada está dentro del movimiento normal
     de una rueda: lo más probable es que salte por ruido y no porque la

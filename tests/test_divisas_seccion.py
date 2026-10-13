@@ -204,14 +204,19 @@ def test_el_limite_por_operacion_no_bloquea_nada():
 
 def test_el_atr_aparece_en_el_calculador():
     """EURUSD tiene un ano de ruedas guardadas, asi que sale con numero."""
-    texto = _todo_el_texto(_correr())
+    at = _correr()
+    texto = _todo_el_texto(at)
     assert "ATR de Wilder (14)" in texto
-    assert "Solo rango del día" in texto or "solo rango del día" in texto
+    # La PRINCIPAL es la del rango del día; el rango verdadero va al lado.
+    etiquetas = {m.label for m in at.metric}
+    assert "ATR del rango del día (14)" in etiquetas, etiquetas
+    assert "Rango verdadero:" in texto, texto[-1500:]
     assert "último dato del par" in texto, texto[-1500:]
     assert "Stop sugerido" in texto
     # La nota que pidió la usuaria, con esas palabras.
     assert ("rango verdadero incluye saltos entre cierres" in texto
             and "desfase de datos de Yahoo" in texto)
+    assert "la cifra principal es la del rango del día" in texto
     # Es para dimensionar, no una señal.
     assert "No cambia el campo" in texto
 
@@ -250,7 +255,7 @@ def test_un_par_sin_pip_muestra_precio_y_porcentaje_pero_no_pips():
     assert "Sobre el precio" in texto, texto[-1500:]
     assert "En precio:" in texto
     valores = {m.label: m.value for m in at.metric}
-    principal = valores.get("ATR de Wilder (14)", "")
+    principal = valores.get("ATR del rango del día (14)", "")
     assert principal and "pips" not in principal, (
         f"mostró pips para un par sin tamaño de pip: {principal!r}")
 
@@ -270,7 +275,7 @@ def test_avisa_si_el_stop_de_una_posicion_abierta_esta_a_menos_de_un_ATR(monkeyp
     texto = _todo_el_texto(_correr())
     assert "Stop dentro del movimiento normal del par" in texto, texto[-1800:]
     assert "EURUSD" in texto
-    assert "ATR de la entrada" in texto
+    assert "ATR** (rango del día) de la entrada" in texto, texto[-1800:]
     # El de GBPUSD está lejos: no debe aparecer en ESE aviso.
     bloque = texto[texto.index("Stop dentro del movimiento normal"):]
     bloque = bloque[:bloque.index("||")] if "||" in bloque else bloque
