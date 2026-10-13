@@ -72,6 +72,19 @@ MINIMO_RUEDAS = PERIODO_ATR + 1
 
 MULTIPLO_STOP_POR_DEFECTO = Decimal("1.5")
 
+# Los dos cortes que separan un stop apretado de uno holgado, en ATR.
+# Bajo 1 ATR el stop cabe dentro del movimiento de una rueda cualquiera, así
+# que lo más probable es que salte por ruido. Sobre 1,5 queda fuera de ese
+# rango típico. En medio no hay respuesta única: depende de si el nivel que
+# se eligió tiene sentido en el gráfico.
+TRAMO_DENTRO_DEL_RUIDO = Decimal("1")
+TRAMO_FUERA_DEL_RUIDO = Decimal("1.5")
+
+COMPRA_DIR, VENTA_DIR = "compra", "venta"
+
+DENTRO, JUSTO, FUERA, SIN_ATR, ERROR = (
+    "dentro", "justo", "fuera", "sin_atr", "error")
+
 # Un día con rango mayor a este múltiplo de la MEDIANA del par se marca como
 # sospechoso. Mediana y no promedio: el promedio ya estaría contaminado por
 # los días que se quieren detectar.
@@ -450,3 +463,96 @@ def stop_demasiado_cerca(precio_entrada, stop, atr: ResultadoATR):
         return None, None
     en_atr = distancia / atr.valor
     return en_atr < 1, en_atr
+
+
+# ------------------------------------------- el stop contra el ruido del día
+@dataclass
+class TramoStop:
+    """Dónde cae el stop respecto del movimiento típico del par.
+
+    `tramo` es DENTRO, JUSTO, FUERA, SIN_ATR o ERROR. `ratio` es la distancia
+    al stop medida en ATR, y es None cuando no se pudo calcular.
+    """
+    tramo: str = SIN_ATR
+    ratio: Decimal = None
+    texto: str = ""
+    distancia: Decimal = None
+    stop_sugerido: Decimal = None
+
+    @property
+    def avisa(self) -> bool:
+        """Solo el tramo de abajo es un aviso; los otros son información."""
+        return self.tramo == DENTRO
+
+
+TEXTO_DENTRO = ("Stop dentro del ruido del día: es probable que te saque "
+                "antes de tiempo")
+TEXTO_JUSTO = ("Stop justo: está bien si queda detrás de un nivel del "
+               "gráfico")
+TEXTO_FUERA = "Stop fuera del ruido del día"
+TEXTO_SIN_ATR = "sin ATR disponible"
+
+
+def stop_sugerido_para(entrada, direccion: str, atr_valor,
+                       multiplo=MULTIPLO_STOP_POR_DEFECTO):
+    """El nivel de stop a `multiplo` ATR de la entrada, del lado que
+    corresponde: debajo en una compra, encima en una venta.
+
+    None si falta algo. Es una distancia de referencia, no un nivel del
+    gráfico: dice cuánto espacio dejarle al ruido, no dónde está el soporte.
+    """
+    e, a, m = _d(entrada), _d(atr_valor), _d(multiplo)
+    if e is None or a is None or m is None or a <= 0 or m <= 0 or e <= 0:
+        return None
+    if direccion == COMPRA_DIR:
+        return e - a * m
+    if direccion == VENTA_DIR:
+        return e + a * m
+    return None
+
+
+def tramo_del_stop(entrada, stop, atr_valor, direccion: str,
+                   multiplo=MULTIPLO_STOP_POR_DEFECTO) -> TramoStop:
+    """En qué tramo cae el stop: dentro del ruido, justo, o fuera.
+
+    ratio = |entrada - stop| / ATR.
+
+    NO BLOQUEA NADA: describe dónde quedó el stop y sugiere una distancia.
+    No dice si entrar ni en qué dirección.
+
+    Un stop del lado equivocado (debajo de la entrada en una venta, o encima
+    en una compra) no es un stop apretado: es un error, y se dice como tal en
+    vez de devolver un número que parecería válido.
+    """
+    e, st_, a = _d(entrada), _d(stop), _d(atr_valor)
+    sugerido = stop_sugerido_para(e, direccion, a, multiplo)
+
+    if a is None or a <= 0:
+        return TramoStop(SIN_ATR, texto=TEXTO_SIN_ATR)
+    if e is None or st_ is None or e <= 0 or st_ <= 0:
+        return TramoStop(SIN_ATR, texto=TEXTO_SIN_ATR, stop_sugerido=sugerido)
+
+    if direccion == COMPRA_DIR and st_ >= e:
+        return TramoStop(
+            ERROR, stop_sugerido=sugerido,
+            texto=(f"En una compra el stop va DEBAJO de la entrada, y "
+                   f"{st_:.5f} está por encima de {e:.5f}."))
+    if direccion == VENTA_DIR and st_ <= e:
+        return TramoStop(
+            ERROR, stop_sugerido=sugerido,
+            texto=(f"En una venta el stop va ENCIMA de la entrada, y "
+                   f"{st_:.5f} está por debajo de {e:.5f}."))
+
+    distancia = abs(e - st_)
+    if distancia <= 0:
+        return TramoStop(ERROR, stop_sugerido=sugerido,
+                         texto="El stop es igual al precio de entrada.")
+
+    ratio = distancia / a
+    if ratio < TRAMO_DENTRO_DEL_RUIDO:
+        tramo, texto = DENTRO, TEXTO_DENTRO
+    elif ratio < TRAMO_FUERA_DEL_RUIDO:
+        tramo, texto = JUSTO, TEXTO_JUSTO
+    else:
+        tramo, texto = FUERA, TEXTO_FUERA
+    return TramoStop(tramo, ratio, texto, distancia, sugerido)

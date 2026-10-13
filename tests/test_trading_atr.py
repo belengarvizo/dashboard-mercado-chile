@@ -544,3 +544,126 @@ def test_sin_los_datos_necesarios_no_se_afirma_nada():
 
 if __name__ == "__main__":
     print("Correr con pytest: python -m pytest tests/test_trading_atr.py")
+
+
+# ================== el stop contra el ruido del día (tramos)
+from trading_atr import (  # noqa: E402
+    DENTRO,
+    ERROR,
+    FUERA,
+    JUSTO,
+    SIN_ATR,
+    TEXTO_SIN_ATR,
+    stop_sugerido_para,
+    tramo_del_stop,
+)
+
+ATR_EURUSD = Decimal("0.0055")       # 55 pips, el real de hoy redondeado
+ENTRADA = Decimal("1.1200")
+
+
+def test_los_tres_tramos_en_una_compra():
+    """ratio = |entrada - stop| / ATR. Los cortes van en 1 y en 1,5."""
+    # 30 pips = 0,55 ATR -> dentro del ruido
+    dentro = tramo_del_stop(ENTRADA, Decimal("1.1170"), ATR_EURUSD, "compra")
+    assert dentro.tramo == DENTRO and dentro.avisa
+    assert float(dentro.ratio) == pytest.approx(0.5454, abs=0.001)
+    assert "dentro del ruido del día" in dentro.texto
+    assert "saque antes de tiempo" in dentro.texto
+
+    # 70 pips = 1,27 ATR -> justo
+    justo = tramo_del_stop(ENTRADA, Decimal("1.1130"), ATR_EURUSD, "compra")
+    assert justo.tramo == JUSTO and not justo.avisa
+    assert "detrás de un nivel del gráfico" in justo.texto
+
+    # 100 pips = 1,82 ATR -> fuera
+    fuera = tramo_del_stop(ENTRADA, Decimal("1.1100"), ATR_EURUSD, "compra")
+    assert fuera.tramo == FUERA and not fuera.avisa
+    assert fuera.texto == "Stop fuera del ruido del día"
+
+
+def test_los_cortes_son_estrictos_igual_que_el_resto_del_proyecto():
+    """Justo en 1 ATR ya NO es "dentro"; justo en 1,5 ya es "fuera"."""
+    en_uno = tramo_del_stop(ENTRADA, ENTRADA - ATR_EURUSD, ATR_EURUSD, "compra")
+    assert en_uno.tramo == JUSTO, f"ratio {en_uno.ratio}"
+
+    en_uno_y_medio = tramo_del_stop(
+        ENTRADA, ENTRADA - ATR_EURUSD * Decimal("1.5"), ATR_EURUSD, "compra")
+    assert en_uno_y_medio.tramo == FUERA
+
+
+def test_los_mismos_tramos_en_una_venta():
+    """En venta el stop va ARRIBA, y la distancia se mide igual."""
+    dentro = tramo_del_stop(ENTRADA, Decimal("1.1230"), ATR_EURUSD, "venta")
+    assert dentro.tramo == DENTRO
+    fuera = tramo_del_stop(ENTRADA, Decimal("1.1300"), ATR_EURUSD, "venta")
+    assert fuera.tramo == FUERA
+
+
+def test_el_stop_sugerido_va_del_lado_que_corresponde():
+    """Debajo en compra, encima en venta. Ponerlo al revés sería un stop que
+    se ejecuta al instante."""
+    compra = stop_sugerido_para(ENTRADA, "compra", ATR_EURUSD)
+    venta = stop_sugerido_para(ENTRADA, "venta", ATR_EURUSD)
+    assert compra < ENTRADA < venta
+    assert compra == ENTRADA - ATR_EURUSD * Decimal("1.5")
+    assert venta == ENTRADA + ATR_EURUSD * Decimal("1.5")
+    # y el sugerido cae justo en el borde de "fuera"
+    assert tramo_del_stop(ENTRADA, compra, ATR_EURUSD, "compra").tramo == FUERA
+
+
+def test_el_multiplo_del_stop_sugerido_es_configurable():
+    doble = stop_sugerido_para(ENTRADA, "compra", ATR_EURUSD, Decimal("2"))
+    assert doble == ENTRADA - ATR_EURUSD * 2
+
+
+def test_sin_atr_no_avisa_nada():
+    """Sin el dato no se opina: ni aviso ni número."""
+    for atr in (None, Decimal("0"), Decimal("-0.001"), float("nan")):
+        r = tramo_del_stop(ENTRADA, Decimal("1.1170"), atr, "compra")
+        assert r.tramo == SIN_ATR, atr
+        assert r.ratio is None
+        assert r.texto == TEXTO_SIN_ATR
+        assert not r.avisa
+        assert stop_sugerido_para(ENTRADA, "compra", atr) is None
+
+
+def test_un_atr_en_cero_no_divide_por_cero():
+    r = tramo_del_stop(ENTRADA, Decimal("1.1170"), Decimal("0"), "compra")
+    assert r.tramo == SIN_ATR and r.ratio is None
+
+
+def test_el_stop_del_lado_equivocado_es_un_error_y_lo_dice():
+    """No es un stop apretado: es un error. Devolver un ratio lo haría pasar
+    por válido."""
+    compra_al_reves = tramo_del_stop(ENTRADA, Decimal("1.1250"), ATR_EURUSD, "compra")
+    assert compra_al_reves.tramo == ERROR
+    assert "DEBAJO" in compra_al_reves.texto
+    assert compra_al_reves.ratio is None
+
+    venta_al_reves = tramo_del_stop(ENTRADA, Decimal("1.1150"), ATR_EURUSD, "venta")
+    assert venta_al_reves.tramo == ERROR
+    assert "ENCIMA" in venta_al_reves.texto
+
+    # aun así sugiere dónde ponerlo bien
+    assert compra_al_reves.stop_sugerido is not None
+
+
+def test_el_stop_igual_a_la_entrada_tambien_es_error():
+    r = tramo_del_stop(ENTRADA, ENTRADA, ATR_EURUSD, "compra")
+    assert r.tramo == ERROR
+
+
+def test_sin_entrada_o_sin_stop_no_se_opina():
+    assert tramo_del_stop(None, Decimal("1.11"), ATR_EURUSD, "compra").tramo == SIN_ATR
+    assert tramo_del_stop(ENTRADA, None, ATR_EURUSD, "compra").tramo == SIN_ATR
+    assert tramo_del_stop(Decimal("0"), Decimal("1.11"), ATR_EURUSD, "compra").tramo == SIN_ATR
+
+
+def test_una_direccion_desconocida_no_sugiere_un_lado_al_azar():
+    assert stop_sugerido_para(ENTRADA, "lo que sea", ATR_EURUSD) is None
+
+
+def test_guarda_la_distancia_para_poder_mostrarla():
+    r = tramo_del_stop(ENTRADA, Decimal("1.1170"), ATR_EURUSD, "compra")
+    assert float(r.distancia) == pytest.approx(0.0030, abs=1e-9)

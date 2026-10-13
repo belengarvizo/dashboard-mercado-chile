@@ -63,7 +63,10 @@ from market_data import (
 from calendario_economico import proximos_eventos, cobertura_por_tipo, INDICADOR_POR_TIPO, CALENDARIO_VERIFICADO_AL
 from catalogo_instrumentos import TICKERS_YAHOO_FASE_1
 from trading_atr import (
+    DENTRO,
+    ERROR as ATR_ERROR,
     FACTOR_DIA_SOSPECHOSO,
+    SIN_ATR,
     UMBRAL_INFLACION_MATERIAL,
     UMBRAL_INFLACION_PERCEPTIBLE,
     MULTIPLO_STOP_POR_DEFECTO,
@@ -72,6 +75,8 @@ from trading_atr import (
     atr_de_rangos,
     stop_demasiado_cerca,
     stop_sugerido,
+    stop_sugerido_para,
+    tramo_del_stop,
 )
 from trading_correlacion import (
     MINIMO_OBSERVACIONES,
@@ -4016,7 +4021,7 @@ COLUMNAS_DIARIO = (
     "precio_entrada, precio_salida, stop, objetivo, lotes, margen_clp, riesgo_clp, "
     "resultado_clp, duracion_segundos, catalizador, condicion_invalidacion, tesis, "
     "notas, conviccion, tendencia_diario, evento_dia, calidad_decision, nota_post, "
-    "evento_plan_id, eliminado_en, editado_en"
+    "evento_plan_id, eliminado_en, editado_en, atr_al_guardar"
 )
 
 
@@ -4593,6 +4598,70 @@ def _trd_bloque_atr(atr, instrumento, riesgo_clp, pip_guardado, cotizaciones,
     st.markdown(" ".join(partes))
 
 
+def _trd_aviso_stop_ruido(instrumento, direccion, entrada, stop, atr,
+                          clave: str) -> None:
+    """Dónde cae el stop respecto del movimiento típico del par.
+
+    VA FUERA DEL st.form a propósito: dentro de un formulario Streamlit no
+    re-ejecuta hasta enviar, así que el aviso no se actualizaría mientras se
+    escribe. Acá cambia en vivo con cada tecla.
+
+    AVISA Y SUGIERE, NO BLOQUEA ni dice si entrar: solo mide cuánto espacio
+    le estás dejando al ruido normal del par.
+    """
+    if not atr.hay_atr:
+        st.caption(
+            f"**{instrumento}: sin ATR disponible.** No se puede decir si el "
+            f"stop queda dentro o fuera del ruido del día."
+        )
+        return
+
+    resultado = tramo_del_stop(entrada, stop, atr.valor, direccion)
+
+    if resultado.tramo == ATR_ERROR:
+        st.error(f"**Revisa el stop.** {resultado.texto}")
+    elif resultado.tramo == SIN_ATR:
+        st.caption("Escribe la entrada y el stop para ver si queda dentro del "
+                   "ruido del día.")
+    else:
+        en_pips = ""
+        if atr.pips is not None and resultado.distancia is not None:
+            pips = resultado.distancia / (atr.valor / atr.pips)
+            en_pips = f" · {pips:,.0f} pips"
+        detalle = (f"**{resultado.texto}.** El stop está a "
+                   f"**{resultado.ratio:.2f} ATR** de la entrada{en_pips}, con un "
+                   f"ATR de {atr.pips:,.1f} pips."
+                   if atr.pips is not None else
+                   f"**{resultado.texto}.** El stop está a "
+                   f"**{resultado.ratio:.2f} ATR** de la entrada.")
+        if resultado.tramo == DENTRO:
+            st.warning(detalle)
+        else:
+            st.caption(detalle)
+
+    # El stop sugerido se muestra SIEMPRE que haya ATR y entrada, aunque el
+    # stop escrito esté mal: es justamente cuando más sirve.
+    sugerido = resultado.stop_sugerido or stop_sugerido_para(
+        entrada, direccion, atr.valor)
+    if sugerido is None:
+        return
+    col_txt, col_btn = st.columns([4, 1])
+    col_txt.markdown(
+        f"Stop sugerido a 1,5 × ATR: **{sugerido:.5f}** "
+        f"({'debajo' if direccion == 'compra' else 'encima'} de la entrada). "
+        f"Es una distancia de referencia, no un nivel del gráfico."
+    )
+    # El valor se escribe en un CALLBACK, no en el cuerpo: Streamlit no deja
+    # modificar la clave de un widget después de haberlo creado, y el campo
+    # del stop ya existe cuando se llega hasta acá. El callback corre antes
+    # de la re-ejecución, cuando el widget todavía no se instanció.
+    def _usar_sugerido(destino=clave, valor=float(round(sugerido, 5))):
+        st.session_state[destino] = valor
+
+    col_btn.button("Usar stop sugerido", key=f"trd_usar_stop_{clave}",
+                   on_click=_usar_sugerido)
+
+
 def _trd_ejecutar_por_id(sentencia, parametros, exito: str) -> bool:
     """Corre una sentencia que debe afectar EXACTAMENTE una fila.
 
@@ -4744,6 +4813,19 @@ def _trd_formulario_editar(fila, catalogo, cotizaciones, hoy) -> None:
                                           key=f"trd_ed_resultado_{id_op}")
         e_notas = st.text_area("Notas", value=fila.get("notas") or "",
                                key=f"trd_ed_notas_{id_op}")
+        # El ATR guardado es el del DÍA en que se registró. Por defecto se
+        # respeta: recalcularlo con el de hoy borraría el dato que sirve para
+        # saber después si el stop estaba apretado en ese momento.
+        atr_viejo = fila.get("atr_al_guardar")
+        tiene_atr = atr_viejo is not None and pd.notna(atr_viejo)
+        e_recalcular = st.checkbox(
+            f"Recalcular el ATR guardado "
+            + (f"(ahora hay {float(atr_viejo):.6f})" if tiene_atr
+               else "(esta operación no tiene ATR guardado)"),
+            key=f"trd_ed_recalc_{id_op}",
+            help="Por defecto se mantiene el ATR del día en que registraste la "
+                 "operación. Marca esto solo si ese valor estaba mal: el ATR "
+                 "de hoy no es el que tenías entonces.")
         st.caption(
             "Si cambias el instrumento, los lotes NO se reajustan solos: "
             "dentro de un formulario Streamlit no re-ejecuta hasta enviar. El "
@@ -4774,6 +4856,15 @@ def _trd_formulario_editar(fila, catalogo, cotizaciones, hoy) -> None:
                     if comparacion.cuadra is False:
                         aviso = comparacion.texto
 
+        atr_campo = None
+        if e_recalcular:
+            fila_e = catalogo[catalogo["nombre_xtb"] == e_inst]
+            if not fila_e.empty:
+                atr_e = _trd_atr(fila_e.iloc[0]["ticker_yahoo"],
+                                 cargar_rangos_fx(hoy),
+                                 fila_e.iloc[0]["pip_tamano"], hoy)
+                atr_campo = atr_e.valor if atr_e.hay_atr else None
+
         campos = {
             "id": id_op, "inst": e_inst, "dir": e_dir,
             "lo": Decimal(str(e_lotes)),
@@ -4789,6 +4880,9 @@ def _trd_formulario_editar(fila, catalogo, cotizaciones, hoy) -> None:
             "lotes = :lo, precio_entrada = :pe, stop = :st, margen_clp = :ma, "
             "riesgo_clp = :ri, notas = :no, editado_en = :ahora "
         )
+        if e_recalcular:
+            sentencia += ", atr_al_guardar = :atr "
+            campos["atr"] = atr_campo
         if cerrada:
             sentencia += ", precio_salida = :ps, resultado_clp = :re "
             campos["ps"] = Decimal(str(e_salida)) if e_salida else None
@@ -5479,6 +5573,31 @@ def render_divisas():
                 f"{chequeo_guardado.nota}"
             )
 
+    # --- El aviso del stop va ACÁ, fuera del formulario, para que se
+    # actualice mientras se escribe. Los campos de entrada y stop viven
+    # dentro del form, así que el aviso usa sus propias casillas y el
+    # formulario las lee al guardar.
+    with st.expander("¿El stop queda fuera del ruido?", expanded=True):
+        v1, v2, v3, v4 = st.columns(4)
+        v_inst = v1.selectbox("Par", nombres_fx,
+                              index=nombres_fx.index(instrumento)
+                              if instrumento in nombres_fx else 0,
+                              key="trd_ruido_par")
+        v_dir = v2.selectbox("Dirección", ["compra", "venta"], key="trd_ruido_dir")
+        v_entrada = v3.number_input("Entrada", 0.0, step=0.00001, format="%.5f",
+                                    key="trd_ruido_entrada")
+        v_stop = v4.number_input("Stop", 0.0, step=0.00001, format="%.5f",
+                                 key="trd_ruido_stop")
+        fila_r = solo_fx[solo_fx["nombre_xtb"] == v_inst]
+        atr_ruido = _trd_atr(
+            fila_r.iloc[0]["ticker_yahoo"] if not fila_r.empty else None,
+            rangos_fx,
+            fila_r.iloc[0]["pip_tamano"] if not fila_r.empty else None, hoy)
+        _trd_aviso_stop_ruido(v_inst, v_dir,
+                              Decimal(str(v_entrada)) if v_entrada > 0 else None,
+                              Decimal(str(v_stop)) if v_stop > 0 else None,
+                              atr_ruido, "trd_ruido_stop")
+
     with st.expander("Registrar una operación", expanded=operaciones.empty):
         nombres_todos = sorted(catalogo["nombre_xtb"].tolist())
         # El botón va FUERA del st.form: Streamlit solo admite submit buttons
@@ -5592,6 +5711,12 @@ def render_divisas():
                 riesgo_guardado = Decimal(str(d_riesgo)) if d_riesgo > 0 else None
                 detalle_riesgo = []
                 aviso_lotes = None
+                fila_atr = catalogo[catalogo["nombre_xtb"] == d_inst]
+                atr_al_guardar = None
+                if not fila_atr.empty:
+                    atr_op = _trd_atr(fila_atr.iloc[0]["ticker_yahoo"], rangos_fx,
+                                      fila_atr.iloc[0]["pip_tamano"], hoy)
+                    atr_al_guardar = atr_op.valor if atr_op.hay_atr else None
                 if riesgo_guardado is not None and d_stop > 0 and d_entrada > 0:
                     # El riesgo escrito se guarda tal cual, así que si no
                     # concuerda con los lotes el panel de riesgo suma un
@@ -5653,9 +5778,10 @@ def render_divisas():
                                 "direccion, fecha_apertura, fecha_cierre, precio_entrada, "
                                 "precio_salida, stop, objetivo, lotes, margen_clp, riesgo_clp, "
                                 "resultado_clp, catalizador, condicion_invalidacion, tesis, notas, "
-                                "conviccion, tendencia_diario, evento_dia, evento_plan_id) "
+                                "conviccion, tendencia_diario, evento_dia, evento_plan_id, "
+                                "atr_al_guardar) "
                                 "VALUES (:i,:c,:d,:fa,:fc,:pe,:ps,:st,:ob,:lo,:ma,:ri,:re,:ca,:iv,:te,:no,"
-                                ":cv,:td,:ev,:pl)"
+                                ":cv,:td,:ev,:pl,:atr)"
                             ), {
                                 "i": d_inst, "c": categoria, "d": d_dir,
                                 "fa": apertura, "fc": cierre, "pe": d_entrada,
@@ -5668,6 +5794,11 @@ def render_divisas():
                                 "cv": conviccion_guardar, "td": tendencia_guardar,
                                 "ev": None if d_evento == "ninguno" else d_evento,
                                 "pl": plan_ligado,
+                                # El ATR del par EN ESTE MOMENTO. Se guarda
+                                # porque el de mañana ya será otro, y sin él
+                                # no se puede saber después qué parte de las
+                                # operaciones tuvo el stop apretado.
+                                "atr": atr_al_guardar,
                             })
                         _trd_invalidar()
                         # El st.rerun() de más abajo borra cualquier cosa que

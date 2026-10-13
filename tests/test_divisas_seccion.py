@@ -606,6 +606,115 @@ def test_la_comprobacion_de_lotes_no_bloquea_el_guardado():
             f"la comprobación de lotes contiene {prohibido!r}: avisa, no impide")
 
 
+# ============================== el aviso de stop dentro del ruido
+def _ruido(at, entrada, stop, direccion="compra"):
+    """Escribe entrada y stop en el bloque del ruido y devuelve el texto."""
+    at.selectbox(key="trd_ruido_dir").set_value(direccion)
+    at.number_input(key="trd_ruido_entrada").set_value(entrada)
+    at.number_input(key="trd_ruido_stop").set_value(stop).run(timeout=420)
+    assert not at.exception, at.exception
+    return _todo_el_texto(at)
+
+
+def test_el_aviso_del_stop_esta_fuera_del_formulario():
+    """Dentro de un st.form no se actualizaría hasta enviar, que es justo
+    cuando ya no sirve."""
+    at = _correr()
+    claves = {w.key for w in list(at.number_input) + list(at.selectbox)}
+    for clave in ("trd_ruido_par", "trd_ruido_dir", "trd_ruido_entrada",
+                  "trd_ruido_stop"):
+        assert clave in claves, claves
+    # Ninguno de esos widgets pertenece a un formulario.
+    for w in at.number_input:
+        if w.key in ("trd_ruido_entrada", "trd_ruido_stop"):
+            assert w.form_id == "", f"{w.key} quedó dentro de un formulario"
+
+
+def test_stop_dentro_del_ruido_avisa():
+    """EURUSD tiene un ATR de ~55 pips: 30 pips son 0,55 ATR."""
+    at = _correr()
+    texto = _ruido(at, 1.1200, 1.1170)
+    assert "dentro del ruido del día" in texto, texto[-900:]
+    assert "saque antes de tiempo" in texto
+    avisos = " || ".join(str(w.value) for w in at.warning)
+    assert "dentro del ruido" in avisos, "debería ir en amarillo"
+
+
+def test_stop_justo_no_va_en_amarillo():
+    at = _correr()
+    texto = _ruido(at, 1.1200, 1.1130)
+    assert "Stop justo" in texto, texto[-900:]
+    assert "detrás de un nivel del gráfico" in texto
+    avisos = " || ".join(str(w.value) for w in at.warning)
+    assert "Stop justo" not in avisos, "esto es información, no un aviso"
+
+
+def test_stop_fuera_del_ruido():
+    at = _correr()
+    texto = _ruido(at, 1.1200, 1.1050)
+    assert "Stop fuera del ruido del día" in texto, texto[-900:]
+
+
+def test_el_stop_del_lado_equivocado_muestra_un_error_claro():
+    at = _correr()
+    texto = _ruido(at, 1.1200, 1.1250, direccion="compra")
+    assert "Revisa el stop" in texto, texto[-900:]
+    assert "DEBAJO" in texto
+    errores = " || ".join(str(e.value) for e in at.error)
+    assert "Revisa el stop" in errores
+
+
+def test_el_boton_usa_el_stop_sugerido_y_lo_carga_en_el_campo():
+    at = _correr()
+    _ruido(at, 1.1200, 1.1170)
+    texto = _todo_el_texto(at)
+    assert "Stop sugerido a 1,5 × ATR" in texto, texto[-900:]
+    boton = [b for b in at.button if "Usar stop sugerido" in str(b.label)]
+    assert boton, [str(b.label) for b in at.button]
+    boton[0].click().run(timeout=420)
+    assert not at.exception, at.exception
+    cargado = at.number_input(key="trd_ruido_stop").value
+    assert cargado < 1.1200, f"en una compra el sugerido va debajo: {cargado}"
+    # y ahora el stop ya no está dentro del ruido
+    assert "dentro del ruido" not in _todo_el_texto(at)
+
+
+def test_un_par_sin_atr_lo_dice_y_no_opina():
+    at = _correr()
+    at.selectbox(key="trd_ruido_par").set_value("EURCZK").run(timeout=420)
+    assert not at.exception, at.exception
+    texto = _todo_el_texto(at)
+    assert "sin ATR disponible" in texto, texto[-900:]
+    assert "dentro del ruido" not in texto
+
+
+def test_el_aviso_del_stop_no_bloquea_ni_da_senales():
+    with open(DASHBOARD_PATH, encoding="utf-8") as f:
+        codigo = f.read()
+    inicio = codigo.index("def _trd_aviso_stop_ruido(")
+    bloque = codigo[inicio:codigo.index("\ndef ", inicio + 10)]
+    for prohibido in ("st.stop()", "raise ", "return False", "disabled=True"):
+        assert prohibido not in bloque, f"el aviso contiene {prohibido!r}"
+    assert "ni dice si entrar" in bloque
+    for recomendacion in ("deberías comprar", "deberías vender",
+                          "señal de compra", "señal de venta"):
+        assert recomendacion not in bloque.lower()
+
+
+def test_el_atr_se_guarda_con_la_operacion():
+    """Sin guardarlo no se puede saber después si el stop estaba apretado:
+    el ATR de mañana ya es otro."""
+    with open(DASHBOARD_PATH, encoding="utf-8") as f:
+        codigo = f.read()
+    assert "atr_al_guardar" in codigo
+    assert '":atr)"' in codigo or ":atr)" in codigo
+    # y editar puede recalcularlo, pero por defecto respeta el guardado
+    inicio = codigo.index("def _trd_formulario_editar(")
+    bloque = codigo[inicio:codigo.index("\ndef ", inicio + 10)]
+    assert "Recalcular el ATR guardado" in bloque
+    assert "if e_recalcular:" in bloque
+
+
 # ===================================== editar, eliminar y papelera
 def _con_diario(monkeypatch, con_papelera=False, **estado):
     import pandas as pd
