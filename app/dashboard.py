@@ -4008,14 +4008,39 @@ def cargar_catalogo_trading(version: int = 0) -> pd.DataFrame:
     )
 
 
+# Las columnas del diario, en un solo lugar: las usan el listado normal y la
+# papelera, y tenerlas repetidas ya hizo que una consulta se quedara sin un
+# campo que la otra sí traía.
+COLUMNAS_DIARIO = (
+    "id, instrumento, categoria, direccion, fecha_apertura, fecha_cierre, "
+    "precio_entrada, precio_salida, stop, objetivo, lotes, margen_clp, riesgo_clp, "
+    "resultado_clp, duracion_segundos, catalizador, condicion_invalidacion, tesis, "
+    "notas, conviccion, tendencia_diario, evento_dia, calidad_decision, nota_post, "
+    "evento_plan_id, eliminado_en, editado_en"
+)
+
+
 @st.cache_data(ttl=60, show_spinner=False)
 def cargar_operaciones_trading(version: int = 0) -> pd.DataFrame:
+    """El diario SIN las eliminadas.
+
+    El filtro va en el SQL y no en pandas a propósito: así ninguna vista
+    puede olvidarse de aplicarlo. Las eliminadas se piden aparte, con
+    cargar_eliminadas_trading, y solo las usa la papelera.
+    """
     return pd.read_sql(
-        "SELECT id, instrumento, categoria, direccion, fecha_apertura, fecha_cierre, "
-        "precio_entrada, precio_salida, stop, objetivo, lotes, margen_clp, riesgo_clp, "
-        "resultado_clp, duracion_segundos, catalizador, condicion_invalidacion, tesis, notas, "
-        "conviccion, tendencia_diario, evento_dia, calidad_decision, nota_post, evento_plan_id "
-        "FROM trading_operaciones ORDER BY fecha_apertura DESC",
+        f"SELECT {COLUMNAS_DIARIO} FROM trading_operaciones "
+        f"WHERE eliminado_en IS NULL ORDER BY fecha_apertura DESC",
+        engine,
+    )
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def cargar_eliminadas_trading(version: int = 0) -> pd.DataFrame:
+    """Solo las que están en la papelera. No entra en ninguna métrica."""
+    return pd.read_sql(
+        f"SELECT {COLUMNAS_DIARIO} FROM trading_operaciones "
+        f"WHERE eliminado_en IS NOT NULL ORDER BY eliminado_en DESC",
         engine,
     )
 
@@ -4566,6 +4591,242 @@ def _trd_bloque_atr(atr, instrumento, riesgo_clp, pip_guardado, cotizaciones,
         "escribas tú. Esto es solo para dimensionar.*"
     )
     st.markdown(" ".join(partes))
+
+
+def _trd_ejecutar_por_id(sentencia, parametros, exito: str) -> bool:
+    """Corre una sentencia que debe afectar EXACTAMENTE una fila.
+
+    Si afecta cero o más de una, revierte y avisa. Una operación de edición o
+    de borrado que toca un número de filas distinto del esperado es un error
+    del que hay que enterarse, no algo que se deja pasar: con cero, la pantalla
+    diría que guardó algo que no guardó.
+
+    Siempre por id y con parámetros, nunca con el SQL armado a mano.
+    """
+    try:
+        with engine.begin() as conn:
+            filas = conn.execute(text(sentencia), parametros).rowcount
+            if filas != 1:
+                # El rollback lo hace el context manager al salir por excepción.
+                raise RuntimeError(
+                    f"la sentencia afectó {filas} filas y debía afectar 1")
+    except Exception as e:
+        st.error(f"**No se pudo completar.** {e}. No se cambió nada.")
+        return False
+    _trd_invalidar()
+    st.success(exito)
+    return True
+
+
+def _trd_resumen_operacion(fila) -> str:
+    """Una línea con lo que identifica a la operación, para confirmar."""
+    def _n(v, formato="{:,.5f}"):
+        return "—" if v is None or pd.isna(v) else formato.format(float(v))
+    return (f"**#{int(fila['id'])} · {fila['instrumento']} · {fila['direccion']}** · "
+            f"entrada {_n(fila['precio_entrada'])} · stop {_n(fila['stop'])} · "
+            f"{_n(fila['lotes'], '{:,.2f}')} lotes · "
+            f"riesgo {_n(fila['riesgo_clp'], '{:,.0f}')} CLP")
+
+
+def _trd_eliminar_y_editar(operaciones, catalogo, cotizaciones, hoy) -> None:
+    """Botones de Editar y Eliminar por fila, con confirmación para eliminar.
+
+    ELIMINAR NO BORRA: marca eliminado_en. La fila deja de aparecer en el
+    listado, en las métricas y en el riesgo abierto, pero sigue en la base y
+    se puede restaurar desde la papelera.
+    """
+    if operaciones.empty:
+        return
+    st.markdown("##### Corregir o eliminar")
+    st.caption(
+        "Eliminar manda la operación a la papelera: deja de contar en todo, "
+        "pero no se borra y se puede restaurar. Editar corrige los valores."
+    )
+
+    pendiente = st.session_state.get("trd_confirmar_eliminar")
+    for _, fila in operaciones.iterrows():
+        id_op = int(fila["id"])
+        col_txt, col_ed, col_el = st.columns([6, 1, 1])
+        marca_edicion = ""
+        if fila.get("editado_en") is not None and pd.notna(fila.get("editado_en")):
+            marca_edicion = f" · editada {_trd_a_chile(fila['editado_en']):%d-%m %H:%M}"
+        col_txt.markdown(_trd_resumen_operacion(fila) + marca_edicion)
+        if col_ed.button("Editar", key=f"trd_editar_{id_op}"):
+            st.session_state["trd_editando"] = id_op
+            st.session_state.pop("trd_confirmar_eliminar", None)
+            st.rerun()
+        if col_el.button("Eliminar", key=f"trd_eliminar_{id_op}"):
+            st.session_state["trd_confirmar_eliminar"] = id_op
+            st.session_state.pop("trd_editando", None)
+            st.rerun()
+
+    # ------------------------------------------- la segunda confirmación
+    if pendiente is not None:
+        fila = operaciones[operaciones["id"] == pendiente]
+        if fila.empty:
+            st.session_state.pop("trd_confirmar_eliminar", None)
+        else:
+            f = fila.iloc[0]
+            st.warning(
+                f"**¿Eliminar esta operación?**\n\n{_trd_resumen_operacion(f)}\n\n"
+                f"Va a la papelera: deja de contar en el listado, en las "
+                f"métricas y en el riesgo abierto. No se borra de la base y "
+                f"puedes restaurarla."
+            )
+            c_si, c_no = st.columns(2)
+            if c_si.button("Sí, eliminar", key="trd_eliminar_confirmar"):
+                if _trd_ejecutar_por_id(
+                        "UPDATE trading_operaciones SET eliminado_en = :ahora "
+                        "WHERE id = :id AND eliminado_en IS NULL",
+                        {"ahora": _trd_ahora_chile(), "id": int(pendiente)},
+                        f"Operación #{int(pendiente)} enviada a la papelera."):
+                    st.session_state.pop("trd_confirmar_eliminar", None)
+                    st.rerun()
+            if c_no.button("No, cancelar", key="trd_eliminar_cancelar"):
+                st.session_state.pop("trd_confirmar_eliminar", None)
+                st.rerun()
+
+    # ------------------------------------------------- el formulario de editar
+    editando = st.session_state.get("trd_editando")
+    if editando is not None:
+        fila = operaciones[operaciones["id"] == editando]
+        if fila.empty:
+            st.session_state.pop("trd_editando", None)
+        else:
+            _trd_formulario_editar(fila.iloc[0], catalogo, cotizaciones, hoy)
+
+
+def _trd_formulario_editar(fila, catalogo, cotizaciones, hoy) -> None:
+    """Formulario precargado con los valores actuales de la operación."""
+    id_op = int(fila["id"])
+    nombres = sorted(catalogo["nombre_xtb"].tolist())
+
+    def _f(col, por_defecto=0.0):
+        v = fila.get(col)
+        return por_defecto if v is None or pd.isna(v) else float(v)
+
+    st.markdown(f"##### Editando la operación #{id_op}")
+    with st.form(f"trd_form_editar_{id_op}"):
+        e1, e2, e3 = st.columns(3)
+        e_inst = e1.selectbox(
+            "Instrumento", nombres,
+            index=nombres.index(fila["instrumento"]) if fila["instrumento"] in nombres else 0,
+            key=f"trd_ed_inst_{id_op}")
+        e_dir = e2.selectbox(
+            "Dirección", ["compra", "venta"],
+            index=0 if fila["direccion"] == "compra" else 1,
+            key=f"trd_ed_dir_{id_op}")
+        e_lotes = e3.number_input("Lotes", 0.01, 1000.0, _f("lotes", 0.01), 0.01,
+                                  key=f"trd_ed_lotes_{id_op}")
+
+        g1, g2, g3, g4 = st.columns(4)
+        e_entrada = g1.number_input("Precio de entrada", 0.0, step=0.00001,
+                                    format="%.5f", value=_f("precio_entrada"),
+                                    key=f"trd_ed_entrada_{id_op}")
+        e_stop = g2.number_input("Stop", 0.0, step=0.00001, format="%.5f",
+                                 value=_f("stop"), key=f"trd_ed_stop_{id_op}")
+        e_margen = g3.number_input("Margen usado (CLP)", 0.0, step=1000.0,
+                                   value=_f("margen_clp"), key=f"trd_ed_margen_{id_op}")
+        e_riesgo = g4.number_input("Riesgo si salta el stop (CLP)", 0.0, step=1000.0,
+                                   value=_f("riesgo_clp"), key=f"trd_ed_riesgo_{id_op}")
+
+        cerrada = fila.get("fecha_cierre") is not None and pd.notna(fila.get("fecha_cierre"))
+        e_salida = e_resultado = None
+        if cerrada:
+            st.caption("Esta operación está cerrada: también puedes corregir el "
+                       "cierre. Para cerrar una abierta, usa el flujo de cierre.")
+            h1, h2 = st.columns(2)
+            e_salida = h1.number_input("Precio de salida", 0.0, step=0.00001,
+                                       format="%.5f", value=_f("precio_salida"),
+                                       key=f"trd_ed_salida_{id_op}")
+            e_resultado = h2.number_input("Resultado (CLP)", step=1000.0,
+                                          value=_f("resultado_clp"),
+                                          key=f"trd_ed_resultado_{id_op}")
+        e_notas = st.text_area("Notas", value=fila.get("notas") or "",
+                               key=f"trd_ed_notas_{id_op}")
+        st.caption(
+            "Si cambias el instrumento, los lotes NO se reajustan solos: "
+            "dentro de un formulario Streamlit no re-ejecuta hasta enviar. El "
+            "aviso de abajo compara el riesgo con los lotes y lo cubre."
+        )
+
+        guardar = st.form_submit_button("Guardar cambios")
+        cancelar = st.form_submit_button("Cancelar")
+
+    if cancelar:
+        st.session_state.pop("trd_editando", None)
+        st.rerun()
+
+    if guardar:
+        # Mismo aviso no bloqueante que al crear.
+        aviso = None
+        if e_riesgo > 0 and e_stop > 0 and e_entrada > 0:
+            fila_v = catalogo[catalogo["nombre_xtb"] == e_inst]
+            pip_v = fila_v.iloc[0]["pip_tamano"] if not fila_v.empty else None
+            if pip_v is not None and pd.notna(pip_v) and float(pip_v) > 0:
+                pip_val = valor_pip_clp(e_inst, 1, pip_v, cotizaciones, hoy)
+                if pip_val.valor is not None:
+                    comparacion = riesgo_contra_lotes(
+                        Decimal(str(e_riesgo)), e_lotes,
+                        abs(Decimal(str(e_entrada)) - Decimal(str(e_stop)))
+                        / Decimal(str(pip_v)),
+                        pip_val.valor)
+                    if comparacion.cuadra is False:
+                        aviso = comparacion.texto
+
+        campos = {
+            "id": id_op, "inst": e_inst, "dir": e_dir,
+            "lo": Decimal(str(e_lotes)),
+            "pe": Decimal(str(e_entrada)) if e_entrada > 0 else None,
+            "st": Decimal(str(e_stop)) if e_stop > 0 else None,
+            "ma": Decimal(str(e_margen)) if e_margen > 0 else None,
+            "ri": Decimal(str(e_riesgo)) if e_riesgo > 0 else None,
+            "no": e_notas or None,
+            "ahora": _trd_ahora_chile(),
+        }
+        sentencia = (
+            "UPDATE trading_operaciones SET instrumento = :inst, direccion = :dir, "
+            "lotes = :lo, precio_entrada = :pe, stop = :st, margen_clp = :ma, "
+            "riesgo_clp = :ri, notas = :no, editado_en = :ahora "
+        )
+        if cerrada:
+            sentencia += ", precio_salida = :ps, resultado_clp = :re "
+            campos["ps"] = Decimal(str(e_salida)) if e_salida else None
+            campos["re"] = Decimal(str(e_resultado)) if e_resultado else None
+        sentencia += "WHERE id = :id AND eliminado_en IS NULL"
+
+        if _trd_ejecutar_por_id(sentencia, campos,
+                                f"Operación #{id_op} actualizada."):
+            if aviso:
+                st.session_state["trd_aviso_lotes"] = aviso
+            st.session_state.pop("trd_editando", None)
+            st.rerun()
+
+
+def _trd_papelera(version) -> None:
+    """Las operaciones eliminadas, con botón para restaurar."""
+    eliminadas = cargar_eliminadas_trading(version)
+    if eliminadas.empty:
+        return
+    with st.expander(f"Papelera ({len(eliminadas)})", expanded=False):
+        st.caption(
+            "Estas operaciones no cuentan en el listado, en las estadísticas "
+            "ni en el riesgo abierto. Siguen guardadas: restaurarlas las "
+            "devuelve a todo."
+        )
+        for _, fila in eliminadas.iterrows():
+            id_op = int(fila["id"])
+            c_txt, c_btn = st.columns([6, 1])
+            cuando = (f" · eliminada {_trd_a_chile(fila['eliminado_en']):%d-%m %H:%M}"
+                      if pd.notna(fila["eliminado_en"]) else "")
+            c_txt.markdown(_trd_resumen_operacion(fila) + cuando)
+            if c_btn.button("Restaurar", key=f"trd_restaurar_{id_op}"):
+                if _trd_ejecutar_por_id(
+                        "UPDATE trading_operaciones SET eliminado_en = NULL "
+                        "WHERE id = :id AND eliminado_en IS NOT NULL",
+                        {"id": id_op},
+                        f"Operación #{id_op} restaurada."):
+                    st.rerun()
 
 
 def _trd_tabla_atr(catalogo, rangos, hoy) -> None:
@@ -5424,6 +5685,9 @@ def render_divisas():
                         st.rerun()
                     except Exception as e:
                         st.error(f"No se pudo guardar: {e}")
+
+    _trd_eliminar_y_editar(operaciones, catalogo, cotizaciones, hoy)
+    _trd_papelera(version)
 
     abiertas_lista = (operaciones[operaciones["fecha_cierre"].isna()]
                       if not operaciones.empty else pd.DataFrame())

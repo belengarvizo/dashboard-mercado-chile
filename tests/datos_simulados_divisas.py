@@ -51,6 +51,7 @@ COLUMNAS_OPERACIONES = [
     "riesgo_clp", "resultado_clp", "duracion_segundos", "catalizador",
     "condicion_invalidacion", "tesis", "notas", "conviccion", "tendencia_diario",
     "evento_dia", "calidad_decision", "nota_post", "evento_plan_id",
+    "eliminado_en", "editado_en",
 ]
 
 
@@ -188,6 +189,54 @@ def interceptar_una_cerrada(pd_modulo, resultado: float, riesgo: float = RIESGO_
             return operacion_cerrada(resultado, riesgo)
         if "FROM trading_estado_cuenta" in texto:
             return estado_cuenta().iloc[0:0]      # vacío: base = capital inicial
+        if "FROM precios_acciones" in texto:
+            parametros = kw.get("params") or {}
+            pedidos = parametros.get("tickers") or []
+            if any(str(t).endswith("=X") for t in pedidos):
+                return precios()
+        return real(sql, *a, **kw)
+
+    return reemplazo
+
+
+
+# ------------------------------------------- papelera: una fila eliminada
+def operacion_eliminada(id_op: int = 99) -> pd.DataFrame:
+    """Una operación en la papelera, para probar el restaurar."""
+    fila = {c: None for c in COLUMNAS_OPERACIONES}
+    fila.update({
+        "id": id_op,
+        "instrumento": "GBPJPY",
+        "categoria": "divisas",
+        "direccion": "venta",
+        "fecha_apertura": pd.Timestamp("2026-10-08 10:00:00", tz="America/Santiago"),
+        "precio_entrada": 195.50,
+        "stop": 196.80,
+        "lotes": 0.05,
+        "margen_clp": 120000.0,
+        "riesgo_clp": 77000.0,
+        "eliminado_en": pd.Timestamp("2026-10-12 18:00:00", tz="America/Santiago"),
+        "notas": "SIMULADA eliminada",
+    })
+    return pd.DataFrame([fila], columns=COLUMNAS_OPERACIONES)
+
+
+def interceptar_con_papelera(pd_modulo):
+    """Como `interceptar`, pero la consulta de eliminadas devuelve una fila.
+
+    Distingue las dos consultas por el filtro de eliminado_en, que es
+    exactamente lo que las separa en el dashboard.
+    """
+    real = pd_modulo.read_sql
+
+    def reemplazo(sql, *a, **kw):
+        texto = str(sql)
+        if "FROM trading_operaciones" in texto:
+            if "eliminado_en IS NOT NULL" in texto:
+                return operacion_eliminada()
+            return operaciones()
+        if "FROM trading_estado_cuenta" in texto:
+            return estado_cuenta()
         if "FROM precios_acciones" in texto:
             parametros = kw.get("params") or {}
             pedidos = parametros.get("tickers") or []

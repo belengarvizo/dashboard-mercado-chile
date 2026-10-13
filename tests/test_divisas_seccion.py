@@ -422,7 +422,7 @@ def test_la_tabla_de_atr_no_da_senales_ni_se_puede_editar():
     with open(DASHBOARD_PATH, encoding="utf-8") as f:
         codigo = f.read()
     inicio = codigo.index("def _trd_tabla_atr(")
-    bloque = codigo[inicio:codigo.index("\ndef _trd_stops_cerca_del_atr(")]
+    bloque = codigo[inicio:codigo.index("\ndef ", inicio + 10)]
     # st.dataframe es de solo lectura; st.data_editor no.
     assert "st.data_editor" not in bloque
     assert "st.dataframe" in bloque
@@ -449,7 +449,7 @@ def test_el_bloque_del_atr_no_da_senales_ni_bloquea():
     with open(DASHBOARD_PATH, encoding="utf-8") as f:
         codigo = f.read()
     inicio = codigo.index("def _trd_bloque_atr(")
-    bloque = codigo[inicio:codigo.index("\ndef _trd_stops_cerca_del_atr(")]
+    bloque = codigo[inicio:codigo.index("\ndef ", inicio + 10)]
     for prohibido in ("st.stop()", "raise ", "return False", "disabled=True"):
         assert prohibido not in bloque, f"el bloque del ATR contiene {prohibido!r}"
     # Buscar las palabras "comprar" o "vender" no sirve: el propio descargo
@@ -604,6 +604,149 @@ def test_la_comprobacion_de_lotes_no_bloquea_el_guardado():
     for prohibido in ("st.stop()", "raise ", "return False", "continue"):
         assert prohibido not in bloque, (
             f"la comprobación de lotes contiene {prohibido!r}: avisa, no impide")
+
+
+# ===================================== editar, eliminar y papelera
+def _con_diario(monkeypatch, con_papelera=False, **estado):
+    import pandas as pd
+
+    import datos_simulados_divisas as sim
+
+    monkeypatch.setattr(
+        pd, "read_sql",
+        sim.interceptar_con_papelera(pd) if con_papelera else sim.interceptar(pd))
+    return _correr(**estado)
+
+
+def _boton(at, texto):
+    for b in at.button:
+        if texto in str(b.label):
+            return b
+    return None
+
+
+def test_cada_fila_tiene_editar_y_eliminar(monkeypatch):
+    at = _con_diario(monkeypatch)
+    etiquetas = [str(b.label) for b in at.button]
+    assert etiquetas.count("Editar") == 4, etiquetas
+    assert etiquetas.count("Eliminar") == 4, etiquetas
+    texto = _todo_el_texto(at)
+    assert "Corregir o eliminar" in texto
+    # El resumen de cada fila, para saber cuál es cuál.
+    assert "EURUSD" in texto and "compra" in texto
+
+
+def test_eliminar_pide_una_segunda_confirmacion(monkeypatch):
+    """El primer botón no borra: muestra el resumen y pregunta."""
+    at = _con_diario(monkeypatch)
+    _boton(at, "Eliminar").click().run(timeout=420)
+    assert not at.exception, at.exception
+    texto = _todo_el_texto(at)
+    assert "¿Eliminar esta operación?" in texto, texto[-900:]
+    assert "Va a la papelera" in texto
+    assert "riesgo" in texto and "lotes" in texto, "falta el resumen de la fila"
+    etiquetas = [str(b.label) for b in at.button]
+    assert "Sí, eliminar" in etiquetas and "No, cancelar" in etiquetas
+
+
+def test_cancelar_no_elimina_nada(monkeypatch):
+    at = _con_diario(monkeypatch)
+    _boton(at, "Eliminar").click().run(timeout=420)
+    _boton(at, "No, cancelar").click().run(timeout=420)
+    assert not at.exception, at.exception
+    texto = _todo_el_texto(at)
+    assert "¿Eliminar esta operación?" not in texto
+    assert "papelera" not in texto.lower() or "Papelera (" not in texto
+
+
+def test_la_papelera_lista_las_eliminadas_y_ofrece_restaurar(monkeypatch):
+    at = _con_diario(monkeypatch, con_papelera=True)
+    texto = _todo_el_texto(at)
+    # "Papelera (1)" es la etiqueta de un expander, que _todo_el_texto no
+    # recoge; se comprueba su contenido, que es lo que importa.
+    assert "GBPJPY" in texto, texto[-900:]
+    assert "no cuentan en el listado" in texto
+    assert any("Restaurar" in str(b.label) for b in at.button)
+    assert "restaurarlas las" in texto, "falta decir que se puede deshacer"
+
+
+def test_lo_eliminado_no_entra_en_el_listado_ni_en_las_metricas(monkeypatch):
+    """La fila de la papelera es GBPJPY con 77.000 de riesgo: no debe sumar."""
+    at = _con_diario(monkeypatch, con_papelera=True)
+    metricas = {m.label: m.value for m in at.metric}
+    # El riesgo total sigue siendo el de las CUATRO vivas, sin los 77.000.
+    assert metricas.get("Riesgo total abierto") == "400,000 CLP", metricas
+    # Y el resumen de GBPJPY aparece SOLO dentro de la papelera.
+    bloque_papelera = [str(m.value) for m in at.markdown
+                       if "GBPJPY" in str(m.value)]
+    assert bloque_papelera, "GBPJPY debería verse en la papelera"
+
+
+def test_el_sql_filtra_las_eliminadas_en_la_consulta_y_no_en_pandas():
+    """Si el filtro viviera en pandas, cualquier vista nueva podría
+    olvidarse de aplicarlo."""
+    with open(DASHBOARD_PATH, encoding="utf-8") as f:
+        codigo = f.read()
+    inicio = codigo.index("def cargar_operaciones_trading(")
+    bloque = codigo[inicio:codigo.index("\n@st.cache_data", inicio)]
+    assert "eliminado_en IS NULL" in bloque, bloque
+
+
+def test_editar_abre_el_formulario_precargado(monkeypatch):
+    at = _con_diario(monkeypatch)
+    _boton(at, "Editar").click().run(timeout=420)
+    assert not at.exception, at.exception
+    texto = _todo_el_texto(at)
+    assert "Editando la operación #" in texto, texto[-900:]
+    # Precargado con los valores de la fila, no en blanco.
+    claves = {w.key: w.value for w in at.number_input}
+    entradas = [v for k, v in claves.items() if k.startswith("trd_ed_entrada_")]
+    assert entradas and entradas[0] > 0, claves
+    lotes = [v for k, v in claves.items() if k.startswith("trd_ed_lotes_")]
+    assert lotes and lotes[0] == 0.10, claves
+    assert any("Guardar cambios" in str(b.label) for b in at.button)
+
+
+def test_editar_avisa_del_desajuste_de_lotes_igual_que_al_crear():
+    """La misma función pura, no una copia: si cambia el umbral, cambia en
+    los dos lugares."""
+    with open(DASHBOARD_PATH, encoding="utf-8") as f:
+        codigo = f.read()
+    inicio = codigo.index("def _trd_formulario_editar(")
+    bloque = codigo[inicio:codigo.index("\ndef ", inicio + 10)]
+    assert "riesgo_contra_lotes(" in bloque
+    assert "comparacion.cuadra is False" in bloque
+    # Y la limitación de st.form queda dicha en pantalla, no escondida.
+    assert "los lotes NO se reajustan solos" in bloque
+
+
+def test_editar_eliminar_y_restaurar_exigen_una_sola_fila():
+    """rowcount distinto de 1 revierte y avisa: con cero, la pantalla diría
+    que guardó algo que no guardó."""
+    with open(DASHBOARD_PATH, encoding="utf-8") as f:
+        codigo = f.read()
+    inicio = codigo.index("def _trd_ejecutar_por_id(")
+    bloque = codigo[inicio:codigo.index("\ndef ", inicio + 10)]
+    assert "rowcount" in bloque and "!= 1" in bloque
+    assert "raise RuntimeError" in bloque
+    assert "st.error" in bloque
+    # Siempre por id y con parámetros.
+    for sentencia in ("WHERE id = :id AND eliminado_en IS NULL",
+                      "WHERE id = :id AND eliminado_en IS NOT NULL"):
+        assert sentencia in codigo, sentencia
+
+
+def test_las_sentencias_del_diario_usan_parametros_y_no_texto_armado():
+    with open(DASHBOARD_PATH, encoding="utf-8") as f:
+        codigo = f.read()
+    inicio = codigo.index("def _trd_eliminar_y_editar(")
+    bloque = codigo[inicio:codigo.index("\ndef _trd_tabla_atr(")]
+    # Nada de f-strings dentro de un UPDATE/DELETE.
+    for linea in bloque.splitlines():
+        limpia = linea.strip()
+        if limpia.startswith(("f\"UPDATE", "f'UPDATE", "f\"DELETE", "f'DELETE")):
+            raise AssertionError(f"SQL armado a mano: {limpia}")
+    assert "DELETE FROM" not in bloque, "eliminar debe ser una marca, no un DELETE"
 
 
 def test_el_riesgo_agrupado_aparece_junto_al_riesgo_total():
