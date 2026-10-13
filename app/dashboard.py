@@ -110,6 +110,7 @@ from trading_proceso import (
     TENDENCIAS,
     aviso_antimartingala,
     cuadro_decision_resultado,
+    riesgo_contra_lotes,
     estadisticas,
     estadisticas_por,
     evaluar_checklist,
@@ -5128,6 +5129,13 @@ def render_divisas():
 
     resultado = lotes_para_riesgo(instrumento, riesgo_clp, stop_pips, pip_guardado,
                                   cotizaciones, hoy, tasa_manual)
+    # La sugerencia viaja al formulario del diario, que está más abajo, para
+    # que el campo Lotes no arranque siempre en 0,01. Que los tres campos
+    # (lotes, riesgo, margen) fueran independientes ya dejó una fila con 0,01
+    # lotes y el riesgo de 0,12.
+    if resultado.valor is not None:
+        st.session_state["trd_lotes_sugeridos"] = float(resultado.valor)
+        st.session_state["trd_par_sugerido"] = instrumento
     if resultado.valor is None:
         st.error(f"**No se puede calcular.** {resultado.motivo}")
     else:
@@ -5181,6 +5189,17 @@ def render_divisas():
 
     # Aviso de la operación que se acaba de registrar: se evalúa contra el
     # mismo límite del calculador. Nunca impidió guardarla; ya está guardada.
+    aviso_lotes_pendiente = st.session_state.pop("trd_aviso_lotes", None)
+    if aviso_lotes_pendiente:
+        st.warning(
+            f"**El riesgo que guardaste no cuadra con los lotes.** "
+            f"{aviso_lotes_pendiente}\n\nLa operación quedó guardada con lo que "
+            f"escribiste: esto es un aviso, no un bloqueo. Si los lotes están "
+            f"mal, corrígelos desde XTB y vuelve a registrarla; si el riesgo "
+            f"está mal, el panel de riesgo va a sumar un número que esta "
+            f"posición no arriesga."
+        )
+
     pendiente = st.session_state.pop("trd_aviso_riesgo_guardado", None)
     if pendiente is not None:
         riesgo_guardado_aviso, instrumento_guardado = pendiente
@@ -5206,9 +5225,26 @@ def render_divisas():
         _trd_aviso_hora("trd_op_fecha_ap", "trd_op_hora_ap", "registro")
         with st.form("trd_form_operacion"):
             f1, f2, f3 = st.columns(3)
-            d_inst = f1.selectbox("Instrumento", nombres_todos, key="trd_op_inst")
+            # Arranca en el par del calculador, no en el primero alfabético:
+            # si no, la sugerencia de lotes de más abajo no aplicaría nunca,
+            # porque el instrumento por defecto sería otro.
+            par_calc = st.session_state.get("trd_par_sugerido")
+            d_inst = f1.selectbox(
+                "Instrumento", nombres_todos,
+                index=nombres_todos.index(par_calc) if par_calc in nombres_todos else 0,
+                key="trd_op_inst")
             d_dir = f2.selectbox("Dirección", ["compra", "venta"], key="trd_op_dir")
-            d_lotes = f3.number_input("Lotes", 0.01, 1000.0, 0.01, 0.01, key="trd_op_lotes")
+            # Parte con lo que sugirió el calculador para ESE par, no en el
+            # mínimo del widget. Si el instrumento elegido en el diario es
+            # otro, vuelve a 0,01: la sugerencia no aplica.
+            sugeridos = st.session_state.get("trd_lotes_sugeridos")
+            mismo_par = st.session_state.get("trd_par_sugerido") == d_inst
+            d_lotes = f3.number_input(
+                "Lotes", 0.01, 1000.0,
+                round(sugeridos, 2) if (sugeridos and mismo_par) else 0.01, 0.01,
+                key="trd_op_lotes",
+                help="Arranca con lo que sugirió el calculador para este par. "
+                     "Cámbialo por los lotes que de verdad abriste en XTB.")
 
             g1, g2, g3, g4 = st.columns(4)
             d_entrada = g1.number_input("Precio de entrada", 0.0, step=0.00001, format="%.5f",
@@ -5294,6 +5330,23 @@ def render_divisas():
 
                 riesgo_guardado = Decimal(str(d_riesgo)) if d_riesgo > 0 else None
                 detalle_riesgo = []
+                aviso_lotes = None
+                if riesgo_guardado is not None and d_stop > 0 and d_entrada > 0:
+                    # El riesgo escrito se guarda tal cual, así que si no
+                    # concuerda con los lotes el panel de riesgo suma un
+                    # número que esa posición no arriesga. Avisa, no impide.
+                    fila_v = catalogo[catalogo["nombre_xtb"] == d_inst]
+                    pip_v = fila_v.iloc[0]["pip_tamano"] if not fila_v.empty else None
+                    if pip_v is not None and pd.notna(pip_v) and float(pip_v) > 0:
+                        pip_val = valor_pip_clp(d_inst, 1, pip_v, cotizaciones, hoy)
+                        if pip_val.valor is not None:
+                            comparacion = riesgo_contra_lotes(
+                                riesgo_guardado, d_lotes,
+                                abs(Decimal(str(d_entrada)) - Decimal(str(d_stop)))
+                                / Decimal(str(pip_v)),
+                                pip_val.valor)
+                            if comparacion.cuadra is False:
+                                aviso_lotes = comparacion.texto
                 if riesgo_guardado is None and d_stop > 0 and d_entrada > 0:
                     fila_i = catalogo[catalogo["nombre_xtb"] == d_inst]
                     pip_i = fila_i.iloc[0]["pip_tamano"] if not fila_i.empty else None
@@ -5361,6 +5414,8 @@ def render_divisas():
                         # session_state y se pinta arriba del diario.
                         st.session_state["trd_aviso_riesgo_guardado"] = (
                             riesgo_guardado, d_inst)
+                        if aviso_lotes:
+                            st.session_state["trd_aviso_lotes"] = aviso_lotes
                         if detalle_riesgo:
                             st.success("Operación registrada. Riesgo calculado así:\n\n"
                                        + "\n".join("- " + x for x in detalle_riesgo))

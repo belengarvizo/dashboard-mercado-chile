@@ -89,6 +89,66 @@ def peor_racha_perdidas(resultados) -> int:
     return peor
 
 
+# --------------------------------------- el riesgo escrito contra los lotes
+# Cuánto puede diferir el riesgo que se escribe a mano del que implican los
+# lotes, el stop y el valor del pip, antes de avisar. Un 10% cubre el redondeo
+# de lotes (0,12 en vez de 0,1236) y las diferencias de tasa entre el ticket y
+# el último cierre guardado, que ya se midieron en 0,5%.
+TOLERANCIA_RIESGO_CONTRA_LOTES = Decimal("0.10")
+
+
+@dataclass
+class RiesgoContraLotes:
+    """Comparación entre el riesgo escrito y el que sale de los lotes.
+
+    `cuadra` es None cuando faltan datos para comparar: eso NO es "está
+    bien", es "no se pudo mirar".
+    """
+    cuadra: bool = None
+    riesgo_escrito: Decimal = None
+    riesgo_implicito: Decimal = None
+    lotes_escritos: Decimal = None
+    lotes_para_el_riesgo: Decimal = None
+    texto: str = ""
+
+
+def riesgo_contra_lotes(riesgo_escrito, lotes, pips, valor_pip_un_lote,
+                        tolerancia=TOLERANCIA_RIESGO_CONTRA_LOTES) -> RiesgoContraLotes:
+    """Avisa si el riesgo escrito a mano no concuerda con los lotes.
+
+    POR QUÉ EXISTE. En el formulario, lotes, riesgo y margen son tres campos
+    independientes y nadie comprobaba que hablaran de la misma operación. Pasó
+    de verdad: una fila quedó con lotes 0,01 y un riesgo de 100.000 CLP, que
+    corresponde a 0,12 lotes. El riesgo escrito se guarda tal cual, así que el
+    panel de riesgo sumaba 100.000 por una posición que arriesgaba 8.093.
+
+    AVISA, NO BLOQUEA: devuelve la comparación y el texto; quien llama decide
+    qué hacer, y en la pantalla no impide guardar.
+    """
+    escrito = _d(riesgo_escrito)
+    n_lotes = _d(lotes)
+    n_pips = _d(pips)
+    por_lote = _d(valor_pip_un_lote)
+
+    if (escrito is None or escrito <= 0 or n_lotes is None or n_lotes <= 0
+            or n_pips is None or n_pips <= 0 or por_lote is None or por_lote <= 0):
+        return RiesgoContraLotes()
+
+    implicito = n_pips * por_lote * n_lotes
+    lotes_para_el_riesgo = escrito / (n_pips * por_lote)
+    diferencia = abs(escrito - implicito) / implicito
+    if diferencia <= _d(tolerancia):
+        return RiesgoContraLotes(True, escrito, implicito, n_lotes,
+                                 lotes_para_el_riesgo)
+
+    return RiesgoContraLotes(
+        False, escrito, implicito, n_lotes, lotes_para_el_riesgo,
+        f"Escribiste **{escrito:,.0f} CLP** de riesgo, pero con **{n_lotes} lotes** "
+        f"y {n_pips:.1f} pips al stop el riesgo es **{implicito:,.0f} CLP**. "
+        f"Para arriesgar {escrito:,.0f} necesitas **{lotes_para_el_riesgo:.2f} "
+        f"lotes**.")
+
+
 # ----------------------------------------------------- antimartingala
 SIN_AVISO, AVISO_SUBIO, SIN_DATO = "ninguno", "aviso", "sin_dato"
 

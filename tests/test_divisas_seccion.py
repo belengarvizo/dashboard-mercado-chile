@@ -544,6 +544,68 @@ def test_el_aviso_de_antimartingala_no_bloquea_nada():
             f"el aviso de antimartingala contiene {prohibido!r}: avisa, no bloquea")
 
 
+def test_el_campo_lotes_parte_con_la_sugerencia_del_calculador():
+    """Antes arrancaba siempre en 0,01, el mínimo del widget, y eso dejó una
+    fila con 0,01 lotes y el riesgo de 0,12."""
+    at = _correr()
+    assert "trd_lotes_sugeridos" in at.session_state, (
+        "el calculador debería dejar su sugerencia en la sesión")
+    sugeridos = at.session_state["trd_lotes_sugeridos"]
+    assert at.session_state["trd_par_sugerido"] == "EURUSD"
+    lotes = at.number_input(key="trd_op_lotes")
+    assert lotes.value == round(sugeridos, 2), (
+        f"el campo arrancó en {lotes.value} y la sugerencia era {sugeridos}")
+    assert lotes.value > 0.01, "no debería quedarse en el mínimo"
+
+
+def test_la_sugerencia_de_lotes_es_la_del_par_del_calculador():
+    """El formulario abre en el mismo par que el calculador, así que la
+    sugerencia corresponde a ese par.
+
+    LIMITACIÓN CONOCIDA, documentada acá a propósito: si dentro del
+    formulario se cambia el instrumento, el campo Lotes NO se reajusta. Es
+    cómo funciona st.form: no re-ejecuta hasta que se envía, así que ningún
+    campo puede reaccionar a otro. Lo que atrapa el desajuste es el aviso al
+    guardar, que compara el riesgo escrito con el que implican los lotes.
+    """
+    at = _correr()
+    assert at.selectbox(key="trd_op_inst").value == "EURUSD", (
+        "el formulario debería abrir en el par del calculador")
+    sugeridos = at.session_state["trd_lotes_sugeridos"]
+    assert at.number_input(key="trd_op_lotes").value == round(sugeridos, 2)
+
+    # Al cambiar el instrumento dentro del formulario, los lotes se quedan:
+    # por eso existe el aviso al guardar.
+    at.selectbox(key="trd_op_inst").set_value("BITCOIN").run(timeout=420)
+    assert not at.exception, at.exception
+    assert at.number_input(key="trd_op_lotes").value == round(sugeridos, 2)
+
+
+def test_el_aviso_de_lotes_se_pinta_arriba_del_diario():
+    """El formulario deja el aviso en session_state antes del rerun. Acá se
+    inyecta ese mismo estado: la prueba NO escribe en la base."""
+    texto_aviso = ("Escribiste **100,000 CLP** de riesgo, pero con **0.01 lotes** "
+                   "y 83.0 pips al stop el riesgo es **8,093 CLP**.")
+    at = _correr(trd_aviso_lotes=texto_aviso)
+    texto = _todo_el_texto(at)
+    assert "no cuadra con los lotes" in texto, texto[-1200:]
+    assert "8,093 CLP" in texto
+    assert "esto es un aviso, no un bloqueo" in texto
+    # y no se repite en el rerun siguiente
+    at.number_input(key="trd_calc_stop").set_value(45.0).run(timeout=420)
+    assert "no cuadra con los lotes" not in _todo_el_texto(at)
+
+
+def test_la_comprobacion_de_lotes_no_bloquea_el_guardado():
+    with open(DASHBOARD_PATH, encoding="utf-8") as f:
+        codigo = f.read()
+    inicio = codigo.index("                aviso_lotes = None")
+    bloque = codigo[inicio:codigo.index("# Validación de los campos de proceso", inicio)]
+    for prohibido in ("st.stop()", "raise ", "return False", "continue"):
+        assert prohibido not in bloque, (
+            f"la comprobación de lotes contiene {prohibido!r}: avisa, no impide")
+
+
 def test_el_riesgo_agrupado_aparece_junto_al_riesgo_total():
     """El control de arriba suma el riesgo por instrumento y no ve que dos
     posiciones correlacionadas son la misma apuesta. El bloque nuevo va

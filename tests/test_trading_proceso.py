@@ -417,3 +417,81 @@ def test_el_aviso_describe_y_no_decide():
     assert isinstance(a, Antimartingala)
     assert isinstance(a.texto, str)
     assert "no" not in a.nivel or a.nivel in (SIN_AVISO, AVISO_SUBIO, SIN_DATO)
+
+
+# ====================== el riesgo escrito contra los lotes (caso real)
+# Pasó de verdad: una fila quedó con lotes 0,01 y riesgo 100.000 CLP, que
+# corresponde a 0,12 lotes. El riesgo escrito se guarda tal cual, así que el
+# panel sumaba 100.000 por una posición que arriesgaba 8.093.
+import pytest  # noqa: E402
+
+from trading_proceso import (  # noqa: E402
+    TOLERANCIA_RIESGO_CONTRA_LOTES,
+    riesgo_contra_lotes,
+)
+
+# EURUSD el 13-10-2026: 83 pips al stop, 9.751 CLP por pip con 1 lote.
+PIPS = Decimal("83")
+POR_PIP = Decimal("9750.6")
+
+
+def test_el_caso_que_lo_motivo():
+    """lotes 0,01 con riesgo escrito de 100.000."""
+    r = riesgo_contra_lotes(Decimal("100000"), Decimal("0.01"), PIPS, POR_PIP)
+    assert r.cuadra is False
+    assert float(r.riesgo_implicito) == pytest.approx(8093, abs=1)
+    assert float(r.lotes_para_el_riesgo) == pytest.approx(0.1236, abs=0.0001)
+    # El texto tiene que decir los tres números: lo escrito, lo real y los
+    # lotes que corresponderían.
+    assert "100,000" in r.texto and "8,093" in r.texto and "0.12 lotes" in r.texto
+
+
+def test_cuando_cuadra_no_avisa():
+    r = riesgo_contra_lotes(Decimal("100000"), Decimal("0.1236"), PIPS, POR_PIP)
+    assert r.cuadra is True
+    assert r.texto == ""
+
+
+def test_el_redondeo_normal_de_lotes_no_dispara_el_aviso():
+    """0,12 en vez de 0,1236 es lo que uno escribe de verdad: 3% de
+    diferencia, bajo la tolerancia."""
+    r = riesgo_contra_lotes(Decimal("100000"), Decimal("0.12"), PIPS, POR_PIP)
+    assert r.cuadra is True
+
+
+def test_justo_en_la_tolerancia_no_avisa():
+    """Estrictamente mayor, como el resto de los umbrales del proyecto."""
+    implicito = PIPS * POR_PIP * Decimal("0.1")
+    justo = implicito * (1 + TOLERANCIA_RIESGO_CONTRA_LOTES)
+    assert riesgo_contra_lotes(justo, Decimal("0.1"), PIPS, POR_PIP).cuadra is True
+    un_poco_mas = implicito * (1 + TOLERANCIA_RIESGO_CONTRA_LOTES + Decimal("0.001"))
+    assert riesgo_contra_lotes(un_poco_mas, Decimal("0.1"), PIPS, POR_PIP).cuadra is False
+
+
+def test_tambien_avisa_si_el_riesgo_escrito_es_MENOR():
+    """El error puede ir para los dos lados."""
+    r = riesgo_contra_lotes(Decimal("8000"), Decimal("0.12"), PIPS, POR_PIP)
+    assert r.cuadra is False
+
+
+def test_sin_datos_para_comparar_devuelve_None_y_no_False():
+    """None es "no se pudo mirar", que no es lo mismo que "está bien"."""
+    for faltante in (
+        (None, Decimal("0.1"), PIPS, POR_PIP),
+        (Decimal("100000"), None, PIPS, POR_PIP),
+        (Decimal("100000"), Decimal("0.1"), None, POR_PIP),
+        (Decimal("100000"), Decimal("0.1"), PIPS, None),
+        (Decimal("0"), Decimal("0.1"), PIPS, POR_PIP),
+        (Decimal("100000"), Decimal("0"), PIPS, POR_PIP),
+        (float("nan"), Decimal("0.1"), PIPS, POR_PIP),
+    ):
+        r = riesgo_contra_lotes(*faltante)
+        assert r.cuadra is None, faltante
+        assert r.texto == ""
+
+
+def test_nunca_bloquea_solo_describe():
+    r = riesgo_contra_lotes(Decimal("100000"), Decimal("0.01"), PIPS, POR_PIP)
+    assert isinstance(r.texto, str)
+    assert r.riesgo_escrito == Decimal("100000")
+    assert r.lotes_escritos == Decimal("0.01")
