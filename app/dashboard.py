@@ -64,6 +64,8 @@ from calendario_economico import proximos_eventos, cobertura_por_tipo, INDICADOR
 from catalogo_instrumentos import TICKERS_YAHOO_FASE_1
 from trading_atr import (
     FACTOR_DIA_SOSPECHOSO,
+    UMBRAL_INFLACION_MATERIAL,
+    UMBRAL_INFLACION_PERCEPTIBLE,
     MULTIPLO_STOP_POR_DEFECTO,
     PERIODO_ATR,
     RUEDAS_PARA_DESACTUALIZADO,
@@ -4498,12 +4500,31 @@ def _trd_bloque_atr(atr, instrumento, riesgo_clp, pip_guardado, cotizaciones,
             f"sin actualizar** (el aviso salta pasadas "
             f"{RUEDAS_PARA_DESACTUALIZADO}). El ATR que ves es de esa fecha."
         )
-    if atr.sospechosos:
+    # La caja amarilla sale SOLO cuando los días raros mueven el ATR de
+    # verdad. Casi todos los pares tienen alguno, así que avisar por tenerlos
+    # equivale a no avisar nunca: la caja aparecería siempre y se ignoraría.
+    if atr.sospechosos_materiales:
         st.warning(
-            f"**{atr.sospechosos} día(s) con rango anormal** en las "
-            f"{atr.ruedas} ruedas del par: más de {FACTOR_DIA_SOSPECHOSO} veces "
-            f"el rango mediano. Pueden ser movimientos reales o desfases de la "
-            f"fuente; en cualquier caso levantan el ATR."
+            f"**{atr.texto_sospechosos}.** Son días con un rango "
+            f"mayor a {FACTOR_DIA_SOSPECHOSO} veces el mediano, en las "
+            f"{atr.ruedas} ruedas del par. Pueden ser movimientos reales o "
+            f"desfases de la fuente; en cualquier caso el stop que sale de este "
+            f"ATR es más ancho de lo que pediría un par tranquilo."
+        )
+    elif atr.sospechosos:
+        # Tres bandas: sobre el umbral material va la caja amarilla de arriba;
+        # acá se distingue entre mover el ATR un poco y no moverlo. Decir "no
+        # cambian" cuando mueven un 2% sería afirmar de más.
+        perceptible = (atr.inflacion_sospechosos is not None
+                       and atr.inflacion_sospechosos > UMBRAL_INFLACION_PERCEPTIBLE)
+        st.caption(
+            f"{atr.sospechosos} día(s) con rango mayor a "
+            f"{FACTOR_DIA_SOSPECHOSO} veces el mediano, en {atr.ruedas} ruedas. "
+            f"Mueven el ATR "
+            + (f"{atr.inflacion_sospechosos:.1f}%"
+               if atr.inflacion_sospechosos is not None else "poco")
+            + (", así que cambian poco el tamaño del stop." if perceptible
+               else ", así que no cambian el tamaño del stop.")
         )
     if atr.huecos:
         st.caption(
@@ -4578,8 +4599,8 @@ def _trd_tabla_atr(catalogo, rangos, hoy) -> None:
         _precio_stop, stop_pips = stop_sugerido(atr, multiplo)
 
         marcas = []
-        if atr.sospechosos:
-            marcas.append(f"⚠ {atr.sospechosos} día(s) de rango anormal")
+        if atr.sospechosos_materiales:
+            marcas.append(f"⚠ {atr.texto_sospechosos}")
         if atr.desactualizado:
             marcas.append(f"⏳ {atr.ruedas_sin_actualizar} ruedas sin actualizar")
 
@@ -4610,7 +4631,10 @@ def _trd_tabla_atr(catalogo, rangos, hoy) -> None:
         f"stop más ancho en pips. El stop usa el múltiplo que tengas puesto "
         f"arriba ({multiplo:.1f}×). Es para dimensionar el stop: no dice qué "
         f"par operar ni en qué dirección. Los pares sin tamaño de pip en el "
-        f"catálogo muestran el ATR en precio."
+        f"catálogo muestran el ATR en precio. En Marcas solo aparecen los pares "
+        f"cuyos días de rango anormal mueven el ATR más de "
+        f"{float(UMBRAL_INFLACION_MATERIAL):.0f}%: tener alguno es normal, lo "
+        f"que importa es que cambie el número."
     )
 
 

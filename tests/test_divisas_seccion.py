@@ -353,6 +353,71 @@ def test_la_tabla_de_atr_sigue_el_multiplo_del_calculador():
     assert "2.0×" in _todo_el_texto(at)
 
 
+def test_eurusd_no_marca_dias_raros_y_usdbrl_si():
+    """La marca sale solo cuando los días raros MUEVEN el ATR más del umbral.
+    Con datos reales: EURUSD tiene 2 días raros que lo mueven 0,00%; USDBRL
+    tiene 2 que lo mueven 11,7%."""
+    at = _correr()
+    tabla = [t.value for t in at.dataframe
+             if "Par" in list(getattr(t, "value", pd_vacio()).columns)][0]
+    marcas = dict(zip(tabla["Par"], tabla["Marcas"]))
+
+    assert "EURUSD" in marcas and "USDBRL" in marcas, list(marcas)
+    assert "rango anormal" not in marcas["EURUSD"], (
+        f"EURUSD no debería marcar: {marcas['EURUSD']!r}")
+    assert "infla" not in marcas["EURUSD"], marcas["EURUSD"]
+    assert "infla" in marcas["USDBRL"], f"USDBRL debería marcar: {marcas['USDBRL']!r}"
+    assert "%" in marcas["USDBRL"], "la marca tiene que decir CUÁNTO"
+
+    # Y no marca a todos: ese era el problema de contar los días a secas.
+    marcados = [p for p, m in marcas.items() if "infla" in m]
+    assert 0 < len(marcados) < len(marcas), (
+        f"marcó {len(marcados)} de {len(marcas)} pares")
+
+
+def test_el_calculador_no_pone_caja_amarilla_en_un_par_tranquilo():
+    """EURUSD tiene días raros pero no mueven su ATR: va una línea gris, no
+    una caja amarilla."""
+    at = _correr()
+    avisos = " || ".join(str(w.value) for w in at.warning)
+    # "su ATR en" cubre el singular ("infla") y el plural ("inflan").
+    assert "su ATR en" not in avisos, avisos[:500]
+    # pero la información sigue estando, en chico. EURUSD mueve 0,00%, bajo el
+    # umbral perceptible, así que dice "no cambian".
+    captions = " || ".join(str(c.value) for c in at.caption)
+    assert "no cambian el tamaño del stop" in captions, captions[-700:]
+
+
+def test_la_linea_gris_distingue_entre_mover_poco_y_no_mover():
+    """Tres bandas: sobre 5% va la caja amarilla; entre 0,5% y 5% dice que
+    cambian POCO; bajo 0,5% dice que no cambian. Decir "no cambian" cuando
+    mueven un 2% sería afirmar de más.
+
+    Con datos reales: EURUSD mueve 0,00% y USDJPY 2,06%.
+    """
+    at = _correr()
+    captions = " || ".join(str(c.value) for c in at.caption)
+    assert "no cambian el tamaño del stop" in captions, "EURUSD debería decir 'no'"
+
+    at.selectbox(key="trd_calc_par").set_value("USDJPY").run(timeout=420)
+    assert not at.exception, at.exception
+    captions = " || ".join(str(c.value) for c in at.caption)
+    assert "cambian poco el tamaño del stop" in captions, captions[-700:]
+    # y no hay caja amarilla: 2,06% está bajo el umbral material
+    avisos = " || ".join(str(w.value) for w in at.warning)
+    assert "su ATR en" not in avisos, avisos[:400]
+
+
+def test_el_calculador_si_pone_caja_amarilla_en_un_par_afectado():
+    at = _correr()
+    at.selectbox(key="trd_calc_par").set_value("USDBRL").run(timeout=420)
+    assert not at.exception, at.exception
+    avisos = " || ".join(str(w.value) for w in at.warning)
+    assert "su ATR en" in avisos, avisos[:700]
+    assert "inflan su ATR en 12%" in avisos, avisos[:700]
+    assert "más ancho de lo que pediría un par tranquilo" in avisos
+
+
 def test_la_tabla_de_atr_no_da_senales_ni_se_puede_editar():
     with open(DASHBOARD_PATH, encoding="utf-8") as f:
         codigo = f.read()

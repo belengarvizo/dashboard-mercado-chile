@@ -20,6 +20,8 @@ import pytest
 
 from trading_atr import (
     AVISO_SIN_PIP,
+    UMBRAL_INFLACION_MATERIAL,
+    inflacion_por_dias_sospechosos,
     FACTOR_DIA_SOSPECHOSO,
     dias_sospechosos,
     rango_del_dia,
@@ -404,6 +406,72 @@ def test_el_conteo_de_sospechosos_llega_al_resultado():
 def test_sin_datos_no_hay_sospechosos():
     assert dias_sospechosos([], []) == 0
     assert dias_sospechosos([1.1], [1.1]) == 0   # mediana cero
+
+
+# ------------------------- cuando los dias raros IMPORTAN de verdad
+def test_tener_dias_raros_no_basta_para_marcar():
+    """Con el factor en 3x, los 14 pares reales tienen al menos un día así en
+    un año: es lo normal. Marcarlos a todos es no marcar a ninguno. Lo que se
+    avisa es que MUEVAN el número con el que se dimensiona el stop."""
+    velas = _velas(60)
+    # un solo día raro, pero diluido en 60 ruedas: casi no mueve el ATR
+    velas[5]["maximo"] = velas[5]["minimo"] + 0.02
+    r = atr_de_rangos("EURUSD=X", velas, hoy=HOY)
+    assert r.sospechosos == 1, "el día raro tiene que contarse igual"
+    assert r.inflacion_sospechosos < UMBRAL_INFLACION_MATERIAL
+    assert not r.sospechosos_materiales
+    assert r.texto_sospechosos == ""
+
+
+def test_un_dia_raro_reciente_y_grande_si_marca():
+    """Wilder pondera más lo reciente, así que un día enorme cerca del final
+    sí mueve el ATR."""
+    velas = _velas(30)
+    velas[-1]["maximo"] = velas[-1]["minimo"] + 0.20   # 40x la mediana
+    r = atr_de_rangos("EURUSD=X", velas, hoy=HOY)
+    assert r.sospechosos == 1
+    assert r.inflacion_sospechosos > UMBRAL_INFLACION_MATERIAL
+    assert r.sospechosos_materiales
+    assert "1 día raro infla su ATR en" in r.texto_sospechosos
+
+
+def test_el_texto_de_la_marca_dice_cuanto_y_concuerda_en_numero():
+    velas = _velas(30)
+    velas[-1]["maximo"] = velas[-1]["minimo"] + 0.20
+    velas[-2]["maximo"] = velas[-2]["minimo"] + 0.20
+    r = atr_de_rangos("EURUSD=X", velas, hoy=HOY)
+    assert r.sospechosos == 2
+    assert r.texto_sospechosos.startswith("2 días raros inflan su ATR en")
+    assert "%" in r.texto_sospechosos
+
+
+def test_sin_dias_raros_no_hay_marca_ni_inflacion():
+    r = atr_de_rangos("EURUSD=X", _velas(30), hoy=HOY)
+    assert r.sospechosos == 0
+    assert not r.sospechosos_materiales
+    assert r.texto_sospechosos == ""
+    # la inflación se calcula igual, y da cero
+    assert r.inflacion_sospechosos == pytest.approx(Decimal(0), abs=1e-9)
+
+
+def test_la_inflacion_se_mide_recortando_y_no_sacando_los_dias():
+    """Sacarlos abriría huecos en la serie, y el hueco distorsiona por su
+    cuenta. Recortar a 3x la mediana deja la serie completa."""
+    rango_normal = [0.0050] * 29
+    maximos = [1.0 + r for r in rango_normal] + [1.0 + 0.0500]
+    minimos = [1.0] * 30
+    infl = inflacion_por_dias_sospechosos(maximos, minimos)
+    assert infl is not None and infl > 0
+    # el recorte deja el día en 3x la mediana, no en cero ni fuera
+    sin_el_dia = inflacion_por_dias_sospechosos(maximos[:-1], minimos[:-1])
+    assert sin_el_dia == pytest.approx(Decimal(0), abs=1e-9)
+
+
+def test_sin_datos_suficientes_no_hay_inflacion():
+    assert inflacion_por_dias_sospechosos([1.1] * 5, [1.0] * 5) is None
+    assert inflacion_por_dias_sospechosos([], []) is None
+    # mediana cero
+    assert inflacion_por_dias_sospechosos([1.0] * 30, [1.0] * 30) is None
 
 
 # ------------------------------------------------------------- el stop

@@ -77,6 +77,21 @@ MULTIPLO_STOP_POR_DEFECTO = Decimal("1.5")
 # los días que se quieren detectar.
 FACTOR_DIA_SOSPECHOSO = 3
 
+# Un par se marca solo cuando sus días raros mueven su ATR MÁS que esto, en
+# porcentaje.
+#
+# POR QUÉ NO ALCANZA CON CONTARLOS. Con el factor en 3x, los 14 pares tienen
+# al menos un día así en un año: es lo normal. Marcarlos a todos es no marcar
+# a ninguno. Lo que importa no es que existan sino que muevan el número que
+# se usa para dimensionar el stop. Medido sobre el año guardado, solo USDBRL
+# pasa el 5%: sus 2 días lo inflan 11,7%, mientras que USDCLP, con 14 días,
+# lo mueve 0,57% y EURUSD, con 2, no lo mueve nada.
+UMBRAL_INFLACION_MATERIAL = Decimal("5")
+# Por debajo del umbral material, todavia hay dos situaciones distintas: que
+# los dias raros muevan el ATR un poco o que no lo muevan nada. Decir "no
+# cambian" cuando mueven un 2% seria afirmar de mas.
+UMBRAL_INFLACION_PERCEPTIBLE = Decimal("0.5")
+
 # Más de esto sin un dato nuevo y el par se considera desactualizado.
 #
 # SE CUENTA EN RUEDAS HÁBILES, NO EN DÍAS CORRIDOS. Con días corridos, todos
@@ -206,6 +221,33 @@ def dias_sospechosos(maximos, minimos, factor: int = FACTOR_DIA_SOSPECHOSO) -> i
     return int((rango > mediana * factor).sum())
 
 
+def inflacion_por_dias_sospechosos(maximos, minimos,
+                                  factor: int = FACTOR_DIA_SOSPECHOSO,
+                                  periodo: int = PERIODO_ATR):
+    """Cuánto infla el ATR tener días de rango anormal, en porcentaje.
+
+    Compara el ATR normal contra el que sale recortando esos días a `factor`
+    veces la mediana. Se RECORTA en vez de sacarlos: sacarlos abriría huecos
+    en la serie, y el hueco distorsiona por su cuenta.
+
+    Se mide sobre el rango del día, que es la cifra principal: es la que se
+    usa para dimensionar el stop y la que importa que no esté inflada.
+
+    None si no se puede calcular.
+    """
+    rango = rango_del_dia(maximos, minimos).dropna()
+    if len(rango) < periodo:
+        return None
+    mediana = float(rango.median())
+    if mediana <= 0:
+        return None
+    normal = atr_wilder(rango, periodo)
+    recortado = atr_wilder(rango.clip(upper=mediana * factor), periodo)
+    if normal is None or recortado is None or recortado <= 0:
+        return None
+    return (normal / recortado - Decimal(1)) * 100
+
+
 def atr_wilder(rangos, periodo: int = PERIODO_ATR):
     """El ATR de Wilder sobre una serie de rangos verdaderos ya calculados.
 
@@ -243,6 +285,7 @@ class ResultadoATR:
     valor_rango_verdadero: Decimal = None
     pips_rango_verdadero: Decimal = None
     sospechosos: int = 0
+    inflacion_sospechosos: Decimal = None   # en %, sobre la cifra principal
     porcentaje: Decimal = None
     ultima_fecha: date = None
     ruedas: int = 0
@@ -255,6 +298,26 @@ class ResultadoATR:
     @property
     def hay_atr(self) -> bool:
         return self.valor is not None
+
+    @property
+    def sospechosos_materiales(self) -> bool:
+        """True solo si los días raros mueven el ATR más que el umbral.
+
+        Tenerlos no basta: casi todos los pares tienen alguno. Lo que se
+        avisa es que cambien el número con el que se dimensiona el stop.
+        """
+        return (self.sospechosos > 0
+                and self.inflacion_sospechosos is not None
+                and self.inflacion_sospechosos > UMBRAL_INFLACION_MATERIAL)
+
+    @property
+    def texto_sospechosos(self) -> str:
+        """La marca, diciendo cuánto inflan. Vacía si no es material."""
+        if not self.sospechosos_materiales:
+            return ""
+        dias = (f"{self.sospechosos} día raro infla" if self.sospechosos == 1
+                else f"{self.sospechosos} días raros inflan")
+        return f"{dias} su ATR en {self.inflacion_sospechosos:.0f}%"
 
     @property
     def desactualizado(self) -> bool:
@@ -328,6 +391,7 @@ def atr_de_rangos(ticker: str, filas, pip_tamano=None, hoy: date = None,
     valor = atr_wilder(rango_del_dia(maximos, minimos), periodo)
     valor_tr = atr_wilder(rango_verdadero(maximos, minimos, cierres), periodo)
     sospechosos = dias_sospechosos(maximos, minimos)
+    inflacion = inflacion_por_dias_sospechosos(maximos, minimos)
     if valor is None:
         return ResultadoATR(ticker, ultima_fecha=ultima, ruedas=len(filas),
                             motivo=f"{MOTIVO_POCAS} {len(filas)}",
@@ -345,7 +409,7 @@ def atr_de_rangos(ticker: str, filas, pip_tamano=None, hoy: date = None,
                   if ultimo_cierre and ultimo_cierre > 0 else None)
 
     return ResultadoATR(ticker, valor, pips, valor_tr, pips_tr, sospechosos,
-                        porcentaje, ultima, len(filas),
+                        inflacion, porcentaje, ultima, len(filas),
                         aviso_pips=aviso, dias_sin_actualizar=dias,
                         ruedas_sin_actualizar=ruedas_atras, huecos=huecos)
 
