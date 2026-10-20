@@ -27,6 +27,8 @@ from dotenv import load_dotenv
 from sqlalchemy import text
 from streamlit.testing.v1 import AppTest
 
+from _secciones import exigir_seccion
+
 load_dotenv()
 
 from models import get_engine
@@ -53,6 +55,7 @@ def test_el_formulario_no_pisa_la_hora_que_se_escribio():
     transacción revertida. Partirlo así es lo que permite que NINGUNA prueba
     confirme escrituras en el diario real."""
     at = AppTest.from_file(DASHBOARD_PATH, default_timeout=420)
+    exigir_seccion("Divisas")
     at.session_state["seccion_activa"] = "Divisas"
     # La pestaña ahora pide contraseña. Estas pruebas son del CONTENIDO, no
     # de la puerta: se desbloquea por session_state para no depender de una
@@ -91,6 +94,7 @@ def test_la_hora_inicial_no_cambia_entre_recargas():
     """La causa raíz, aparte del efecto: si el valor por defecto se
     recalculara en cada rerun, el widget cambiaría de identidad."""
     at = AppTest.from_file(DASHBOARD_PATH, default_timeout=420)
+    exigir_seccion("Divisas")
     at.session_state["seccion_activa"] = "Divisas"
     # La pestaña ahora pide contraseña. Estas pruebas son del CONTENIDO, no
     # de la puerta: se desbloquea por session_state para no depender de una
@@ -121,6 +125,7 @@ def test_el_boton_ahora_actualiza_la_hora_por_defecto():
     registrar una hora equivocada sin notarlo. El botón "Ahora" existe para
     eso, y acá se comprueba que de verdad la mueve."""
     at = AppTest.from_file(DASHBOARD_PATH, default_timeout=420)
+    exigir_seccion("Divisas")
     at.session_state["seccion_activa"] = "Divisas"
     # La pestaña ahora pide contraseña. Estas pruebas son del CONTENIDO, no
     # de la puerta: se desbloquea por session_state para no depender de una
@@ -151,6 +156,7 @@ def test_el_boton_ahora_actualiza_la_hora_por_defecto():
 
 def test_el_aviso_de_hora_vieja_esta_visible():
     at = AppTest.from_file(DASHBOARD_PATH, default_timeout=420)
+    exigir_seccion("Divisas")
     at.session_state["seccion_activa"] = "Divisas"
     # La pestaña ahora pide contraseña. Estas pruebas son del CONTENIDO, no
     # de la puerta: se desbloquea por session_state para no depender de una

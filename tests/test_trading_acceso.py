@@ -23,6 +23,8 @@ import pytest
 from dotenv import load_dotenv
 from streamlit.testing.v1 import AppTest
 
+from _secciones import exigir_seccion
+
 load_dotenv()
 
 import trading_acceso
@@ -138,6 +140,7 @@ def test_un_acierto_reinicia_el_contador():
 
 # ------------------------------------------------------------- AppTest
 def _correr_divisas(password_env=None, intento=None):
+    exigir_seccion("Divisas")
     if password_env is None:
         os.environ.pop(VARIABLE_ENTORNO, None)
     else:
@@ -292,6 +295,7 @@ def _correr_seccion(seccion, password_env=None, intento=None, at=None):
     `at` permite seguir usando la MISMA sesión para probar que un desbloqueo
     vale para las tres secciones.
     """
+    exigir_seccion(seccion)
     if password_env is None:
         os.environ.pop(VARIABLE_ENTORNO, None)
     else:
@@ -416,10 +420,15 @@ def test_defensa_no_consulta_sus_tablas_sin_clave(monkeypatch):
 
 
 def test_el_titulo_de_defensa_no_tiene_emoji():
-    """Pedido explícito: ni la etiqueta de la sección ni su encabezado."""
+    """Pedido explícito: ni la etiqueta de la sección ni su encabezado.
+
+    Mira SECCIONES_TODAS, que conserva los nombres aunque la sección esté
+    fuera del selector: el emoji no debe volver tampoco en el nombre
+    guardado, porque de ahí sale si algún día se devuelve.
+    """
     with open(DASHBOARD_PATH, encoding="utf-8") as f:
         codigo = f.read()
-    inicio = codigo.index("SECCIONES = [")
+    inicio = codigo.index("SECCIONES_TODAS = [")
     bloque = codigo[inicio:codigo.index("]", inicio)]
     assert '"Defensa Top-Down"' in bloque, bloque
     assert "🎯" not in bloque, f"volvió el emoji a la lista de secciones: {bloque}"

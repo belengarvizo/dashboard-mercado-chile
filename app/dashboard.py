@@ -2368,11 +2368,28 @@ except Exception:
 # cada rerun ejecuta UNA sección.
 # El costo: cambiar de sección pasa a tardar un rerun (~1s) en vez de ser
 # instantáneo; a cambio, cualquier interacción deja de pagar las otras 10.
-SECCIONES = [
+SECCIONES_TODAS = [
     "Brief Premercado", "Indicadores macro", "Acciones IPSA", "Atribución IPSA", "Acciones Dow Jones",
     "Riesgo", "Divisas", "Benchmark", "Laboratorio Financiero", "Modelo de Recesión EEUU", "Simulación Mesa de Dinero",
     "Defensa Top-Down",
 ]
+
+# EL INTERRUPTOR. Estas tres salen del selector por decisión de la usuaria
+# (20-10-2026). Su código sigue completo más abajo, intacto, y simplemente no
+# se ejecuta: `_seccion` nunca va a valer ninguno de estos nombres, así que
+# ningún `if _seccion == ...` entra. Lo único que corre de esas zonas son
+# definiciones de funciones y constantes — ni una consulta a la base ni una
+# llamada a la red, verificado antes de ocultarlas.
+#
+# PARA DEVOLVER UNA, sácala de esta tupla. No hay nada más que tocar: vuelve
+# al selector en su posición original (el orden lo manda SECCIONES_TODAS) y
+# las pruebas que la renderizan dejan de saltarse solas. Ver tests/_secciones.py.
+SECCIONES_FUERA_DEL_SELECTOR = (
+    "Divisas",
+    "Simulación Mesa de Dinero",
+    "Defensa Top-Down",
+)
+SECCIONES = [s for s in SECCIONES_TODAS if s not in SECCIONES_FUERA_DEL_SELECTOR]
 _seccion = st.segmented_control(
     "Sección", SECCIONES, default=SECCIONES[0], key="seccion_activa", label_visibility="collapsed",
 ) or SECCIONES[0]

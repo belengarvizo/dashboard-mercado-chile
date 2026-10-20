@@ -13,6 +13,8 @@ sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
 from dotenv import load_dotenv
 from streamlit.testing.v1 import AppTest
 
+from _secciones import exigir_seccion
+
 load_dotenv()
 
 DASHBOARD_PATH = os.path.join(os.path.dirname(__file__), "..", "app", "dashboard.py")
@@ -25,6 +27,7 @@ def pd_vacio():
 
 
 def _correr(**estado):
+    exigir_seccion(SECCION)
     at = AppTest.from_file(DASHBOARD_PATH, default_timeout=420)
     at.session_state["seccion_activa"] = SECCION
     for clave, valor in estado.items():
@@ -47,11 +50,17 @@ def _todo_el_texto(at):
     return " || ".join(partes)
 
 
-def test_la_seccion_existe_entre_riesgo_y_benchmark():
-    """El orden lo pidió la usuaria explícitamente."""
+def test_la_seccion_conserva_su_lugar_entre_riesgo_y_benchmark():
+    """El orden lo pidió la usuaria explícitamente.
+
+    Se mira SECCIONES_TODAS y no SECCIONES porque la sección está oculta del
+    selector desde el 20-10-2026. Esta prueba no se salta: justamente cuida
+    que el lugar siga reservado, para que al devolverla vuelva donde estaba y
+    no al final de la lista.
+    """
     with open(DASHBOARD_PATH, encoding="utf-8") as f:
         codigo = f.read()
-    inicio = codigo.index("SECCIONES = [")
+    inicio = codigo.index("SECCIONES_TODAS = [")
     bloque = codigo[inicio:codigo.index("]", inicio)]
     assert '"Riesgo", "Divisas", "Benchmark"' in bloque, bloque
 

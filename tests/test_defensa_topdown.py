@@ -17,6 +17,8 @@ import pandas as pd
 
 from defensa_topdown import verificar_prediccion, TOLERANCIA_PP
 
+from _secciones import exigir_seccion
+
 HOY = pd.Timestamp("2026-09-09")
 
 
@@ -219,6 +221,7 @@ def test_pestana_propia_sin_boton():
     from streamlit.testing.v1 import AppTest
 
     dash = os.path.join(os.path.dirname(__file__), "..", "app", "dashboard.py")
+    exigir_seccion(SECCION_DEFENSA)
     at = AppTest.from_file(dash, default_timeout=600)
     at.session_state["seccion_activa"] = SECCION_DEFENSA
     at.session_state[DESBLOQUEADO] = True
@@ -260,6 +263,7 @@ def _cargar_modulo(at):
     antes de correr. El cambio fue para arreglar un cuelgue real en
     producción -- st.tabs() ejecutaba las 11 pestañas en cada rerun y, con
     varias sesiones y cachés frías, el render no terminaba nunca."""
+    exigir_seccion(SECCION_DEFENSA)
     at.session_state["seccion_activa"] = SECCION_DEFENSA
     at.session_state[DESBLOQUEADO] = True
     at.run(timeout=600)
@@ -453,6 +457,11 @@ def test_yahoo_timeout_no_cuelga_la_pestana():
         cuenta: solo muestran estado (predicción vencida -> 'sin_resolver');
         la comparación real va bajo el botón 'Resolver predicciones vencidas'.
     """
+    # Antes de escribir la predicción de prueba en la base: si la sección
+    # está fuera del selector no hay nada que renderizar, y saltar acá evita
+    # insertar una fila para después no usarla.
+    exigir_seccion(SECCION_DEFENSA)
+
     from unittest.mock import patch
     from datetime import datetime, timedelta
     import yfinance
