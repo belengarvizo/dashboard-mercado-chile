@@ -221,6 +221,7 @@ def test_pestana_propia_sin_boton():
     dash = os.path.join(os.path.dirname(__file__), "..", "app", "dashboard.py")
     at = AppTest.from_file(dash, default_timeout=600)
     at.session_state["seccion_activa"] = SECCION_DEFENSA
+    at.session_state[DESBLOQUEADO] = True
     at.run(timeout=600)
     assert not at.exception, [str(e) for e in at.exception]
 
@@ -242,7 +243,13 @@ def test_pestana_propia_sin_boton():
     assert any((w.label or "").startswith("¿Qué empresa/ticker") for w in at.text_input)
 
 
-SECCION_DEFENSA = "🎯 Defensa Top-Down"
+SECCION_DEFENSA = "Defensa Top-Down"
+
+# Esta sección quedó detrás de la misma contraseña que Divisas y Mesa de
+# Dinero. Estas pruebas miran el contenido del módulo, no la puerta, así que
+# entran con la sesión ya desbloqueada. Que la puerta CORTE de verdad lo
+# verifica tests/test_trading_acceso.py.
+DESBLOQUEADO = "trd_desbloqueado"
 
 
 def _cargar_modulo(at):
@@ -254,6 +261,7 @@ def _cargar_modulo(at):
     producción -- st.tabs() ejecutaba las 11 pestañas en cada rerun y, con
     varias sesiones y cachés frías, el render no terminaba nunca."""
     at.session_state["seccion_activa"] = SECCION_DEFENSA
+    at.session_state[DESBLOQUEADO] = True
     at.run(timeout=600)
     assert not at.exception, [str(e) for e in at.exception]
     return at
@@ -475,6 +483,7 @@ def test_yahoo_timeout_no_cuelga_la_pestana():
         with patch.object(yfinance.Ticker, "history", _history_falla):
             at = AppTest.from_file(dash, default_timeout=600)
             at.session_state["seccion_activa"] = SECCION_DEFENSA
+            at.session_state[DESBLOQUEADO] = True
             at.run(timeout=600)
             assert not at.exception, [str(e) for e in at.exception]
 

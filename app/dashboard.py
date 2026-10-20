@@ -2371,7 +2371,7 @@ except Exception:
 SECCIONES = [
     "Brief Premercado", "Indicadores macro", "Acciones IPSA", "Atribución IPSA", "Acciones Dow Jones",
     "Riesgo", "Divisas", "Benchmark", "Laboratorio Financiero", "Modelo de Recesión EEUU", "Simulación Mesa de Dinero",
-    "🎯 Defensa Top-Down",
+    "Defensa Top-Down",
 ]
 _seccion = st.segmented_control(
     "Sección", SECCIONES, default=SECCIONES[0], key="seccion_activa", label_visibility="collapsed",
@@ -5319,21 +5319,40 @@ def _trd_riesgo_agrupado(abiertas, catalogo, equity_actual, hoy) -> None:
             )
 
 
-def _trd_puerta_de_acceso() -> bool:
-    """True si la pestaña está desbloqueada en esta sesión.
+# Las tres secciones privadas comparten ESTA llave de sesión: quien se
+# autentica en una abre las tres, que es lo pedido. El nombre empieza con
+# "trd" por herencia de cuando la puerta era solo de Divisas; se conserva a
+# propósito, porque es la llave que ya usan las pruebas y renombrarla no
+# cambiaría nada para quien la usa.
+CLAVE_DESBLOQUEO = "trd_desbloqueado"
+
+# Qué muestra cada sección privada, para el aviso de la puerta. Va acá y no
+# dentro de cada bloque para que las tres digan lo mismo con la misma forma.
+PRIVADO_DIVISAS = "muestra el diario de operaciones, el equity y los planes"
+PRIVADO_MESA = ("muestra tu cuadratura de posición de liquidez y tu planilla "
+                "de riesgo-retorno")
+PRIVADO_DEFENSA = ("muestra tus respuestas, tu tesis de inversión y tus "
+                   "predicciones")
+
+
+def _puerta_de_acceso(prefijo: str, que_muestra: str) -> bool:
+    """True si las secciones privadas están desbloqueadas en esta sesión.
 
     Se llama ANTES de cualquier consulta a la base. Eso importa más de lo que
     parece: los cargadores están cacheados con @st.cache_data y esa caché es
     del PROCESO, compartida entre visitantes. Si se consultara primero y se
     protegiera después, el diario quedaría en memoria del servidor igual.
+
+    `prefijo` solo separa las llaves de los widgets por sección ("trd", "md",
+    "dtd"). No separa el desbloqueo: ese es uno solo, CLAVE_DESBLOQUEO.
     """
     import trading_acceso
 
-    if st.session_state.get("trd_desbloqueado"):
+    if st.session_state.get(CLAVE_DESBLOQUEO):
         col_a, col_b = st.columns([5, 1])
         col_a.caption("Pestaña desbloqueada en esta sesión.")
-        if col_b.button("Cerrar sesión", key="trd_cerrar_sesion"):
-            st.session_state["trd_desbloqueado"] = False
+        if col_b.button("Cerrar sesión", key=f"{prefijo}_cerrar_sesion"):
+            st.session_state[CLAVE_DESBLOQUEO] = False
             st.rerun()
         return True
 
@@ -5348,8 +5367,8 @@ def _trd_puerta_de_acceso() -> bool:
         return False
 
     st.info(
-        "Esta sección es privada: muestra el diario de operaciones, el equity y "
-        "los planes. El resto del dashboard sigue siendo público."
+        f"Esta sección es privada: {que_muestra}. El resto del dashboard sigue "
+        f"siendo público."
     )
     bloqueado, restante = estado_bloqueo()
     if bloqueado:
@@ -5360,12 +5379,13 @@ def _trd_puerta_de_acceso() -> bool:
         )
         return False
 
-    with st.form("trd_form_acceso"):
-        intento = st.text_input("Contraseña", type="password", key="trd_password")
+    with st.form(f"{prefijo}_form_acceso"):
+        intento = st.text_input("Contraseña", type="password",
+                                key=f"{prefijo}_password")
         if st.form_submit_button("Entrar"):
             acerto, motivo = trading_acceso.verificar(intento)
             if acerto:
-                st.session_state["trd_desbloqueado"] = True
+                st.session_state[CLAVE_DESBLOQUEO] = True
                 st.rerun()
             else:
                 # Pausa corta: encarece probar contraseñas de a una sin
@@ -5373,6 +5393,12 @@ def _trd_puerta_de_acceso() -> bool:
                 time.sleep(trading_acceso.PAUSA_TRAS_FALLO)
                 st.error(motivo)
     return False
+
+
+def _trd_puerta_de_acceso() -> bool:
+    """La puerta de Divisas. Mismas llaves de widget que antes de compartirla
+    con las otras dos secciones, para no mover nada de esta pestaña."""
+    return _puerta_de_acceso("trd", PRIVADO_DIVISAS)
 
 
 def render_divisas():
@@ -7707,6 +7733,15 @@ def render_defensa_topdown():
 # --- Tab 9: Simulación Mesa de Dinero ---
 if _seccion == "Simulación Mesa de Dinero":
     st.header("🏦 Simulación Mesa de Dinero")
+
+    # LA PUERTA VA ACÁ, antes del caption y de cualquier consulta. Acá se
+    # corta con st.stop() y no con `return` como en Divisas porque esta
+    # sección no es una función: es código al nivel del módulo. st.stop() es
+    # seguro en este punto — el sidebar y la autoría ya se dibujaron más
+    # arriba, y después de las secciones no queda nada por ejecutar.
+    if not _puerta_de_acceso("md", PRIVADO_MESA):
+        st.stop()
+
     st.caption(
         "Plantilla de práctica para la rutina diaria de un analista de tesorería: "
         "indicadores del día, cuadratura de posición de liquidez y una planilla "
@@ -8611,9 +8646,15 @@ if _seccion == "Simulación Mesa de Dinero":
         ])
 
 
-# --- Tab 10: 🎯 Defensa Top-Down (pestaña propia) ---
-if _seccion == "🎯 Defensa Top-Down":
-    st.header("🎯 Defensa Top-Down")
+# --- Tab 10: Defensa Top-Down (pestaña propia) ---
+if _seccion == "Defensa Top-Down":
+    st.header("Defensa Top-Down")
+
+    # Misma puerta y mismo desbloqueo que Divisas y Mesa de Dinero; corta con
+    # st.stop() por el mismo motivo que allá (código al nivel del módulo).
+    if not _puerta_de_acceso("dtd", PRIVADO_DEFENSA):
+        st.stop()
+
     st.caption(
         "Espacio de trabajo para la Tarea de Inversiones \"Análisis Top-Down y "
         "Defensa de Inversión\" (FEN U. de Chile). Las 16 preguntas de sensibilidad "

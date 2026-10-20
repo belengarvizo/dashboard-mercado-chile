@@ -254,5 +254,177 @@ def test_la_exportacion_a_csv_no_existe_sin_contrasena():
         f"el botón de exportar quedó accesible sin contraseña: {etiquetas}")
 
 
+# --------------------------------------- las otras dos secciones privadas
+# Divisas ya no es la única sección protegida: también lo son Simulación Mesa
+# de Dinero y Defensa Top-Down. Las tres usan la MISMA puerta, la misma
+# variable de entorno y UN solo desbloqueo por sesión.
+#
+# POR QUÉ SE MIRA UNA LLAVE DE WIDGET Y NO SOLO EL TEXTO. Esconder el
+# contenido no basta: hay que cortar la ejecución. Si el cuerpo de la sección
+# corriera y solo no se dibujara, sus widgets quedarían igual registrados en
+# session_state. Que la llave NO esté es la prueba de que ese código no
+# llegó a ejecutarse.
+PRIVADAS = {
+    "Divisas": {
+        "prefijo": "trd",
+        "privado": ("Diario de operaciones", "Control de reglas"),
+        "llave_widget": "trd_calc_par",
+    },
+    "Simulación Mesa de Dinero": {
+        "prefijo": "md",
+        "privado": ("Cuadratura de posición de liquidez",
+                    "Planilla de riesgo-retorno del portafolio",
+                    "Tu registro de práctica en la Terminal Bloomberg"),
+        "llave_widget": "md_bb_check_FRNT",
+    },
+    "Defensa Top-Down": {
+        "prefijo": "dtd",
+        "privado": ("Espacio de trabajo para la Tarea de Inversiones",),
+        "llave_widget": "dtd_ticker",
+    },
+}
+PUBLICAS = [("Brief Premercado", "Economic calendar"), ("Riesgo", "VaR")]
+
+
+def _correr_seccion(seccion, password_env=None, intento=None, at=None):
+    """Corre el dashboard en una sección, opcionalmente escribiendo la clave.
+
+    `at` permite seguir usando la MISMA sesión para probar que un desbloqueo
+    vale para las tres secciones.
+    """
+    if password_env is None:
+        os.environ.pop(VARIABLE_ENTORNO, None)
+    else:
+        os.environ[VARIABLE_ENTORNO] = password_env
+    if at is None:
+        at = AppTest.from_file(DASHBOARD_PATH, default_timeout=420)
+    at.session_state["seccion_activa"] = seccion
+    at.run(timeout=420)
+    if intento is not None:
+        prefijo = PRIVADAS[seccion]["prefijo"]
+        at.text_input(key=f"{prefijo}_password").set_value(intento)
+        [b for b in at.button if "Entrar" in str(b.label)][0].click().run(timeout=420)
+    return at
+
+
+@pytest.mark.parametrize("seccion", sorted(PRIVADAS))
+def test_las_tres_privadas_sin_la_variable_no_se_abren(seccion):
+    at = _correr_seccion(seccion, password_env=None)
+    assert not at.exception, at.exception
+    texto = _texto(at)
+    assert "no está disponible" in texto, texto[:300]
+    for prohibido in PRIVADAS[seccion]["privado"]:
+        assert prohibido not in texto, f"{seccion}: se filtró {prohibido!r}"
+    assert PRIVADAS[seccion]["llave_widget"] not in at.session_state, (
+        f"{seccion}: el cuerpo de la sección se ejecutó sin contraseña")
+
+
+@pytest.mark.parametrize("seccion", sorted(PRIVADAS))
+def test_las_tres_privadas_piden_clave_y_no_muestran_datos(seccion):
+    at = _correr_seccion(seccion, password_env=CLAVE_DE_PRUEBA)
+    assert not at.exception, at.exception
+    texto = _texto(at)
+    assert "Esta sección es privada" in texto, texto[:300]
+    assert any("Entrar" in str(b.label) for b in at.button), "falta el formulario"
+    for prohibido in PRIVADAS[seccion]["privado"]:
+        assert prohibido not in texto, f"{seccion}: se filtró {prohibido!r}"
+    assert PRIVADAS[seccion]["llave_widget"] not in at.session_state, (
+        f"{seccion}: el cuerpo de la sección se ejecutó sin desbloquear")
+
+
+@pytest.mark.parametrize("seccion", sorted(PRIVADAS))
+def test_cada_privada_abre_con_su_propio_formulario(seccion):
+    """Cada sección tiene sus propias llaves de widget ("trd", "md", "dtd").
+    Si un prefijo quedara mal, el formulario de esa sección no serviría."""
+    at = _correr_seccion(seccion, password_env=CLAVE_DE_PRUEBA,
+                         intento=CLAVE_DE_PRUEBA)
+    assert not at.exception, at.exception
+    texto = _texto(at)
+    assert PRIVADAS[seccion]["privado"][0] in texto, texto[:400]
+    assert any("Cerrar sesión" in str(b.label) for b in at.button)
+
+
+def test_un_solo_desbloqueo_abre_las_tres():
+    """Lo pedido: autenticarse una vez en la sesión deja abiertas las tres."""
+    at = _correr_seccion("Divisas", password_env=CLAVE_DE_PRUEBA,
+                         intento=CLAVE_DE_PRUEBA)
+    assert "Diario de operaciones" in _texto(at), "no abrió Divisas"
+
+    for seccion in ("Simulación Mesa de Dinero", "Defensa Top-Down"):
+        at = _correr_seccion(seccion, password_env=CLAVE_DE_PRUEBA, at=at)
+        assert not at.exception, f"{seccion}: {at.exception}"
+        texto = _texto(at)
+        assert "Esta sección es privada" not in texto, (
+            f"{seccion} volvió a pedir la clave en la misma sesión")
+        assert PRIVADAS[seccion]["privado"][0] in texto, texto[:400]
+
+
+def test_cerrar_sesion_vuelve_a_cerrar_las_tres():
+    at = _correr_seccion("Simulación Mesa de Dinero",
+                         password_env=CLAVE_DE_PRUEBA, intento=CLAVE_DE_PRUEBA)
+    assert "Cuadratura de posición de liquidez" in _texto(at)
+
+    [b for b in at.button if "Cerrar sesión" in str(b.label)][0].click().run(timeout=420)
+    at = _correr_seccion("Divisas", password_env=CLAVE_DE_PRUEBA, at=at)
+    assert "Esta sección es privada" in _texto(at), "Divisas quedó abierta"
+
+
+def test_las_publicas_siguen_abiertas_con_las_tres_cerradas():
+    """(c) del pedido: el resto del dashboard sigue sin contraseña."""
+    os.environ.pop(VARIABLE_ENTORNO, None)
+    for seccion, marca in PUBLICAS:
+        at = _correr_seccion(seccion)
+        assert not at.exception, f"{seccion}: {at.exception}"
+        texto = _texto(at)
+        assert marca in texto, f"{seccion} no cargó sin contraseña"
+        assert "Esta sección es privada" not in texto, f"{seccion} pidió clave"
+
+
+def test_defensa_no_consulta_sus_tablas_sin_clave(monkeypatch):
+    """La propiedad que importa, igual que en Divisas: sin la clave no se
+    ejecuta ni una consulta a las tablas del módulo, porque la caché de
+    @st.cache_data es del proceso y la comparten los visitantes.
+
+    Mesa de Dinero no aparece acá porque no consulta la base: todo lo suyo
+    vive en session_state. Para esa sección la prueba de que no se ejecuta es
+    la llave de widget ausente, más arriba.
+    """
+    tablas = ("defensa_topdown_respuestas", "defensa_topdown_predicciones")
+    consultas = []
+    real = pd.read_sql
+
+    def espia(sql, *a, **kw):
+        if any(t in str(sql) for t in tablas):
+            consultas.append(str(sql)[:60])
+        return real(sql, *a, **kw)
+
+    monkeypatch.setattr(pd, "read_sql", espia)
+
+    _correr_seccion("Defensa Top-Down", password_env=None)
+    assert consultas == [], f"consultó sin contraseña: {consultas}"
+
+    _correr_seccion("Defensa Top-Down", password_env=CLAVE_DE_PRUEBA)
+    assert consultas == [], f"consultó sin desbloquear: {consultas}"
+
+    _correr_seccion("Defensa Top-Down", password_env=CLAVE_DE_PRUEBA,
+                    intento="esta-no-es")
+    assert consultas == [], f"consultó con clave incorrecta: {consultas}"
+
+    _correr_seccion("Defensa Top-Down", password_env=CLAVE_DE_PRUEBA,
+                    intento=CLAVE_DE_PRUEBA)
+    assert consultas, "con la clave correcta debería consultar sus tablas"
+
+
+def test_el_titulo_de_defensa_no_tiene_emoji():
+    """Pedido explícito: ni la etiqueta de la sección ni su encabezado."""
+    with open(DASHBOARD_PATH, encoding="utf-8") as f:
+        codigo = f.read()
+    inicio = codigo.index("SECCIONES = [")
+    bloque = codigo[inicio:codigo.index("]", inicio)]
+    assert '"Defensa Top-Down"' in bloque, bloque
+    assert "🎯" not in bloque, f"volvió el emoji a la lista de secciones: {bloque}"
+    assert 'st.header("Defensa Top-Down")' in codigo, "el encabezado cambió"
+
+
 if __name__ == "__main__":
     print("Correr con pytest: python -m pytest tests/test_trading_acceso.py")
