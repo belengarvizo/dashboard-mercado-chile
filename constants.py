@@ -162,6 +162,19 @@ TICKERS_LABORATORIO_ADICIONALES = [
     "COST",  # Costco Wholesale
 ]
 
+# ETFs de bonos de EEUU para la sección "Renta Fija" (ver
+# catalogo_renta_fija.py, que describe cada uno). Son los instrumentos REALES de
+# la tabla de esa sección: Tesoro por plazo (SHY, IEI, IEF, TLT), mercado total
+# (AGG), empresas de buena calidad (VCSH corto, LQD largo), alto rendimiento
+# (HYG), emergentes en dólares (EMB) y bonos ligados a la inflación (TIP). Se
+# bajan con el mismo script diario que las acciones: yfinance entrega precios
+# AJUSTADOS por distribuciones, lo correcto para un ETF de bonos, cuyo retorno
+# es en buena parte el cupón que reparte. Nombres y categorías verificados
+# contra Yahoo Finance antes de agregarlos.
+TICKERS_RENTA_FIJA = [
+    "SHY", "IEI", "IEF", "TLT", "AGG", "VCSH", "LQD", "HYG", "EMB", "TIP",
+]
+
 # Universo de 50 acciones del S&P 500 para "Laboratorio Financiero": (ticker,
 # nombre de la empresa, sector GICS). Cubre con margen los 6 sectores que
 # exige la tarea (Energy, Financials, Health Care, Industrials, Information

@@ -214,6 +214,36 @@ El dashboard tiene 9 pestañas:
     - Lógica separada en `portfolio_lab.py` (sin dependencias de Streamlit,
       testeable de forma aislada) para no inflar `app/dashboard.py`.
 
+**Renta Fija (instrumentos reales, con tooltips).** Siete pasos que siguen un módulo de mercado de capitales,
+con el mismo criterio que las secciones de acciones: todo son datos reales de la base y, al pasar el mouse por
+el ticker de un ETF, aparece una explicación en palabras de cada indicador con los números de esa fila.
+
+1. **El mercado:** tabla de 10 ETFs de bonos de EEUU (SHY, IEI, IEF, TLT, AGG, VCSH, LQD, HYG, EMB, TIP) con
+   retornos, volatilidad, caída máxima, beta contra el S&P 500, Sharpe y **duración medida con datos**
+   (cuánto cayó el precio por cada punto que subió la tasa del Tesoro, con su R² y margen de error).
+2. **Valorización:** cuánto vale hoy 1 peso futuro (factores de descuento sacados de la curva real) y qué le
+   pasó a un bono del Tesoro comprado a la par en el pasado, junto al ETF real del mismo tramo.
+3. **Riesgo de mercado:** duración medida frente a la teórica, y el gráfico de dispersión que la sostiene.
+4. **Riesgo de crédito:** spread corporativo real (BAA10Y) y crédito contra Tesoro en los precios de los ETFs.
+5. **Banco Central y tasas:** TPM de Chile y de EEUU, PDBC, swap, la curva chilena (BCP 2/5/10 y BCU 5/10/30)
+   y la inflación implícita por plazo.
+6. **Curva y estrategias:** curva del Tesoro, roll-down y carteras bullet / barbell / escalera armadas con ETFs reales.
+7. **Emitir un bono afuera:** los pasos de una colocación internacional y las referencias reales de tasa.
+
+- **Origen de los datos:** los ETFs los baja el mismo script diario que las acciones
+  (`scripts/actualizar_acciones.py`, lista en `constants.TICKERS_RENTA_FIJA`); los precios vienen ajustados por
+  distribuciones, así que los retornos incluyen los cupones que el fondo repartió. Las series del Banco Central
+  (BCP 2 y 5 años, BCU 5 y 30 años) se suman a las de `scripts/actualizar_bcch.py`.
+- **Lo que no hay, la pantalla lo dice:** precios de bonos individuales, operaciones de mercado abierto,
+  probabilidades de default y emisiones internacionales. No se rellenan con supuestos ni calculadoras.
+- Donde una serie tiene un hueco de más de 30 días, el gráfico corta la línea y lo anota debajo en vez de unir
+  los bordes.
+- La matemática está en `renta_fija.py` (sin Streamlit, probada con fórmulas cerradas y datos sintéticos de
+  respuesta conocida), la tabla con tooltips en `tabla_tooltips.py`, las explicaciones en
+  `glosario_renta_fija.py`, los datos de cada ETF en `catalogo_renta_fija.py` y la pantalla en `renta_fija_ui.py`.
+- Simplificaciones: se valoriza en fecha de cupón (sin interés devengado) y no hay convenciones de días ni
+  reinversión de cupones. La duración medida usa un plazo del Tesoro de referencia aproximado por ETF.
+
 Arriba de las pestañas, y también en la barra lateral, se muestra la fecha y
 hora de la última actualización de cada fuente de datos.
 
@@ -414,6 +444,11 @@ dashboard-mercado-chile/
 ├── constants.py                 # Listas de tickers compartidas entre scripts y dashboard
 ├── market_data.py                # Cálculo de los indicadores de "Importante", compartido entre el dashboard y generar_brief.py
 ├── portfolio_lab.py               # Frontera media-varianza, LMC y CAPM de "Laboratorio Financiero" (sin dependencias de Streamlit)
+├── renta_fija.py                 # Motor de la sección Renta Fija: precio, duración, convexidad, curva (sin Streamlit)
+├── renta_fija_ui.py              # Pantalla de la sección Renta Fija
+├── catalogo_renta_fija.py        # Datos de cada ETF de bonos (nombre, grupo, descripción, plazo de referencia)
+├── glosario_renta_fija.py        # Explicaciones de los tooltips de la tabla de ETFs de bonos
+├── tabla_tooltips.py             # Tabla HTML con color por celda y tooltip por fila (reutilizable)
 ├── calendario_economico.py       # Fechas verificadas de RPM, FOMC, IPC, IMACEC y OPEP+ 2026
 ├── models.py                    # Define las tablas de la base de datos
 ├── requirements.txt              # Librerías necesarias

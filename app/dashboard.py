@@ -40,6 +40,7 @@ from constants import (
     TICKERS_DOW_JONES_PRINCIPALES,
     TICKER_DOW_JONES,
     TICKERS_EEUU_ADICIONALES,
+    TICKERS_RENTA_FIJA,
     TICKERS_LABORATORIO_50,
     TICKERS_LABORATORIO_AMPLIADO,
     SECTOR_POR_TICKER_LABORATORIO,
@@ -49,6 +50,7 @@ from constants import (
 import portfolio_lab as lab
 import estructura_tasas as et
 import modelo_recesion as mr
+from renta_fija_ui import render_renta_fija
 from defensa_topdown import verificar_prediccion as _verificar_prediccion
 from market_data import (
     calcular_resumen_mercado,
@@ -2370,7 +2372,7 @@ except Exception:
 # instantáneo; a cambio, cualquier interacción deja de pagar las otras 10.
 SECCIONES_TODAS = [
     "Brief Premercado", "Indicadores macro", "Acciones IPSA", "Atribución IPSA", "Acciones Dow Jones",
-    "Riesgo", "Divisas", "Benchmark", "Laboratorio Financiero", "Modelo de Recesión EEUU", "Simulación Mesa de Dinero",
+    "Riesgo", "Divisas", "Benchmark", "Laboratorio Financiero", "Modelo de Recesión EEUU", "Renta Fija", "Simulación Mesa de Dinero",
     "Defensa Top-Down",
 ]
 
@@ -6103,6 +6105,21 @@ if _seccion == "Benchmark":
 # --- Tab 10: Laboratorio Financiero ---
 if _seccion == "Laboratorio Financiero":
     render_laboratorio_financiero()
+
+# --- Renta Fija: valorización, duración, crédito y curva (lógica en renta_fija.py, pantalla en renta_fija_ui.py) ---
+if _seccion == "Renta Fija":
+    try:
+        _df_macro_renta_fija = cargar_series_macro()
+    except Exception as e:
+        # Si la base no responde, la parte didáctica igual funciona: los paneles con datos reales dicen que no hay datos.
+        st.warning(f"No se pudieron cargar los datos de mercado: {e}")
+        _df_macro_renta_fija = pd.DataFrame(columns=["nombre", "fecha", "valor"])
+    try:
+        _df_precios_renta_fija = cargar_precios_acciones(tuple(TICKERS_RENTA_FIJA) + ("^GSPC",))
+    except Exception as e:
+        st.warning(f"No se pudieron cargar los precios de los ETFs de bonos: {e}")
+        _df_precios_renta_fija = pd.DataFrame(columns=["ticker", "fecha", "precio_cierre", "volumen"])
+    render_renta_fija(_df_macro_renta_fija, _df_precios_renta_fija)
 
 # --- Tab 8: Modelo de Recesión EEUU ---
 @st.cache_data(ttl=3600)

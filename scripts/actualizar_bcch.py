@@ -94,6 +94,16 @@ SERIES_A_DESCARGAR = {
     # es la inflación breakeven implícita en el mercado (ver
     # calcular_inflacion_breakeven en app/dashboard.py).
     "F022.BUF.TIS.AN10.UF.Z.D": {"nombre": "Bono BCCh en UF (BCU) a 10 años - tasa mercado secundario", "frecuencia": "diaria"},
+    # Resto de la curva chilena en pesos y en UF, para la sección "Renta Fija"
+    # (curva real y la inflación implícita por plazo). Los códigos salen del
+    # mismo catálogo del BCCh que el BCP/BCU a 10 años y se probaron contra la
+    # API antes de agregarlos. Quedó fuera el BCU a 20 años (AN20): la API lo
+    # devuelve sin observaciones. Son series que transan poco, así que pueden
+    # tener días sin dato (el BCP a 2 años, sobre todo).
+    "F022.BCLP.TIS.AN02.NO.Z.D": {"nombre": "Bono BCCh en pesos (BCP) a 2 años - tasa mercado secundario", "frecuencia": "diaria"},
+    "F022.BCLP.TIS.AN05.NO.Z.D": {"nombre": "Bono BCCh en pesos (BCP) a 5 años - tasa mercado secundario", "frecuencia": "diaria"},
+    "F022.BUF.TIS.AN05.UF.Z.D": {"nombre": "Bono BCCh en UF (BCU) a 5 años - tasa mercado secundario", "frecuencia": "diaria"},
+    "F022.BUF.TIS.AN30.UF.Z.D": {"nombre": "Bono BCCh en UF (BCU) a 30 años - tasa mercado secundario", "frecuencia": "diaria"},
     "F049.DES.TAS.INE.10.M": {"nombre": "Tasa de desocupación nacional (INE, desestacionalizada)", "frecuencia": "mensual"},
     # Misma tasa de desocupación nacional pero SIN ajuste estacional ("No
     # Ajustada" en el catálogo del BCCh) -- es la cifra que titula la prensa
