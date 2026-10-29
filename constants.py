@@ -189,6 +189,14 @@ TICKERS_ETFS_ACCIONES = [
     "EFA", "EEM", "EWJ", "EWZ", "FXI", "ECH",
 ]
 
+# Futuros de commodities para la sección "Commodities" (ver catalogo_commodities.py, que describe cada uno):
+# energía (gas natural; el petróleo WTI, CL=F, ya se bajaba para el Brief), metales (oro, plata, cobre) y
+# agrícolas (maíz, trigo, soya, café). Son contratos de futuro y no ETFs: un ETF de materias primas (USO, UNG)
+# pierde valor cada mes al "rolar" el contrato, lo que distorsiona su retorno de largo plazo. El cobre (HG=F)
+# se compara en la pantalla contra el precio que publica el Banco Central de Chile, en la misma unidad (USD/lb).
+# Verificados con una descarga real el 29-10-2026: los 5 años de historia existen para los 8.
+TICKERS_COMMODITIES = ["NG=F", "GC=F", "SI=F", "HG=F", "ZC=F", "ZW=F", "ZS=F", "KC=F"]
+
 # Universo de 50 acciones del S&P 500 para "Laboratorio Financiero": (ticker,
 # nombre de la empresa, sector GICS). Cubre con margen los 6 sectores que
 # exige la tarea (Energy, Financials, Health Care, Industrials, Information

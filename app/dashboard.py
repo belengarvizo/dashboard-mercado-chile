@@ -54,6 +54,8 @@ import modelo_recesion as mr
 from renta_fija_ui import render_renta_fija
 from renta_variable_ui import render_renta_variable
 from fx_carry_ui import render_fx_carry
+from commodities_ui import render_commodities
+from constants import TICKERS_COMMODITIES, TICKER_PETROLEO_WTI
 from catalogo_fx import PARES_FX
 from defensa_topdown import verificar_prediccion as _verificar_prediccion
 from market_data import (
@@ -2376,7 +2378,7 @@ except Exception:
 # instantáneo; a cambio, cualquier interacción deja de pagar las otras 10.
 SECCIONES_TODAS = [
     "Brief Premercado", "Indicadores macro", "Acciones IPSA", "Atribución IPSA", "Acciones Dow Jones",
-    "Riesgo", "Divisas", "Benchmark", "Laboratorio Financiero", "Modelo de Recesión EEUU", "Renta Fija", "Renta Variable y ETFs", "FX y Carry Trade",
+    "Riesgo", "Divisas", "Benchmark", "Laboratorio Financiero", "Modelo de Recesión EEUU", "Renta Fija", "Renta Variable y ETFs", "FX y Carry Trade", "Commodities",
     "Simulación Mesa de Dinero", "Defensa Top-Down",
 ]
 
@@ -6157,6 +6159,22 @@ if _seccion == "FX y Carry Trade":
         st.warning(f"No se pudieron cargar los precios de las divisas: {e}")
         _df_precios_fx = pd.DataFrame(columns=["ticker", "fecha", "precio_cierre", "volumen"])
     render_fx_carry(_df_macro_fx, _df_precios_fx)
+
+# --- Commodities: futuros de energía, metales y agrícolas, y el cobre contra el Banco Central de Chile
+# (lógica reutilizada de renta_variable.py, pantalla en commodities_ui.py) ---
+if _seccion == "Commodities":
+    try:
+        _df_macro_commodities = cargar_series_macro()
+    except Exception as e:
+        # Sin macro se pierde la comparación del cobre con el Banco Central, pero la tabla de futuros igual se dibuja.
+        st.warning(f"No se pudieron cargar los datos de mercado: {e}")
+        _df_macro_commodities = pd.DataFrame(columns=["nombre", "fecha", "valor"])
+    try:
+        _df_precios_commodities = cargar_precios_acciones(tuple(TICKERS_COMMODITIES) + (TICKER_PETROLEO_WTI, "SPY"))
+    except Exception as e:
+        st.warning(f"No se pudieron cargar los precios de los commodities: {e}")
+        _df_precios_commodities = pd.DataFrame(columns=["ticker", "fecha", "precio_cierre", "volumen"])
+    render_commodities(_df_macro_commodities, _df_precios_commodities)
 
 # --- Tab 8: Modelo de Recesión EEUU ---
 @st.cache_data(ttl=3600)

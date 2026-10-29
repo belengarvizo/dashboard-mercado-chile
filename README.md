@@ -322,6 +322,29 @@ palabras con los números de esa fila.
 - La matemática está en `fx_carry.py` (sin Streamlit, probada con series de respuesta conocida y con pruebas de mutación), las
   explicaciones en `glosario_fx.py`, los datos de cada par y moneda en `catalogo_fx.py` y la pantalla en `fx_carry_ui.py`.
 
+**Commodities (futuros reales, con tooltips).** Dos pasos con el mismo criterio que las otras secciones nuevas:
+todo son datos reales de la base y, al pasar el mouse por el ticker, aparece una explicación en palabras de cada
+indicador con los números de esa fila.
+
+1. **El mercado:** 9 futuros en tres grupos — energía (petróleo WTI, gas natural), metales (oro, plata, cobre) y
+   agrícolas (maíz, trigo, soya, café) — con retornos, volatilidad, caída máxima, beta, correlación y Sharpe, más un
+   gráfico para compararlos (en base 100, porque cada uno se cotiza en una unidad distinta).
+2. **Chile y el cobre:** compara el precio del cobre que publica el Banco Central de Chile contra el futuro COMEX
+   (HG=F), las dos fuentes en la misma unidad (USD por libra). La pantalla avisa cuando se distancian mucho más de
+   lo normal; con 5 años o todo el historial seleccionado, muestra el episodio real de julio de 2025, cuando el
+   anuncio de un arancel de EEUU al cobre importado disparó el precio en COMEX por sobre el de referencia global.
+
+- **Por qué futuros y no ETFs:** un ETF de materias primas (USO, UNG) pierde valor cada mes al "rolar" el contrato
+  (*roll decay*), lo que distorsiona su retorno de largo plazo frente al precio real del commodity. Un futuro no lo
+  tiene, porque siempre se mide el contrato más cercano a vencer.
+- **Origen de los datos:** los 9 futuros los baja el mismo script diario que las acciones (`scripts/actualizar_acciones.py`;
+  petróleo ya estaba por `TICKER_PETROLEO_WTI`, los otros 8 en `constants.TICKERS_COMMODITIES`); el motor es el mismo de
+  Renta Variable y ETFs (no hay nada específico de acciones en esas fórmulas).
+- **Lo que no hay, la pantalla lo dice:** la curva completa de vencimientos de cada futuro (Yahoo solo entrega el
+  contrato más cercano), así que no se calcula contango ni backwardation; costos de almacenamiento ni de transporte.
+- Las explicaciones están en `glosario_commodities.py`, los datos de cada commodity en `catalogo_commodities.py` y la
+  pantalla en `commodities_ui.py`.
+
 Arriba de las pestañas, y también en la barra lateral, se muestra la fecha y
 hora de la última actualización de cada fuente de datos.
 
@@ -537,6 +560,9 @@ dashboard-mercado-chile/
 ├── fx_carry_ui.py                # Pantalla de la sección FX y Carry Trade
 ├── catalogo_fx.py                # Datos de cada par de divisas y de las monedas con tasa para el carry
 ├── glosario_fx.py                # Explicaciones de los tooltips de las tablas de FX y carry
+├── commodities_ui.py             # Pantalla de la sección Commodities (reutiliza el motor de renta_variable.py)
+├── catalogo_commodities.py       # Datos de cada futuro de commodity (nombre, grupo, unidad, descripción)
+├── glosario_commodities.py       # Explicaciones de los tooltips de la tabla de commodities
 ├── calendario_economico.py       # Fechas verificadas de RPM, FOMC, IPC, IMACEC y OPEP+ 2026
 ├── models.py                    # Define las tablas de la base de datos
 ├── requirements.txt              # Librerías necesarias
