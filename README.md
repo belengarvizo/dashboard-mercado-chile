@@ -244,6 +244,26 @@ el ticker de un ETF, aparece una explicación en palabras de cada indicador con 
 - Simplificaciones: se valoriza en fecha de cupón (sin interés devengado) y no hay convenciones de días ni
   reinversión de cupones. La duración medida usa un plazo del Tesoro de referencia aproximado por ETF.
 
+**Informe en PDF de Renta Fija.** Dentro de la sección hay un botón que arma un informe de unas 5 páginas, pensado
+para alguien que no abrió el dashboard: un comité de inversiones o un área que necesita entender renta fija. Se genera
+en el momento con lo último que hay en la base, así que nunca queda desactualizado.
+
+- **El molde de cada hallazgo son tres partes:** qué pasó (con el número y su fecha), **por qué** (la cuenta hecha:
+  cuánto del movimiento explica la duración de cada instrumento y cuánto no) y **qué error evitar**, nombrando la
+  confusión típica. Esa tercera parte es la que lo vuelve didáctico y es la que casi ningún informe trae.
+- **Secciones:** resumen con las conclusiones adelante; qué pasó; por qué (atribución contra la curva del Tesoro, con
+  recuadro sobre por qué la duración se mide y no se calcula); el riesgo de crédito; Chile (BCP, BCU, inflación
+  implícita y el diferencial con la Fed); qué pasaría si las tasas se mueven; y qué NO dice el informe.
+- **Períodos:** último mes, últimos 3 meses o último año.
+- **Lo que el informe se prohíbe:** recomendaciones de compra o venta (no conoce el horizonte ni el perfil de quien lo
+  lee), proyecciones, y causas macroeconómicas que no se puedan medir con estos datos. Lo declara en su última sección.
+- **Afirmaciones condicionadas a los datos:** por ejemplo, la observación de que el «resto» de la atribución es sobre
+  todo el cupón devengado solo se escribe si el resto es positivo en todos los ETFs y su tamaño anualizado es creíble;
+  si no, el informe se calla en vez de afirmarlo.
+- El armado del PDF está en `informe_base.py` (estilos, tablas, recuadros y gráficos, reutilizable para las otras
+  secciones) y el contenido en `informe_renta_fija.py`. Reusa la paleta del PDF del Brief Premercado, y los números
+  salen de las mismas funciones que la pantalla, no de un cálculo paralelo.
+
 **Renta Variable y ETFs (instrumentos reales, con tooltips).** Cuatro pasos con el mismo criterio que Renta Fija
 y las secciones de acciones: todo son datos reales de la base y, al pasar el mouse por el ticker de un ETF, aparece
 una explicación en palabras de cada indicador con los números de esa fila.
@@ -507,6 +527,8 @@ dashboard-mercado-chile/
 ├── catalogo_renta_fija.py        # Datos de cada ETF de bonos (nombre, grupo, descripción, plazo de referencia)
 ├── glosario_renta_fija.py        # Explicaciones de los tooltips de la tabla de ETFs de bonos
 ├── tabla_tooltips.py             # Tabla HTML con color por celda y tooltip por fila (reutilizable)
+├── informe_base.py               # Piezas comunes de los informes en PDF: estilos, tablas, recuadros y gráficos
+├── informe_renta_fija.py         # Contenido del informe en PDF de Renta Fija (atribución, sensibilidad, límites)
 ├── renta_variable.py             # Motor de la sección Renta Variable y ETFs: beta, correlaciones, réplica del índice (sin Streamlit)
 ├── renta_variable_ui.py          # Pantalla de la sección Renta Variable y ETFs
 ├── catalogo_etfs_acciones.py     # Datos de cada ETF de acciones (nombre, grupo, descripción) y su reparto en tablas

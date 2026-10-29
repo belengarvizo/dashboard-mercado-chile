@@ -873,6 +873,32 @@ def _paso_emision(macro: pd.DataFrame) -> None:
 # ---------------------------------------------------------------------------
 # Entrada
 # ---------------------------------------------------------------------------
+def _descarga_del_informe(macro: pd.DataFrame, precios: pd.DataFrame) -> None:
+    """Prepara y entrega el informe en PDF de esta sección.
+
+    Son dos pasos a propósito. `st.download_button` necesita los bytes del archivo ANTES de dibujarse, así que ponerlo
+    directo obligaría a armar el PDF (~0,8 s medidos) en cada interacción de la pantalla, incluso cuando nadie lo pide."""
+    import informe_renta_fija as informe  # acá adentro: informe_renta_fija importa este módulo, y arriba sería circular
+
+    with st.expander("Descargar el informe en PDF"):
+        st.caption(
+            "Cinco páginas que explican qué pasó con los bonos en el período, **por qué** pasó (cuánto del movimiento explica la "
+            "duración y cuánto no) y qué lectura equivocada conviene evitar. Se arma en el momento con lo último que hay en la base."
+        )
+        periodo = st.selectbox("Período que cubre el informe", list(informe.PERIODOS), key="rf_periodo_informe")
+        if st.button("Preparar informe", key="rf_preparar_informe"):
+            with st.spinner("Armando el informe…"):
+                st.session_state["rf_informe"] = (periodo, informe.generar(macro, precios, periodo))
+        preparado = st.session_state.get("rf_informe")
+        if preparado and preparado[0] == periodo:
+            st.download_button(
+                "Descargar PDF", data=preparado[1], mime="application/pdf", key="rf_descargar_informe",
+                file_name=f"informe-renta-fija-{pd.Timestamp.now():%Y-%m-%d}.pdf",
+            )
+        elif preparado:
+            st.caption(f"El informe preparado es de «{preparado[0].lower()}». Vuelve a prepararlo para el período elegido.")
+
+
 def render_renta_fija(df_macro: pd.DataFrame, df_precios: pd.DataFrame) -> None:
     st.header("Renta fija: instrumentos reales, riesgo y curva de tasas")
     st.info(
@@ -881,6 +907,8 @@ def render_renta_fija(df_macro: pd.DataFrame, df_precios: pd.DataFrame) -> None:
     )
     macro = _recortar(df_macro)
     precios = _precios_en_columnas(df_precios)
+    if len(precios):
+        _descarga_del_informe(macro, precios)
     paso = st.segmented_control("Paso", PASOS, default=PASOS[0], key="rf_paso", label_visibility="collapsed") or PASOS[0]
 
     if paso == PASOS[0]:
