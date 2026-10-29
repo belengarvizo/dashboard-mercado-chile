@@ -175,6 +175,20 @@ TICKERS_RENTA_FIJA = [
     "SHY", "IEI", "IEF", "TLT", "AGG", "VCSH", "LQD", "HYG", "EMB", "TIP",
 ]
 
+# ETFs de acciones para la sección "Renta Variable y ETFs" (ver
+# catalogo_etfs_acciones.py, que describe cada uno): los cuatro mercados de
+# EEUU (SPY, QQQ, DIA, IWM), los 11 sectores del S&P 500 (SPDR Select Sector) y
+# seis países o regiones (EFA, EEM, EWJ, EWZ, FXI, ECH). ECH y EEM ya se bajaban
+# para el IPSA y el Benchmark: se repiten acá a propósito para que la lista sea
+# completa (el script diario quita los duplicados). Como en TICKERS_RENTA_FIJA,
+# yfinance entrega precios AJUSTADOS por distribuciones, lo correcto para ver el
+# retorno total de un ETF. Nombres verificados contra Yahoo Finance.
+TICKERS_ETFS_ACCIONES = [
+    "SPY", "QQQ", "DIA", "IWM",
+    "XLK", "XLC", "XLY", "XLF", "XLI", "XLE", "XLB", "XLRE", "XLV", "XLP", "XLU",
+    "EFA", "EEM", "EWJ", "EWZ", "FXI", "ECH",
+]
+
 # Universo de 50 acciones del S&P 500 para "Laboratorio Financiero": (ticker,
 # nombre de la empresa, sector GICS). Cubre con margen los 6 sectores que
 # exige la tarea (Energy, Financials, Health Care, Industrials, Information

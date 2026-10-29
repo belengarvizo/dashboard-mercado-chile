@@ -41,6 +41,7 @@ from constants import (
     TICKER_DOW_JONES,
     TICKERS_EEUU_ADICIONALES,
     TICKERS_RENTA_FIJA,
+    TICKERS_ETFS_ACCIONES,
     TICKERS_LABORATORIO_50,
     TICKERS_LABORATORIO_AMPLIADO,
     SECTOR_POR_TICKER_LABORATORIO,
@@ -51,6 +52,7 @@ import portfolio_lab as lab
 import estructura_tasas as et
 import modelo_recesion as mr
 from renta_fija_ui import render_renta_fija
+from renta_variable_ui import render_renta_variable
 from defensa_topdown import verificar_prediccion as _verificar_prediccion
 from market_data import (
     calcular_resumen_mercado,
@@ -2372,7 +2374,7 @@ except Exception:
 # instantáneo; a cambio, cualquier interacción deja de pagar las otras 10.
 SECCIONES_TODAS = [
     "Brief Premercado", "Indicadores macro", "Acciones IPSA", "Atribución IPSA", "Acciones Dow Jones",
-    "Riesgo", "Divisas", "Benchmark", "Laboratorio Financiero", "Modelo de Recesión EEUU", "Renta Fija", "Simulación Mesa de Dinero",
+    "Riesgo", "Divisas", "Benchmark", "Laboratorio Financiero", "Modelo de Recesión EEUU", "Renta Fija", "Renta Variable y ETFs", "Simulación Mesa de Dinero",
     "Defensa Top-Down",
 ]
 
@@ -6120,6 +6122,24 @@ if _seccion == "Renta Fija":
         st.warning(f"No se pudieron cargar los precios de los ETFs de bonos: {e}")
         _df_precios_renta_fija = pd.DataFrame(columns=["ticker", "fecha", "precio_cierre", "volumen"])
     render_renta_fija(_df_macro_renta_fija, _df_precios_renta_fija)
+
+# --- Renta Variable y ETFs: mercados, sectores, países, correlaciones (lógica en renta_variable.py, pantalla en renta_variable_ui.py) ---
+if _seccion == "Renta Variable y ETFs":
+    try:
+        _df_macro_renta_variable = cargar_series_macro()
+    except Exception as e:
+        # Sin macro solo se pierde la tasa libre de riesgo del Sharpe: el resto de la pantalla igual se dibuja.
+        st.warning(f"No se pudieron cargar los datos de mercado: {e}")
+        _df_macro_renta_variable = pd.DataFrame(columns=["nombre", "fecha", "valor"])
+    try:
+        # Los ETFs de bonos se suman para poder compararlos con los de acciones en el paso de correlaciones.
+        _df_precios_renta_variable = cargar_precios_acciones(
+            tuple(TICKERS_ETFS_ACCIONES) + tuple(TICKERS_RENTA_FIJA) + ("^GSPC", TICKER_DOW_JONES)
+        )
+    except Exception as e:
+        st.warning(f"No se pudieron cargar los precios de los ETFs de acciones: {e}")
+        _df_precios_renta_variable = pd.DataFrame(columns=["ticker", "fecha", "precio_cierre", "volumen"])
+    render_renta_variable(_df_macro_renta_variable, _df_precios_renta_variable)
 
 # --- Tab 8: Modelo de Recesión EEUU ---
 @st.cache_data(ttl=3600)

@@ -244,6 +244,31 @@ el ticker de un ETF, aparece una explicación en palabras de cada indicador con 
 - Simplificaciones: se valoriza en fecha de cupón (sin interés devengado) y no hay convenciones de días ni
   reinversión de cupones. La duración medida usa un plazo del Tesoro de referencia aproximado por ETF.
 
+**Renta Variable y ETFs (instrumentos reales, con tooltips).** Cuatro pasos con el mismo criterio que Renta Fija
+y las secciones de acciones: todo son datos reales de la base y, al pasar el mouse por el ticker de un ETF, aparece
+una explicación en palabras de cada indicador con los números de esa fila.
+
+1. **El mercado de EEUU:** los cuatro mercados (SPY, QQQ, DIA, IWM) y los 11 sectores del S&P 500 (XLK, XLC, XLY,
+   XLF, XLI, XLE, XLB, XLRE, XLV, XLP, XLU), con retornos, volatilidad, caída máxima, beta, correlación y Sharpe,
+   y el retorno de cada uno contra el S&P 500. Los sectores se agrupan en cíclicos, sensibles y defensivos.
+2. **Países y regiones:** EFA, EEM, EWJ, EWZ, FXI y ECH (Chile), en dólares, con la misma tabla.
+3. **Riesgo y diversificación:** un punto por ETF (volatilidad contra retorno, con los bonos de Renta Fija en gris)
+   y un mapa de correlaciones entre los ETFs que se elijan, de acciones y de bonos.
+4. **¿Replica al índice?:** SPY contra el S&P 500 y DIA contra el Dow Jones: diferencia de retorno, correlación
+   diaria y error de seguimiento.
+
+- **Origen de los datos:** los ETFs los baja el mismo script diario que las acciones
+  (`scripts/actualizar_acciones.py`, lista en `constants.TICKERS_ETFS_ACCIONES`); los precios vienen ajustados por
+  distribuciones, así que los retornos incluyen los dividendos que el fondo repartió. Beta, correlación y retorno
+  relativo se miden contra SPY (el ETF del S&P 500) y no contra el índice, para que los dos lados incluyan
+  dividendos y coticen en el mismo horario.
+- **Lo que no hay, la pantalla lo dice:** la composición de cada fondo, su valor liquidativo (y por lo tanto si cotiza
+  con prima o descuento), las comisiones y los dividendos por separado. El índice (^GSPC, ^DJI) es de precio puro: la
+  diferencia contra el ETF son en buena parte los dividendos, y la base no permite separarlos.
+- La matemática está en `renta_variable.py` (sin Streamlit, probada con series de respuesta conocida y con pruebas de
+  mutación), las explicaciones en `glosario_renta_variable.py`, los datos de cada ETF en `catalogo_etfs_acciones.py`
+  y la pantalla en `renta_variable_ui.py`. Reutiliza la tabla de `tabla_tooltips.py` y los ayudantes de `renta_fija_ui.py`.
+
 Arriba de las pestañas, y también en la barra lateral, se muestra la fecha y
 hora de la última actualización de cada fuente de datos.
 
@@ -449,6 +474,10 @@ dashboard-mercado-chile/
 ├── catalogo_renta_fija.py        # Datos de cada ETF de bonos (nombre, grupo, descripción, plazo de referencia)
 ├── glosario_renta_fija.py        # Explicaciones de los tooltips de la tabla de ETFs de bonos
 ├── tabla_tooltips.py             # Tabla HTML con color por celda y tooltip por fila (reutilizable)
+├── renta_variable.py             # Motor de la sección Renta Variable y ETFs: beta, correlaciones, réplica del índice (sin Streamlit)
+├── renta_variable_ui.py          # Pantalla de la sección Renta Variable y ETFs
+├── catalogo_etfs_acciones.py     # Datos de cada ETF de acciones (nombre, grupo, descripción) y su reparto en tablas
+├── glosario_renta_variable.py    # Explicaciones de los tooltips de las tablas de ETFs de acciones
 ├── calendario_economico.py       # Fechas verificadas de RPM, FOMC, IPC, IMACEC y OPEP+ 2026
 ├── models.py                    # Define las tablas de la base de datos
 ├── requirements.txt              # Librerías necesarias
