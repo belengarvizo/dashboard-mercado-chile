@@ -55,6 +55,8 @@ from renta_fija_ui import render_renta_fija
 from renta_variable_ui import render_renta_variable
 from fx_carry_ui import render_fx_carry
 from commodities_ui import render_commodities
+from derivados_ui import render_derivados
+from catalogo_derivados import SUBYACENTES as SUBYACENTES_DERIVADOS
 from constants import TICKERS_COMMODITIES, TICKER_PETROLEO_WTI
 from catalogo_fx import PARES_FX
 from defensa_topdown import verificar_prediccion as _verificar_prediccion
@@ -2378,7 +2380,7 @@ except Exception:
 # instantáneo; a cambio, cualquier interacción deja de pagar las otras 10.
 SECCIONES_TODAS = [
     "Brief Premercado", "Indicadores macro", "Acciones IPSA", "Atribución IPSA", "Acciones Dow Jones",
-    "Riesgo", "Divisas", "Benchmark", "Laboratorio Financiero", "Modelo de Recesión EEUU", "Renta Fija", "Renta Variable y ETFs", "FX y Carry Trade", "Commodities",
+    "Riesgo", "Divisas", "Benchmark", "Laboratorio Financiero", "Modelo de Recesión EEUU", "Renta Fija", "Renta Variable y ETFs", "FX y Carry Trade", "Commodities", "Derivados",
     "Simulación Mesa de Dinero", "Defensa Top-Down",
 ]
 
@@ -6175,6 +6177,22 @@ if _seccion == "Commodities":
         st.warning(f"No se pudieron cargar los precios de los commodities: {e}")
         _df_precios_commodities = pd.DataFrame(columns=["ticker", "fecha", "precio_cierre", "volumen"])
     render_commodities(_df_macro_commodities, _df_precios_commodities)
+
+# --- Derivados: cadena de opciones EN VIVO (lógica en black_scholes.py, pantalla en derivados_ui.py). A diferencia
+# de las demás secciones, esta no depende de datos recién bajados por el cron de precios de hoy: solo necesita el
+# historial ya guardado (para la volatilidad realizada) y la curva de tasas (para Black-Scholes). ---
+if _seccion == "Derivados":
+    try:
+        _df_macro_derivados = cargar_series_macro()
+    except Exception as e:
+        st.warning(f"No se pudieron cargar los datos de mercado: {e}")
+        _df_macro_derivados = pd.DataFrame(columns=["nombre", "fecha", "valor"])
+    try:
+        _df_precios_derivados = cargar_precios_acciones(tuple(SUBYACENTES_DERIVADOS))
+    except Exception as e:
+        st.warning(f"No se pudieron cargar los precios de los subyacentes: {e}")
+        _df_precios_derivados = pd.DataFrame(columns=["ticker", "fecha", "precio_cierre", "volumen"])
+    render_derivados(_df_macro_derivados, _df_precios_derivados)
 
 # --- Tab 8: Modelo de Recesión EEUU ---
 @st.cache_data(ttl=3600)

@@ -345,6 +345,32 @@ indicador con los números de esa fila.
 - Las explicaciones están en `glosario_commodities.py`, los datos de cada commodity en `catalogo_commodities.py` y la
   pantalla en `commodities_ui.py`.
 
+**Derivados (cadena de opciones real, EN VIVO).** La única sección del dashboard que no lee de la base: una
+opción es un contrato de strike y vencimiento fijos, así que no existe una serie histórica real que guardar día a
+día (eso sería un proyecto aparte). En vez de eso, consulta a Yahoo Finance en vivo cada vez que se abre y muestra
+solo el estado de **hoy**.
+
+1. **Qué es una opción:** call, put, en/fuera de dinero, valor intrínseco y valor de tiempo.
+2. **La cadena de opciones hoy:** strikes, primas, bid/ask, volumen, interés abierto y volatilidad implícita (la
+   que calcula el propio Yahoo) de 5 subyacentes ya seguidos en otras secciones (SPY, QQQ, IWM, DIA, TLT).
+3. **Black-Scholes contra el mercado:** para un contrato elegido, los cinco datos reales que entran al modelo
+   (subyacente, strike, días al vencimiento, tasa libre de riesgo interpolada de la curva real del Tesoro, precio
+   de mercado); el precio teórico con la volatilidad REALIZADA del subyacente (medida con el mismo motor de Renta
+   Fija) contra el precio real; y, despejando al revés, la volatilidad IMPLÍCITA que hace que el modelo calce
+   exactamente con el mercado — más las griegas (delta, gamma, theta, vega, rho) de ese contrato.
+
+- **Por qué no hay historial:** Yahoo entrega la cadena de hoy, no la de ayer con los mismos contratos (que ya
+  vencieron o cambiaron de precio). Guardar la cadena completa todos los días es un proyecto aparte, no hecho acá.
+- **Un vencimiento que vence hoy mismo** (T=0) hace que Black-Scholes solo pueda explicar el valor intrínseco, no
+  el precio real (que todavía tiene horas de mercado por delante): la pantalla elige por defecto otro vencimiento y
+  avisa si se elige ese a propósito.
+- **Lo que no hace:** no descuenta dividendos del subyacente, no corrige por ser una opción americana (se puede
+  ejercer antes del vencimiento, Black-Scholes es para europeas) y asume volatilidad constante hasta el vencimiento.
+- La matemática está en `black_scholes.py` (sin Streamlit, sin red, probada con los casos de libro — precio,
+  paridad put-call, volatilidad implícita, griegas verificadas por diferencias finitas); el catálogo de
+  subyacentes en `catalogo_derivados.py`; la pantalla y las únicas llamadas en vivo del dashboard, cacheadas con
+  un TTL corto, en `derivados_ui.py`.
+
 Arriba de las pestañas, y también en la barra lateral, se muestra la fecha y
 hora de la última actualización de cada fuente de datos.
 
@@ -563,6 +589,9 @@ dashboard-mercado-chile/
 ├── commodities_ui.py             # Pantalla de la sección Commodities (reutiliza el motor de renta_variable.py)
 ├── catalogo_commodities.py       # Datos de cada futuro de commodity (nombre, grupo, unidad, descripción)
 ├── glosario_commodities.py       # Explicaciones de los tooltips de la tabla de commodities
+├── black_scholes.py              # Precio, griegas y volatilidad implícita de opciones europeas (sin Streamlit, sin red)
+├── derivados_ui.py                # Pantalla de Derivados; las únicas llamadas en vivo a Yahoo Finance del dashboard
+├── catalogo_derivados.py          # Subyacentes con cadena de opciones líquida
 ├── calendario_economico.py       # Fechas verificadas de RPM, FOMC, IPC, IMACEC y OPEP+ 2026
 ├── models.py                    # Define las tablas de la base de datos
 ├── requirements.txt              # Librerías necesarias
