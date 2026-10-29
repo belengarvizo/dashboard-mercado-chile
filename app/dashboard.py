@@ -53,6 +53,8 @@ import estructura_tasas as et
 import modelo_recesion as mr
 from renta_fija_ui import render_renta_fija
 from renta_variable_ui import render_renta_variable
+from fx_carry_ui import render_fx_carry
+from catalogo_fx import PARES_FX
 from defensa_topdown import verificar_prediccion as _verificar_prediccion
 from market_data import (
     calcular_resumen_mercado,
@@ -2374,8 +2376,8 @@ except Exception:
 # instantáneo; a cambio, cualquier interacción deja de pagar las otras 10.
 SECCIONES_TODAS = [
     "Brief Premercado", "Indicadores macro", "Acciones IPSA", "Atribución IPSA", "Acciones Dow Jones",
-    "Riesgo", "Divisas", "Benchmark", "Laboratorio Financiero", "Modelo de Recesión EEUU", "Renta Fija", "Renta Variable y ETFs", "Simulación Mesa de Dinero",
-    "Defensa Top-Down",
+    "Riesgo", "Divisas", "Benchmark", "Laboratorio Financiero", "Modelo de Recesión EEUU", "Renta Fija", "Renta Variable y ETFs", "FX y Carry Trade",
+    "Simulación Mesa de Dinero", "Defensa Top-Down",
 ]
 
 # EL INTERRUPTOR. Estas tres salen del selector por decisión de la usuaria
@@ -6140,6 +6142,21 @@ if _seccion == "Renta Variable y ETFs":
         st.warning(f"No se pudieron cargar los precios de los ETFs de acciones: {e}")
         _df_precios_renta_variable = pd.DataFrame(columns=["ticker", "fecha", "precio_cierre", "volumen"])
     render_renta_variable(_df_macro_renta_variable, _df_precios_renta_variable)
+
+# --- FX y Carry Trade: divisas, tasas de varios países, carry y Chile (lógica en fx_carry.py, pantalla en fx_carry_ui.py) ---
+if _seccion == "FX y Carry Trade":
+    try:
+        _df_macro_fx = cargar_series_macro()
+    except Exception as e:
+        # Sin macro se pierde el carry y el paso de Chile, pero la tabla de divisas igual se dibuja.
+        st.warning(f"No se pudieron cargar los datos de mercado: {e}")
+        _df_macro_fx = pd.DataFrame(columns=["nombre", "fecha", "valor"])
+    try:
+        _df_precios_fx = cargar_precios_acciones(tuple(PARES_FX))
+    except Exception as e:
+        st.warning(f"No se pudieron cargar los precios de las divisas: {e}")
+        _df_precios_fx = pd.DataFrame(columns=["ticker", "fecha", "precio_cierre", "volumen"])
+    render_fx_carry(_df_macro_fx, _df_precios_fx)
 
 # --- Tab 8: Modelo de Recesión EEUU ---
 @st.cache_data(ttl=3600)

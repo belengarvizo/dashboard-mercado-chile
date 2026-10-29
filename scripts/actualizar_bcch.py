@@ -184,6 +184,24 @@ SERIES_RECESION_FRED = {
     "NFCI": {"nombre": "Índice de condiciones financieras nacionales de Chicago Fed (NFCI)", "frecuencia": "semanal"},
 }
 
+# Tasas cortas de OTROS países, para el carry trade de la sección "FX y Carry Trade"
+# (el diferencial de tasas entre dos monedas). Mismo endpoint CSV público de FRED.
+# Verificadas el 29-10-2026 con una descarga real (existen, son gratis y están al día):
+#   - ECBDFR: tasa de la facilidad de depósito del BCE (zona euro), diaria.
+#   - IUDSOIA: SONIA, la tasa overnight de Reino Unido, diaria.
+#   - IRSTCI01xxM156N: tasa interbancaria de corto plazo de la OCDE, mensual, para Japón,
+#     México y Brasil. Es una tasa de mercado muy cercana a la de política, no la de
+#     política misma, y llega con ~1 mes de rezago.
+# Canadá, Suiza, Australia y Nueva Zelanda NO están: sus series en FRED no existen o
+# terminan en 2023-2024, y no se rellenan con otra cosa.
+SERIES_TASAS_PAISES_FRED = {
+    "ECBDFR": {"nombre": "Tasa de política del BCE, zona euro (facilidad de depósito, ECBDFR)", "frecuencia": "diaria"},
+    "IUDSOIA": {"nombre": "Tasa overnight SONIA de Reino Unido (IUDSOIA)", "frecuencia": "diaria"},
+    "IRSTCI01JPM156N": {"nombre": "Tasa interbancaria de corto plazo de Japón (OCDE, IRSTCI01JPM156N)", "frecuencia": "mensual"},
+    "IRSTCI01MXM156N": {"nombre": "Tasa interbancaria de corto plazo de México (OCDE, IRSTCI01MXM156N)", "frecuencia": "mensual"},
+    "IRSTCI01BRM156N": {"nombre": "Tasa interbancaria de corto plazo de Brasil (OCDE, IRSTCI01BRM156N)", "frecuencia": "mensual"},
+}
+
 
 def descargar_serie(codigo_serie: str, first_date: str = "2015-01-01") -> list[dict]:
     """Pide una serie a la API del BCCh y devuelve una lista de {fecha, valor}."""
@@ -345,6 +363,11 @@ def _construir_jobs() -> list[dict]:
         jobs.append({
             "codigo": f"FRED.{fred_id}", "nombre": info["nombre"], "frecuencia": info["frecuencia"],
             "kind": "fred", "ident": fred_id, "first_date_completo": "1948-01-01",
+        })
+    for fred_id, info in SERIES_TASAS_PAISES_FRED.items():
+        jobs.append({
+            "codigo": f"FRED.{fred_id}", "nombre": info["nombre"], "frecuencia": info["frecuencia"],
+            "kind": "fred", "ident": fred_id, "first_date_completo": "2015-01-01",
         })
     return jobs
 

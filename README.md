@@ -269,6 +269,39 @@ una explicación en palabras de cada indicador con los números de esa fila.
   mutación), las explicaciones en `glosario_renta_variable.py`, los datos de cada ETF en `catalogo_etfs_acciones.py`
   y la pantalla en `renta_variable_ui.py`. Reutiliza la tabla de `tabla_tooltips.py` y los ayudantes de `renta_fija_ui.py`.
 
+**FX y Carry Trade (divisas reales, con tooltips).** Cuatro pasos con el mismo criterio que Renta Fija y Renta
+Variable: todo son datos reales de la base y, al pasar el mouse por el nombre de una fila, aparece una explicación en
+palabras con los números de esa fila.
+
+1. **El mercado de divisas:** los 13 pares del módulo de trading (EUR/USD, USD/CLP, USD/BRL, EUR/JPY...) y el índice
+   dólar, con retornos, volatilidad, rango del año y correlación con USD/CLP, y un gráfico para compararlos. Cada tooltip
+   dice cómo se cotiza el par y qué significa en palabras que suba o baje.
+2. **Tasas y carry:** para las 6 monedas con tasa real en la base (euro, libra, yen, peso mexicano, real y peso chileno),
+   el diferencial de tasas contra EEUU y lo que pasó en el último año al comprar esa moneda financiándose en dólares,
+   separado en **spot** (cuánto se movió la moneda) y **carry** (el diferencial). Un gráfico muestra si el tipo de cambio
+   anuló o no el diferencial.
+3. **La estrategia y su riesgo:** la estrategia de carry (cada día larga en la moneda de tasa mayor que la de EEUU, corta
+   en la de menor, decidido con el diferencial del día anterior) por moneda y como cartera de igual peso, en 1, 3 o 5 años:
+   retorno anualizado, volatilidad, caída máxima, peor mes y meses ganadores.
+4. **Chile: dólar, cobre y tasas:** dólar observado y cobre del Banco Central con su correlación móvil, y el dólar contra el
+   diferencial TPM menos Fed funds.
+
+- **Origen de los datos:** los pares los baja el script diario de acciones (`scripts/actualizar_acciones.py`) y, con permiso,
+  se extendió su historia de 1 a 5 años agregando solo fechas más antiguas. Las tasas de otros países son 5 series nuevas en
+  `scripts/actualizar_bcch.py` (`SERIES_TASAS_PAISES_FRED`): BCE y SONIA (diarias) y las interbancarias de corto plazo de la OCDE
+  para Japón, México y Brasil (mensuales, con ~1 mes de rezago, constantes dentro de cada mes). Con la TPM de Chile y la Fed
+  funds que ya estaban, completan las 6 monedas.
+- **Lo que no hay, la pantalla lo dice:** tasas al día de Canadá, Suiza, Australia y Nueva Zelanda (esas monedas están en la
+  tabla de divisas pero no en el carry), forwards y swaps de divisas, costos de transacción y precios de compra y venta. El carry
+  es una aproximación con tasas de corto plazo de dominio público.
+- **Una correlación que no se muestra, a propósito:** las barras diarias de las divisas de Yahoo (los tickers `=X`) llevan otra
+  convención de fecha que las acciones y el índice dólar: en 50 % a 90 % de ellas el «cierre» es idéntico a la apertura del mismo
+  día, y cada fila corresponde a la rueda anterior de las otras series (EUR/USD contra el índice dólar da -0,09 el mismo día y
+  -0,88 al día siguiente, en todos los trimestres desde 2021). Por eso no se calcula ninguna correlación de una divisa con la bolsa
+  o con el índice dólar, y no se «corrige» desplazando una serie: sería suponer. Es el mismo criterio de `trading_correlacion.py`.
+- La matemática está en `fx_carry.py` (sin Streamlit, probada con series de respuesta conocida y con pruebas de mutación), las
+  explicaciones en `glosario_fx.py`, los datos de cada par y moneda en `catalogo_fx.py` y la pantalla en `fx_carry_ui.py`.
+
 Arriba de las pestañas, y también en la barra lateral, se muestra la fecha y
 hora de la última actualización de cada fuente de datos.
 
@@ -478,6 +511,10 @@ dashboard-mercado-chile/
 ├── renta_variable_ui.py          # Pantalla de la sección Renta Variable y ETFs
 ├── catalogo_etfs_acciones.py     # Datos de cada ETF de acciones (nombre, grupo, descripción) y su reparto en tablas
 ├── glosario_renta_variable.py    # Explicaciones de los tooltips de las tablas de ETFs de acciones
+├── fx_carry.py                   # Motor de la sección FX y Carry Trade: retorno del carry, estrategia, estadísticas (sin Streamlit)
+├── fx_carry_ui.py                # Pantalla de la sección FX y Carry Trade
+├── catalogo_fx.py                # Datos de cada par de divisas y de las monedas con tasa para el carry
+├── glosario_fx.py                # Explicaciones de los tooltips de las tablas de FX y carry
 ├── calendario_economico.py       # Fechas verificadas de RPM, FOMC, IPC, IMACEC y OPEP+ 2026
 ├── models.py                    # Define las tablas de la base de datos
 ├── requirements.txt              # Librerías necesarias
