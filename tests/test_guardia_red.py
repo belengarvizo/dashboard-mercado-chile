@@ -254,27 +254,43 @@ def test_despues_de_cualquier_load_dotenv_las_claves_vuelven_a_quedar_vacias(tmp
     assert os.environ.get("GEMINI_API_KEY") == ""
 
 
-def test_un_subproceso_no_recupera_las_credenciales_y_choca_con_el_proxy_muerto(pytester):
-    """Un proceso hijo de Python SIN guardia: hereda el entorno (claves vacías, proxies muertos). load_dotenv() no
-    puede reponer las claves (no pisa variables existentes) y su conexión va a 127.0.0.1:9, cerrado. Solo imprime
-    booleanos y el tipo de error: ningún valor."""
+def test_un_subproceso_no_recupera_las_credenciales_y_choca_con_el_proxy_muerto():
+    """P-2: el proceso hijo se crea por la única vía permitida (ya no con pytester): un Python que instala TODOS los
+    guardias antes de ejecutar nada, con un entorno armado desde cero y en una carpeta temporal sin .env. Dentro del
+    hijo: las claves siguen vacías aun después de load_dotenv, la DATABASE_URL es la bloqueada, leer el .env
+    directamente se bloquea, la red se bloquea y no puede crear un nieto. Solo imprime booleanos y tipos de error."""
     codigo = (
-        "import os, urllib.request\n"
+        "import os, urllib.request, subprocess, sys\n"
         "from dotenv import load_dotenv\n"
         f"load_dotenv(r'{RAIZ / '.env'}')\n"
         "claves = ('GEMINI_API_KEY', 'GOOGLE_API_KEY', 'BCCH_TOKEN')\n"
         "print('claves_vacias=' + str(all(os.environ.get(c) == '' for c in claves)))\n"
+        "print('url_bloqueada=' + str(os.environ.get('DATABASE_URL') == sys.modules['_guardia_bd'].URL_BLOQUEADA))\n"
         "print('proxy_muerto=' + str(os.environ.get('HTTPS_PROXY') == 'http://127.0.0.1:9'))\n"
+        "print('sin_env_en_la_carpeta=' + str(not os.path.exists('.env')))\n"
         "try:\n"
-        f"    urllib.request.urlopen('http://{IP_DOCUMENTACION}/', timeout=3)\n"
-        "    print('red=SALIO')\n"
+        f"    open(r'{RAIZ / '.env'}').read(); print('lectura=LEYO')\n"
+        "except Exception as e:\n"
+        "    print('lectura=' + type(e).__name__)\n"
+        "try:\n"
+        f"    urllib.request.urlopen('http://{IP_DOCUMENTACION}/', timeout=3); print('red=SALIO')\n"
         "except Exception as e:\n"
         "    print('red=' + type(e).__name__)\n"
+        "try:\n"
+        "    subprocess.run([sys.executable, '-c', 'pass']); print('nieto=CREADO')\n"
+        "except Exception as e:\n"
+        "    print('nieto=' + type(e).__name__)\n"
     )
-    resultado = pytester.run(sys.executable, "-c", codigo, timeout=60)
-    salida = resultado.stdout.str()
-    assert "claves_vacias=True" in salida and "proxy_muerto=True" in salida, salida
-    assert "red=URLError" in salida and "red=SALIO" not in salida, salida
+    resultado = sys.modules["_guardia_procesos"].ejecutar_python_con_guardias(
+        codigo, motivo="verificar el aislamiento de un proceso hijo permitido")
+    salida = resultado.stdout
+    for esperado in ("claves_vacias=True", "url_bloqueada=True", "proxy_muerto=True", "sin_env_en_la_carpeta=True",
+                     "lectura=ArchivoProtegido", "nieto=ProcesoBloqueado"):
+        assert esperado in salida, (esperado, salida, resultado.stderr[-500:])
+    # urllib respeta primero el proxy muerto (127.0.0.1:9, cerrado) y falla con URLError; sin proxy, la bloquearía el
+    # guardia de sockets. Cualquiera de las dos barreras vale; lo que no puede pasar es que salga.
+    assert "red=SALIO" not in salida
+    assert "red=URLError" in salida or "red=ConexionExternaBloqueada" in salida, salida
 
 
 # ---------------------------------------------------------------------------
@@ -409,8 +425,9 @@ def test_ninguna_prueba_usa_un_servicio_externo_sin_declararlo():
 
 
 def test_la_marca_de_intentos_esperados_solo_la_usan_las_pruebas_del_guardia():
+    pruebas_del_guardia = {Path(__file__).name, "test_guardia_procesos.py"}  # P-2 agregó el guardia de procesos
     for ruta in CARPETA_TESTS.glob("test_*.py"):
-        if ruta.name != Path(__file__).name:
+        if ruta.name not in pruebas_del_guardia:
             assert "intentos_de_red_esperados" not in ruta.read_text(encoding="utf-8"), ruta.name
 
 

@@ -10,7 +10,6 @@ import _guardia_bd  # noqa: F401  (debe ir primero: protege la base de producci�
 import ast
 import os
 import re
-import subprocess
 import sys
 from pathlib import Path
 
@@ -221,21 +220,10 @@ def test_los_motivos_de_rechazo_no_revelan_la_url():
         assert "invalid" not in motivo and "secreto" not in motivo
 
 
-def _la_url_real_de_produccion_seria_rechazada():
-    """Lee la URL del .env en memoria, la valida y devuelve solo un booleano."""
-    from dotenv import dotenv_values
-    archivo = RAIZ / ".env"
-    if not archivo.is_file():
-        return None
-    url = dotenv_values(archivo).get("DATABASE_URL")
-    if not url:
-        return None
-    produccion = g.huellas_de_produccion([url])
-    return g.motivo_de_rechazo_de_url_de_pruebas(url, produccion) is not None
-
-
 def test_la_url_real_de_produccion_no_sirve_como_base_de_pruebas():
-    resultado = _la_url_real_de_produccion_seria_rechazada()
+    # P-2: el guardia lo calcula una vez al instalarse, con la URL en memoria, y guarda solo el booleano. Antes esta
+    # prueba volvía a leer el .env; ahora ninguna prueba lo necesita (y la lectura directa está bloqueada).
+    resultado = g.LA_URL_DE_PRODUCCION_SE_RECHAZA
     if resultado is None:
         pytest.skip("No hay .env con DATABASE_URL en esta máquina.")
     assert resultado is True
@@ -256,21 +244,11 @@ def test_detecta_un_archivo_de_tests_como_programa_principal():
     assert not g.es_ejecucion_directa_de_un_archivo_de_prueba(object())
 
 
-def _entorno_sin_produccion():
-    entorno = {k: v for k, v in os.environ.items() if k not in g.VARIABLES_LIBPQ}
-    entorno["DATABASE_URL"] = URL_FALSA_REMOTA
-    entorno.pop("FRI_PRUEBAS_POSTGRES", None)
-    entorno.pop("TEST_DATABASE_URL", None)
-    return entorno
-
-
 def test_ejecutar_un_archivo_de_prueba_con_python_se_detiene():
-    # El archivo elegido no usa la base; aun así, el subproceso corre con una
-    # DATABASE_URL falsa por si el guardia fallara.
-    r = subprocess.run(
-        [sys.executable, str(CARPETA_TESTS / "test_black_scholes.py")],
-        cwd=str(RAIZ), env=_entorno_sin_produccion(),
-        capture_output=True, text=True, timeout=120,
+    # P-2: el proceso hijo se crea por la única vía permitida para esto, con un entorno armado desde cero
+    # (DATABASE_URL bloqueada, sin claves, sin proxies útiles) y en una carpeta temporal sin .env.
+    r = sys.modules["_guardia_procesos"].ejecutar_archivo_de_prueba(
+        "test_black_scholes.py", motivo="verificar que el guardia detiene la ejecución directa"
     )
     assert r.returncode != 0
     assert "usa pytest" in r.stderr
@@ -281,7 +259,9 @@ def test_ejecutar_un_archivo_de_prueba_con_python_se_detiene():
 # ---------------------------------------------------------------------------
 
 ARCHIVOS_DE_PRUEBA = sorted(CARPETA_TESTS.glob("test_*.py"))
-ARCHIVOS_DEL_GUARDIA = {"_guardia_bd.py", "test_guardia_bd.py"}
+# _guardia_procesos.py importa subprocess para crear los únicos procesos permitidos; test_guardia_procesos.py
+# provoca a propósito lo que estas reglas prohíben (con un .env ficticio), para verificar que el guardia lo frena.
+ARCHIVOS_DEL_GUARDIA = {"_guardia_bd.py", "test_guardia_bd.py", "_guardia_procesos.py", "test_guardia_procesos.py"}
 
 
 def _primera_sentencia_despues_del_docstring(ruta):

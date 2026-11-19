@@ -255,7 +255,18 @@ def _omitir_externas_sin_autorizacion(items):
 def motivo_de_falla_por_red(intentos, marcada_externa, intentos_esperados):
     """None si la prueba está en regla; si no, el motivo para dejarla en rojo. Un intento cuenta aunque el código lo
     haya capturado: el dashboard degrada a «sin datos» ante cualquier excepción, y eso escondería la conexión."""
-    if not intentos or marcada_externa or intentos_esperados:
+    if not intentos or intentos_esperados:
+        return None
+    # P-2: la marca 'externa' autoriza RED; nunca procesos hijos ni la lectura directa del .env.
+    nunca_permitidos = [i for i in intentos if i["capa"].startswith(("proceso.", "archivo."))]
+    if nunca_permitidos:
+        detalle = ", ".join(sorted({f"{i['capa']} -> {i['destino']}" for i in nunca_permitidos}))
+        return (
+            f"La prueba intentó {len(nunca_permitidos)} acción(es) que el guardia no permite en las pruebas ({detalle}): "
+            "crear un proceso hijo o leer el .env directamente. Se bloquearon; aunque el código haya capturado la "
+            "excepción, la prueba queda en rojo. La marca 'externa' no autoriza esto."
+        )
+    if marcada_externa:
         return None
     detalle = ", ".join(sorted({f"{i['capa']} -> {i['destino']}" for i in intentos}))
     return (

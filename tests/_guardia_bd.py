@@ -274,6 +274,19 @@ def _urls_de_produccion_conocidas(database_url_heredada):
     return urls
 
 
+# P-2: si la DATABASE_URL del .env serviría como base de pruebas (debe ser False). Se calcula una vez al instalar,
+# con la URL en memoria, y solo se guarda el booleano: así ninguna prueba necesita volver a leer el .env.
+LA_URL_DE_PRODUCCION_SE_RECHAZA = None
+
+
+def _registrar_si_la_url_de_produccion_se_rechaza(url_del_env):
+    global LA_URL_DE_PRODUCCION_SE_RECHAZA
+    if url_del_env:
+        LA_URL_DE_PRODUCCION_SE_RECHAZA = motivo_de_rechazo_de_url_de_pruebas(
+            url_del_env, huellas_de_produccion([url_del_env])
+        ) is not None
+
+
 def _instalar():
     global _BASE_AUTORIZADA
 
@@ -285,9 +298,9 @@ def _instalar():
         )
 
     # Lo que haya en el entorno o en .env se considera producción.
-    produccion = huellas_de_produccion(
-        _urls_de_produccion_conocidas(os.environ.get("DATABASE_URL"))
-    )
+    urls_conocidas = _urls_de_produccion_conocidas(os.environ.get("DATABASE_URL"))
+    produccion = huellas_de_produccion(urls_conocidas)
+    _registrar_si_la_url_de_produccion_se_rechaza(urls_conocidas[1] if len(urls_conocidas) > 1 else None)
 
     for variable in VARIABLES_LIBPQ:
         os.environ.pop(variable, None)

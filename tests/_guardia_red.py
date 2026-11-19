@@ -25,6 +25,16 @@ CAPAS (independientes: si una falla, las otras siguen)
      que tampoco con override=True ni leyendo el archivo devuelvan los valores. El .env no se lee para guardar
      valores, no se modifica y nada se imprime: solo se usan los NOMBRES de sus variables.
 
+P-2: CREDENCIALES Y PROCESOS
+============================
+  - python-dotenv (load_dotenv, también con override=True; dotenv_values; DotEnv.dict/.parse; get_key) entrega las
+    credenciales vacías y la DATABASE_URL que decidió _guardia_bd, nunca las del archivo. Después de cada load_dotenv
+    se reponen las claves vacías y esa DATABASE_URL.
+  - Las variables HEREDADAS con nombre de credencial (API_KEY, TOKEN, SECRET, PASSWORD...) también quedan vacías.
+  - Abrir el .env (o .streamlit/secrets.toml) sin python-dotenv se bloquea: open, io.open, _io.open, os.open y la
+    referencia propia de tokenize (tokenize.open, linecache). io.FileIO, código en C y ctypes no pasan por aquí.
+  - Procesos hijos: _guardia_procesos.py (denegación por defecto), que se instala al final.
+
 AUTORIZACIÓN
 ============
 Las pruebas que necesitan servicios externos llevan la marca `externa` y conftest.py las omite salvo que
@@ -41,8 +51,10 @@ import atexit
 import contextlib
 import ipaddress
 import os
+import re
 import socket
 import sys
+import threading
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -309,38 +321,144 @@ def _nombres_en_dotenv() -> set[str]:
     return set(dotenv_values(archivo).keys())
 
 
+# P-2: además de las conocidas, cualquier variable HEREDADA con nombre de credencial queda vacía en este proceso.
+_PATRON_SENSIBLE = re.compile(r"(API_?KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|PRIVATE_KEY)", re.IGNORECASE)
+_URL_DEL_GUARDIA = None    # la DATABASE_URL que decidió _guardia_bd (bloqueada, o la base local autorizada)
+_LECTURA_VIA_DOTENV = threading.local()
+ARCHIVOS_PROTEGIDOS: tuple = ()
+
+
+def es_nombre_sensible(nombre: str) -> bool:
+    return bool(_PATRON_SENSIBLE.search(nombre)) and nombre not in MANEJADAS_POR_GUARDIA_BD
+
+
 def _reaplicar_neutralizacion() -> None:
     for nombre in CLAVES_NEUTRALIZADAS:
         os.environ[nombre] = ""
+    if _URL_DEL_GUARDIA is not None:
+        os.environ["DATABASE_URL"] = _URL_DEL_GUARDIA  # ni con override=True vuelve la de producción
 
 
-def _instalar_entorno() -> None:
-    global CLAVES_NEUTRALIZADAS
-    for variable in VARIABLES_DE_PROXY:
-        os.environ[variable] = PROXY_MUERTO
-    os.environ["NO_PROXY"] = os.environ["no_proxy"] = SIN_PROXY
-    nombres = (_nombres_en_dotenv() | set(CLAVES_SIEMPRE_NEUTRALIZADAS)) - set(MANEJADAS_POR_GUARDIA_BD)
-    CLAVES_NEUTRALIZADAS = tuple(sorted(nombres))
-    _reaplicar_neutralizacion()
+def _enmascarar(valores: dict) -> dict:
+    """Lo que python-dotenv entrega: claves vacías y la DATABASE_URL del guardia, nunca las del archivo."""
+    resultado = {}
+    for k, v in valores.items():
+        if k in CLAVES_NEUTRALIZADAS or es_nombre_sensible(k):
+            resultado[k] = ""
+        elif k == "DATABASE_URL" and _URL_DEL_GUARDIA is not None:
+            resultado[k] = _URL_DEL_GUARDIA
+        else:
+            resultado[k] = v
+    return resultado
 
+
+class _LeyendoConDotenv:
+    """Mientras python-dotenv lee el archivo (sus resultados salen enmascarados), la apertura del .env se permite."""
+    def __enter__(self):
+        _LECTURA_VIA_DOTENV.activa = getattr(_LECTURA_VIA_DOTENV, "activa", 0) + 1
+
+    def __exit__(self, *exc):
+        _LECTURA_VIA_DOTENV.activa -= 1
+
+
+def _instalar_dotenv() -> None:
     import dotenv
     import dotenv.main
     for modulo in (dotenv, dotenv.main):
         cargar = getattr(modulo, "load_dotenv")
         if not getattr(cargar, "_guardia_red", False):
             def load_dotenv(*args, _original=cargar, **kwargs):
-                resultado = _original(*args, **kwargs)
-                _reaplicar_neutralizacion()  # ni con override=True vuelven las claves
+                with _LeyendoConDotenv():
+                    resultado = _original(*args, **kwargs)
+                _reaplicar_neutralizacion()  # ni con override=True vuelven las claves ni la DATABASE_URL
                 return resultado
             load_dotenv._guardia_red = True
             modulo.load_dotenv = load_dotenv
         leer = getattr(modulo, "dotenv_values")
         if not getattr(leer, "_guardia_red", False):
             def dotenv_values(*args, _original=leer, **kwargs):
-                valores = _original(*args, **kwargs)
-                return {k: ("" if k in CLAVES_NEUTRALIZADAS else v) for k, v in valores.items()}
+                with _LeyendoConDotenv():
+                    return _enmascarar(_original(*args, **kwargs))
             dotenv_values._guardia_red = True
             modulo.dotenv_values = dotenv_values
+    # La clase interna: DotEnv(...).dict() / .parse() / .get() y get_key() pasan por aquí; load_dotenv también.
+    clase = dotenv.main.DotEnv
+    if not getattr(clase.dict, "_guardia_red", False):
+        original_dict, original_parse = clase.dict, clase.parse
+
+        def dict_enmascarado(self, _original=original_dict):
+            with _LeyendoConDotenv():
+                return _enmascarar(_original(self))
+
+        def parse_enmascarado(self, _original=original_parse):
+            with _LeyendoConDotenv():
+                for k, v in _original(self):
+                    yield k, _enmascarar({k: v})[k]
+        dict_enmascarado._guardia_red = parse_enmascarado._guardia_red = True
+        clase.dict, clase.parse = dict_enmascarado, parse_enmascarado
+
+
+class ArchivoProtegido(Exception):
+    """Una lectura directa del .env (sin pasar por python-dotenv) que el guardia rechazó antes de abrir el archivo."""
+
+
+def _es_protegido(ruta) -> bool:
+    if isinstance(ruta, int) or not ARCHIVOS_PROTEGIDOS:
+        return False
+    try:
+        texto = os.fsdecode(os.fspath(ruta))
+    except TypeError:
+        return False
+    if ".env" not in texto and "secrets" not in texto:  # atajo barato para la inmensa mayoría de aperturas
+        return False
+    return os.path.normcase(os.path.abspath(texto)) in ARCHIVOS_PROTEGIDOS
+
+
+def _envolver_apertura(original, capa):
+    def abrir(ruta, *args, **kwargs):
+        if _es_protegido(ruta) and not getattr(_LECTURA_VIA_DOTENV, "activa", 0):
+            _registrar(capa, Path(os.fsdecode(os.fspath(ruta))).name, False)
+            raise ArchivoProtegido(
+                f"Lectura directa de {Path(os.fsdecode(os.fspath(ruta))).name} bloqueada por el guardia de pruebas: "
+                "contiene credenciales. Usa python-dotenv (entrega los valores enmascarados) o datos ficticios."
+            )
+        return original(ruta, *args, **kwargs)
+    abrir._guardia_red = True
+    return abrir
+
+
+def _instalar_archivos_protegidos() -> None:
+    global ARCHIVOS_PROTEGIDOS
+    ARCHIVOS_PROTEGIDOS = tuple(os.path.normcase(str(p)) for p in (RAIZ / ".env", RAIZ / ".streamlit" / "secrets.toml"))
+    import _io
+    import builtins
+    import io
+    import tokenize
+    if not getattr(builtins.open, "_guardia_red", False):
+        abrir = _envolver_apertura(builtins.open, "archivo.open")
+        builtins.open = abrir
+        io.open = abrir
+        _io.open = abrir  # la función en C, que algunos módulos llaman directo
+    # tokenize guardó su propia referencia a open al importarse (pytest lo importa antes que este guardia); de ella
+    # dependen tokenize.open y linecache.
+    if hasattr(tokenize, "_builtin_open") and not getattr(tokenize._builtin_open, "_guardia_red", False):
+        tokenize._builtin_open = _envolver_apertura(tokenize._builtin_open, "archivo.tokenize")
+    if not getattr(os.open, "_guardia_red", False):
+        os.open = _envolver_apertura(os.open, "archivo.os.open")
+    CAPAS_INSTALADAS.append("lectura directa del .env bloqueada")
+
+
+def _instalar_entorno() -> None:
+    global CLAVES_NEUTRALIZADAS, _URL_DEL_GUARDIA
+    _URL_DEL_GUARDIA = os.environ.get("DATABASE_URL")  # _guardia_bd ya la fijó (bloqueada o base local autorizada)
+    for variable in VARIABLES_DE_PROXY:
+        os.environ[variable] = PROXY_MUERTO
+    os.environ["NO_PROXY"] = os.environ["no_proxy"] = SIN_PROXY
+    heredadas = {n for n in os.environ if es_nombre_sensible(n)}
+    nombres = (_nombres_en_dotenv() | set(CLAVES_SIEMPRE_NEUTRALIZADAS) | heredadas) - set(MANEJADAS_POR_GUARDIA_BD)
+    CLAVES_NEUTRALIZADAS = tuple(sorted(nombres))
+    _reaplicar_neutralizacion()
+    _instalar_dotenv()
     CAPAS_INSTALADAS.append("proxies muertos y claves neutralizadas")
 
 
@@ -357,8 +475,23 @@ def instalar() -> None:
     _instalar_entorno()
     _instalar_sockets()
     _instalar_clientes()
+    _instalar_archivos_protegidos()  # después de leer los nombres del .env (lo hace _instalar_entorno)
+    _instalar_guardia_de_procesos()
     INSTALADO = True
     atexit.register(_imprimir_resumen)
+
+
+def _instalar_guardia_de_procesos() -> None:
+    """P-2: procesos hijos, con denegación por defecto (ver _guardia_procesos.py). Se carga por su ruta, igual que
+    este módulo, y queda registrado como `_guardia_procesos`."""
+    if "_guardia_procesos" not in sys.modules:
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("_guardia_procesos", CARPETA_TESTS / "_guardia_procesos.py")
+        modulo = importlib.util.module_from_spec(spec)
+        sys.modules["_guardia_procesos"] = modulo
+        spec.loader.exec_module(modulo)
+    sys.modules["_guardia_procesos"].instalar()
+    CAPAS_INSTALADAS.append("procesos hijos")
 
 
 def _imprimir_resumen() -> None:
