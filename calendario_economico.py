@@ -297,3 +297,239 @@ def proximos_eventos(hoy: date, dias: int = 7) -> list[EventoCalendario]:
     próximos `dias` días desde `hoy` (inclusive), ordenados cronológicamente."""
     limite = hoy + timedelta(days=dias)
     return [e for e in EVENTOS if e.fecha_inicio <= limite and e.fecha_fin >= hoy]
+
+
+# --- Agendas anuales y su ciclo de publicación ----------------------------
+# El calendario se agota solo cada año, y la agenda siguiente no existe hasta
+# que la institución la publica. Para distinguir un problema real (una agenda
+# publicada que no se cargó, o fechas que no tienen respaldo) de una espera
+# legítima (la institución todavía no publica), cada agenda anual queda
+# registrada con su estado y con la fecha en que alguien revisó la fuente.
+#
+# Dos cosas que NO se confunden:
+#   - El CICLO HABITUAL de publicación (cuándo suele publicar la institución)
+#     no confirma nada: solo dice desde cuándo vale la pena revisar y hasta
+#     cuándo es razonable esperar.
+#   - La CONFIRMACIÓN es un dato: «se revisó la fuente el día X y la agenda
+#     estaba (o no) publicada». Solo eso cambia el estado de una agenda.
+#   - Una confirmación de que la agenda NO estaba publicada envejece: vale como
+#     estado actual solo durante VIGENCIA_DE_VERIFICACION_DIAS. Después, lo que
+#     se sabe es que «no se verificó recientemente», no que siga sin publicarse.
+# Ninguna fecha de evento sale de aquí: este registro no genera eventos.
+#
+# Estados que se REGISTRAN (lo que alguien comprobó en la fuente):
+AGENDA_INCORPORADA = "publicada e incorporada"
+AGENDA_PUBLICADA_SIN_INCORPORAR = "publicada, sin incorporar"
+AGENDA_NO_PUBLICADA = "fuente consultada: todavía no publicada"
+# Estado que se DEDUCE (nunca se registra a mano): no hay registro, o la consulta que dice «no publicada» venció.
+AGENDA_NO_VERIFICADA = "publicación no verificada recientemente"
+
+# Una verificación de «todavía no publicada» deja de describir el presente después de 7 días: es el horizonte de la
+# ventana visible del dashboard, así que una consulta más vieja no garantiza que los próximos 7 días estén cubiertos.
+VIGENCIA_DE_VERIFICACION_DIAS = 7
+
+
+@dataclass(frozen=True)
+class AgendaAnual:
+    tipo: str                         # clave de INDICADOR_POR_TIPO (el IPoM usa la agenda de RPM)
+    anio: int
+    estado: str                       # uno de los estados que se registran (no AGENDA_NO_VERIFICADA)
+    verificado_al: date | None        # última vez que se revisó la fuente
+    fuente: str
+    publicada_el: date | None = None  # solo si se conoce el día en que la institución la publicó
+
+
+def estado_efectivo(agenda: AgendaAnual | None, hoy: date) -> str:
+    """El estado que vale HOY. Una agenda publicada (incorporada o no) lo sigue estando; una consulta que dijo «todavía
+    no publicada» solo vale mientras esté vigente; sin registro, o con la consulta vencida, no se sabe."""
+    if agenda is None:
+        return AGENDA_NO_VERIFICADA
+    if agenda.estado == AGENDA_NO_PUBLICADA:
+        vigente = (agenda.verificado_al is not None
+                   and 0 <= (hoy - agenda.verificado_al).days <= VIGENCIA_DE_VERIFICACION_DIAS)
+        return AGENDA_NO_PUBLICADA if vigente else AGENDA_NO_VERIFICADA
+    return agenda.estado
+
+
+AGENDAS = (
+    AgendaAnual("RPM", 2026, AGENDA_INCORPORADA, date(2026, 10, 1),
+                "bcentral.cl > Monetary and Financial Policy calendar"),
+    AgendaAnual("RPM", 2027, AGENDA_INCORPORADA, date(2026, 10, 1),
+                "bcentral.cl > Monetary and Financial Policy calendar", publicada_el=date(2026, 9, 30)),
+    AgendaAnual("FOMC", 2026, AGENDA_INCORPORADA, date(2026, 10, 1), "federalreserve.gov/monetarypolicy/fomccalendars.htm"),
+    AgendaAnual("FOMC", 2027, AGENDA_INCORPORADA, date(2026, 10, 1), "federalreserve.gov/monetarypolicy/fomccalendars.htm"),
+    # INE: «Instituto Nacional de Estadísticas publica Agenda Estadística 2026», nota de prensa del 30-12-2025.
+    AgendaAnual("IPC", 2026, AGENDA_INCORPORADA, date(2026, 10, 1), "ine.gob.cl > Agenda Estadística 2026",
+                publicada_el=date(2025, 12, 30)),
+    # Al 01-10-2026 el INE no había publicado su Agenda Estadística 2027 (ver «POR QUÉ ACÁ NO HAY ESTIMACIONES»).
+    AgendaAnual("IPC", 2027, AGENDA_NO_PUBLICADA, date(2026, 10, 1), "ine.gob.cl > Agenda Estadística 2027"),
+)
+
+# El IPoM no tiene agenda propia: se deriva de las RPM (ver _PASO_RPM_AMPLIADA).
+AGENDA_DE = {"IPoM": "RPM"}
+
+
+def _fecha_relativa(anio: int, desplazamiento: tuple[int, int, int]) -> date:
+    a, m, d = desplazamiento
+    return date(anio + a, m, d)
+
+
+@dataclass(frozen=True)
+class CicloDePublicacion:
+    """Cuándo suele publicar la institución la agenda del año t y cuándo le corresponde al equipo revisarla. Cada
+    fecha es (desplazamiento de año respecto de t, mes, día).
+
+    - desde / hasta: ventana HABITUAL de publicación. Es una expectativa, no una confirmación.
+    - revision_prioritaria: desde aquí, sin una verificación vigente, la advertencia sube de prioridad.
+    - revision_operativa: desde aquí, sin una verificación vigente, hay una FALLA DE MANTENIMIENTO. Es una fecha de
+      trabajo del equipo, configurable; no es un plazo legal ni dice nada sobre lo que hizo la institución."""
+    tipo: str
+    desde: tuple[int, int, int]
+    hasta: tuple[int, int, int]
+    revision_prioritaria: tuple[int, int, int]
+    revision_operativa: tuple[int, int, int]
+    respaldo: str
+
+    def ventana(self, anio: int) -> tuple[date, date]:
+        return _fecha_relativa(anio, self.desde), _fecha_relativa(anio, self.hasta)
+
+    def revisiones(self, anio: int) -> tuple[date, date]:
+        return _fecha_relativa(anio, self.revision_prioritaria), _fecha_relativa(anio, self.revision_operativa)
+
+
+CICLOS = {
+    # Ventana habitual. Norma: la agenda de boletines coyunturales «deberá ser difundida en diciembre del año t-1 o en
+    # el mes de enero del año t» (DIPRES). Observado: agenda 2026 publicada el 30-12-2025; la de 2022, el 31-12-2021.
+    # Revisión operativa: el 1 de enero. Desde ese día la ventana visible de 7 días puede incluir el primer IPC del
+    # año (se publica el día 8 o el hábil anterior: el 08-01-2026 en 2026), así que un calendario sin revisar puede
+    # estar dejando fuera un evento oficial visible. La revisión prioritaria empieza 8 días antes (24-12), para que la
+    # alerta llegue con al menos una ventana visible de anticipación.
+    "IPC": CicloDePublicacion("IPC", (-1, 12, 1), (0, 1, 31), (-1, 12, 24), (0, 1, 1),
+                              "DIPRES: diciembre del año anterior o enero del año; INE publicó la de 2026 el 30-12-2025"),
+    # RPM y FOMC: una sola observación por institución (RPM 2027 publicada el 30-09-2026) no hace un ciclo; sin ciclo
+    # registrado, la política solo puede advertir, nunca exigir por plazo.
+}
+
+# Tipos que el calendario se compromete a mantener al día, con dónde se recargan. OPEP+ e IMACEC quedan fuera a
+# propósito: ninguno de los dos organismos publica una lista anual de fechas.
+TIPOS_MANTENIDOS = {
+    "RPM": "bcentral.cl > Monetary and Financial Policy calendar",
+    "IPoM": "se deriva de las RPM (cargar el año de RPM alcanza)",
+    "FOMC": "federalreserve.gov/monetarypolicy/fomccalendars.htm",
+    "IPC": "ine.gob.cl > Agenda Estadística del año",
+}
+COBERTURA_MINIMA_DIAS = 21
+
+NIVEL_OK = "ok"
+NIVEL_ADVERTENCIA = "advertencia"
+NIVEL_ADVERTENCIA_PRIORITARIA = "advertencia prioritaria"
+# Dos fallas distintas, que nunca se mezclan en un mismo mensaje:
+NIVEL_FALLA_DATOS = "falla de datos"                  # el calendario contradice o no incorpora agendas oficiales
+NIVEL_FALLA_MANTENIMIENTO = "falla de mantenimiento"  # nadie verificó la fuente cuando correspondía
+NIVELES_DE_FALLA = (NIVEL_FALLA_DATOS, NIVEL_FALLA_MANTENIMIENTO)
+
+
+@dataclass(frozen=True)
+class DiagnosticoCobertura:
+    tipo: str
+    nivel: str
+    dias_restantes: int | None  # None: no quedan fechas futuras de ese tipo
+    mensaje: str
+
+
+def _f(d: date | None) -> str:
+    return d.strftime("%d-%m-%Y") if d else "nunca"
+
+
+def evaluar_cobertura(hoy: date, eventos=None, agendas=None, ciclos=None,
+                      minimo: int = COBERTURA_MINIMA_DIAS) -> list[DiagnosticoCobertura]:
+    """Diagnóstico de cobertura por tipo de evento, a la fecha `hoy` (que se pasa explícita, para poder simularla).
+
+    FALLA DE DATOS: una agenda registrada como publicada que no está incorporada; fechas de un año sin agenda
+      registrada como incorporada; una agenda «incorporada» sin fechas de ese año.
+    FALLA DE MANTENIMIENTO: con la cobertura corta, llegó la fecha operativa de revisión y no hay una verificación
+      vigente de la fuente. No afirma nada sobre la institución: dice que el equipo no revisó.
+    ADVERTENCIA PRIORITARIA: se acerca la fecha operativa y no hay verificación vigente.
+    ADVERTENCIA: espera legítima. La cobertura está corta y la agenda siguiente todavía no corresponde revisarla, o
+      corresponde y aún no se revisa, o se revisó hace poco y la institución todavía no la publica (aunque sea
+      después de su plazo habitual: eso es una demora de la institución, no un error del calendario).
+    OK: cobertura de al menos `minimo` días y registro consistente."""
+    eventos = EVENTOS if eventos is None else eventos
+    agendas = AGENDAS if agendas is None else agendas
+    ciclos = CICLOS if ciclos is None else ciclos
+    registro = {(a.tipo, a.anio): a for a in agendas}
+    diagnosticos = []
+    for tipo, fuente in TIPOS_MANTENIDOS.items():
+        tipo_agenda = AGENDA_DE.get(tipo, tipo)
+        propios = [e for e in eventos if e.tipo == tipo]
+        anios = sorted({e.fecha_inicio.year for e in propios})
+        futuras = [e.fecha_inicio for e in propios if e.fecha_inicio >= hoy]
+        dias = (max(futuras) - hoy).days if futuras else None
+
+        problemas = []
+        for anio in anios:
+            agenda = registro.get((tipo_agenda, anio))
+            if agenda is None or agenda.estado != AGENDA_INCORPORADA:
+                problemas.append(f"hay fechas de {anio} sin una agenda oficial de {anio} registrada como incorporada")
+        for (t, anio), agenda in sorted(registro.items()):
+            if t != tipo_agenda:
+                continue
+            if agenda.estado == AGENDA_INCORPORADA and anio not in anios:
+                problemas.append(f"la agenda {anio} figura como incorporada, pero no hay fechas de {anio}")
+            if agenda.estado == AGENDA_PUBLICADA_SIN_INCORPORAR:
+                cuando = f" el {_f(agenda.publicada_el)}" if agenda.publicada_el else ""
+                problemas.append(f"la agenda {anio} fue publicada{cuando} y no está incorporada: cargarla desde {fuente}")
+        if problemas:
+            diagnosticos.append(DiagnosticoCobertura(
+                tipo, NIVEL_FALLA_DATOS, dias, f"Error de datos del calendario. {tipo}: " + "; ".join(problemas) + "."))
+            continue
+        if dias is not None and dias >= minimo:
+            diagnosticos.append(DiagnosticoCobertura(tipo, NIVEL_OK, dias, f"{tipo}: cubre {dias} días."))
+            continue
+
+        siguiente = anios[-1] + 1 if anios else hoy.year
+        agenda = registro.get((tipo_agenda, siguiente))
+        efectivo = estado_efectivo(agenda, hoy)
+        verificado = agenda.verificado_al if agenda else None
+        cobertura = f"le quedan {dias} días de fechas" if dias is not None else "ya no tiene fechas futuras"
+        if efectivo == AGENDA_NO_VERIFICADA and agenda is not None and agenda.estado == AGENDA_NO_PUBLICADA:
+            sabido = (f"la consulta del {_f(verificado)} no la encontró, pero esa verificación ya no describe el presente "
+                      f"(vigencia: {VIGENCIA_DE_VERIFICACION_DIAS} días)")
+        elif efectivo == AGENDA_NO_PUBLICADA:
+            sabido = f"fuente consultada el {_f(verificado)}: todavía no publicada"
+        else:
+            sabido = "no hay una verificación registrada"
+        base = f"{tipo}: {cobertura}; agenda {siguiente}: {efectivo} ({sabido})"
+        cierre = " Se carga cuando la institución la publique; no se estiman fechas."
+        ciclo = ciclos.get(tipo_agenda)
+        if ciclo is None:
+            diagnosticos.append(DiagnosticoCobertura(
+                tipo, NIVEL_ADVERTENCIA, dias, f"{base}. Sin ciclo de publicación registrado: revisar {fuente}.{cierre}"))
+            continue
+        desde, hasta = ciclo.ventana(siguiente)
+        prioritaria, operativa = ciclo.revisiones(siguiente)
+        habitual = f"el organismo la publica habitualmente entre el {_f(desde)} y el {_f(hasta)}"
+
+        if efectivo == AGENDA_NO_PUBLICADA:  # verificación vigente: espera legítima, aun después del plazo habitual
+            demora = (f" Ya pasó su plazo habitual ({_f(hasta)}): es una demora de la institución, no un error del "
+                      "calendario." if hoy > hasta else "")
+            diagnosticos.append(DiagnosticoCobertura(tipo, NIVEL_ADVERTENCIA, dias, f"{base}.{demora}{cierre}"))
+        elif hoy >= operativa:
+            diagnosticos.append(DiagnosticoCobertura(
+                tipo, NIVEL_FALLA_MANTENIMIENTO, dias,
+                f"Mantenimiento pendiente (no es un error de fechas oficiales). {base}. Desde el {_f(operativa)}, fecha "
+                f"operativa de revisión, la ventana visible de 7 días puede incluir el primer evento de {siguiente}: "
+                f"revisar {fuente} y, si la agenda está publicada, incorporarla; si no, registrar la verificación."))
+        elif hoy >= prioritaria:
+            diagnosticos.append(DiagnosticoCobertura(
+                tipo, NIVEL_ADVERTENCIA_PRIORITARIA, dias,
+                f"Revisión prioritaria. {base}. Desde el {_f(operativa)}, sin una verificación vigente, esto será una falla "
+                f"de mantenimiento; {habitual}.{cierre}"))
+        elif hoy >= desde:
+            diagnosticos.append(DiagnosticoCobertura(
+                tipo, NIVEL_ADVERTENCIA, dias,
+                f"{base}. Corresponde revisar {fuente}: {habitual}.{cierre}"))
+        else:
+            diagnosticos.append(DiagnosticoCobertura(
+                tipo, NIVEL_ADVERTENCIA, dias, f"{base}. La revisión corresponde desde el {_f(desde)}; {habitual}.{cierre}"))
+    return diagnosticos
