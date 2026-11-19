@@ -146,7 +146,10 @@ def test_control_con_calendarios_iguales_lo_explicado_coincide_con_lo_real():
         assert etfs.loc[ticker, "Duración medida (años)"] == pytest.approx(d, abs=1e-6), ticker
         assert abs(etfs.loc[ticker, "Resto (%)"]) < 0.10, ticker
     # en este mundo la frase «la duración explica la mayor parte» está justificada
-    assert _frase(inf._resumen(inf.calcular(_macro(lambda p: y), precios, DIAS_MES, MES)), "La duración explica la mayor parte")
+    # Desde I-2 la afirmación está condicionada a los datos (y redactada como compatibilidad, no causa): en este mundo
+    # se cumplen sus condiciones, así que tiene que aparecer.
+    frase = _frase(inf._resumen(inf.calcular(_macro(lambda p: y), precios, DIAS_MES, MES)), "Sensibilidad a tasas")
+    assert frase is not None and "es consistente en signo y magnitud" in frase, frase
 
 
 def test_precio_y_tasa_con_fechas_de_actualizacion_distintas_se_atribuyen_en_la_misma_ventana():
@@ -206,8 +209,8 @@ def test_con_un_movimiento_paralelo_a_la_baja_el_texto_dice_a_la_baja_con_las_ci
     assert ib.num(abs(d10), 2) in frase and ib.num(abs(d2), 2) in frase
 
 
-@defecto("I-2", "la tasa a 2 años hereda el verbo de la de 10 años y la curva se rotula con una sola dirección")
 def test_si_el_tramo_corto_sube_y_el_largo_baja_el_texto_no_lo_presenta_como_una_baja_general():
+    # Fue xfail en I-0; corregido en I-2. Desde I-2 además se exige que el movimiento se nombre como torsión.
     """Aplanamiento: la tasa a 2 años sube 0,30 pp y la de 10 años baja 0,30 pp (como el 18-11, en menor escala).
     Hoy el resumen dice «La curva del Tesoro se movió a la baja. La tasa a 10 años bajó 0.30 ... y la de 2 años, 0.30»:
     el lector entiende que la de 2 años también bajó. El Gráfico 2 muestra lo contrario."""
@@ -217,10 +220,11 @@ def test_si_el_tramo_corto_sube_y_el_largo_baja_el_texto_no_lo_presenta_como_una
     frase = _frase(inf._resumen(datos), "curva del Tesoro")
     assert "se movió a la baja" not in frase and "se movió al alza" not in frase, frase
     assert re.search(r"subió|al alza|aument", frase), f"no dice que algún tramo subió: {frase}"
+    assert "torsión" in frase and "subió" in frase and "bajó" in frase, frase
 
 
-@defecto("I-2", "un cambio exactamente cero se describe como una baja (la comparación es `> 0` o «bajó»)")
 def test_si_la_curva_no_se_mueve_el_texto_no_inventa_una_direccion():
+    # Fue xfail en I-0; corregido en I-2.
     y = _paseo(23, 4.0, 0.03)
     y[N - 25:] = y[N - 26]  # la curva queda congelada durante todo el último mes
     precios = pd.DataFrame({"SHY": _precio(-1.9 * _cambios(y)), "IEF": _precio(-6.5 * _cambios(y))}, index=FECHAS)
@@ -228,22 +232,25 @@ def test_si_la_curva_no_se_mueve_el_texto_no_inventa_una_direccion():
     _requisito(datos["curva"]["cambio"][10.0] == 0 and datos["curva"]["cambio"][2.0] == 0, "la curva no debería moverse")
     frase = _frase(inf._resumen(datos), "curva del Tesoro")
     assert frase is None or not re.search(r"a la baja|al alza|bajó|subió", frase), frase
+    assert frase is not None and "prácticamente no se movió" in frase, frase
 
 
-@defecto("I-2", "un spread sin cambio se describe como comprimido (la comparación es `> 0` o «se comprimió»)")
 def test_si_el_spread_no_cambia_el_texto_no_dice_que_se_comprimio():
+    # Fue xfail en I-0; corregido en I-2.
     y, precios = _mundo_lineal(24, {"SHY": 1.9, "IEF": 6.5})
     datos = inf.calcular(_macro(lambda p: y, extras={rfui.NOMBRE_BAA10Y: 1.5}), precios, DIAS_MES, MES)
     _requisito(datos["credito"] is not None and datos["credito"]["cambio"] == 0, "el spread debería estar constante")
     frase = _frase(inf._resumen(datos), "premio por riesgo de crédito")
     assert frase is None or ("se comprimió" not in frase and "se amplió" not in frase), frase
+    assert frase is not None and "no cambió" in frase, frase
 
 
 # ---------------------------------------------------------------------------
 # 3. Conclusiones que la duración no sostiene (I-2)
 # ---------------------------------------------------------------------------
-@defecto("I-2", "«La duración explica la mayor parte del movimiento» se escribe siempre, aunque los signos sean opuestos")
 def test_si_lo_explicado_y_lo_real_tienen_signo_opuesto_no_se_afirma_que_la_duracion_explica_la_mayor_parte():
+    # Fue xfail en I-0; corregido en I-2. Desde I-2 además se exige que no aparezca ninguna afirmación de
+    # consistencia (con cualquier redacción) y que se diga que el retorno fue en sentido contrario.
     """Las tasas suben 0,20 pp en un día y los precios, además del efecto de la duración, suben 2,5% por un factor que
     no es la tasa. En los tres ETFs lo explicado es negativo y lo real positivo: |real − explicado| > |real|, así que
     la duración no puede explicar «la mayor parte». Pasó en 5 de 10 ETFs el 18-11 y el informe lo afirmó igual."""
@@ -259,6 +266,8 @@ def test_si_lo_explicado_y_lo_real_tienen_signo_opuesto_no_se_afirma_que_la_dura
     _requisito(((etfs["Explicado por la duración (%)"] < 0) & (etfs["Retorno del período (%)"] > 0)).all(),
                "lo explicado debería ser negativo y lo real positivo en todos")
     assert _frase(inf._resumen(datos), "La duración explica la mayor parte") is None
+    frase = _frase(inf._resumen(datos), "Sensibilidad a tasas")
+    assert "consistente" not in frase and "sentido contrario" in frase, frase
 
 
 # ---------------------------------------------------------------------------
@@ -278,11 +287,13 @@ def test_control_si_la_brecha_la_explica_la_duracion_se_puede_decir_que_el_plazo
     _requisito(etfs["Retorno del período (%)"].idxmax() == "SHY" and etfs["Retorno del período (%)"].idxmin() == "TLT",
                "SHY debería ser el mejor y TLT el peor")
     _requisito(_ratio_de_la_brecha_explicada(etfs, "SHY", "TLT") > 0.9, "la duración debería explicar la brecha")
-    assert _frase(inf._resumen(datos), "El plazo decidió el resultado")
+    # Desde I-2 la afirmación se condiciona y se redacta como compatibilidad; en este mundo se cumplen sus condiciones.
+    assert _frase(inf._resumen(datos), "es consistente con sus distintas sensibilidades a tasas")
 
 
-@defecto("I-2", "«El plazo decidió el resultado» se escribe aunque los extremos tengan casi la misma duración")
 def test_con_duraciones_parecidas_la_diferencia_de_retorno_no_se_atribuye_al_plazo():
+    # Fue xfail en I-0; corregido en I-2. Desde I-2 además se exige que no aparezca la afirmación nueva de
+    # consistencia por plazo y que se diga explícitamente que no se puede atribuir al plazo.
     """IEI, HYG y LQD con duraciones 4,0 / 3,9 / 4,1 y tasas casi quietas. HYG gana 1,5% y LQD pierde 1,5% por un
     factor ajeno a la tasa (crédito, en la realidad). La parte de la brecha HYG−LQD que explica la duración es
     |ΔD·Δy| / |ΔR| < 10%: decir que «lo que los separa es cuánto duran sus flujos» es falso. El 18-11 el informe lo dijo
@@ -301,6 +312,9 @@ def test_con_duraciones_parecidas_la_diferencia_de_retorno_no_se_atribuye_al_pla
                "HYG debería ser el mejor y LQD el peor")
     _requisito(_ratio_de_la_brecha_explicada(etfs, "HYG", "LQD") < 0.10, "la duración no debería explicar la brecha")
     assert _frase(inf._resumen(datos), "El plazo decidió el resultado") is None
+    assert _frase(inf._resumen(datos), "es consistente con sus distintas sensibilidades") is None
+    frase = _frase(inf._resumen(datos), "Comparación entre fondos")
+    assert frase is not None and "no permiten atribuir la diferencia de rentabilidad exclusivamente al plazo" in frase, frase
 
 
 # ---------------------------------------------------------------------------
@@ -339,13 +353,18 @@ def test_tip_no_se_atribuye_con_una_tasa_nominal():
 # ---------------------------------------------------------------------------
 # 6. Carry y convexidad
 # ---------------------------------------------------------------------------
-def _escenario_carry():
+def _entradas_carry():
     """Tasas en torno a 5% sin tendencia. Los precios devengan la tasa cada día (carry) y responden a −D × Δy."""
     y = _paseo(61, 5.0, 0.02)
     carry = np.concatenate([[0.0], y[:-1] / 100 / 252])
     duraciones = {"SHY": 1.9, "IEF": 6.5}
     precios = pd.DataFrame({t: _precio(carry - d * _cambios(y)) for t, d in duraciones.items()}, index=FECHAS)
-    return carry, inf.calcular(_macro(lambda p: y), precios, 365, "Último año")
+    return carry, _macro(lambda p: y), precios
+
+
+def _escenario_carry():
+    carry, macro, precios = _entradas_carry()
+    return carry, inf.calcular(macro, precios, 365, "Último año")
 
 
 def test_limitacion_sin_termino_de_carry_el_devengo_de_un_anio_queda_entero_en_el_resto():
@@ -362,14 +381,23 @@ def test_limitacion_sin_termino_de_carry_el_devengo_de_un_anio_queda_entero_en_e
         assert resto > 4.0, ticker  # materialmente distinto de cero
 
 
-@defecto("I-3", "el resto de un ETF del Tesoro se atribuye en el resumen a «riesgo de crédito»")
+@defecto("I-3", "el resto de un ETF del Tesoro se atribuye a «riesgo de crédito» (nota del Cuadro 2; en el resumen, hasta I-2)")
 def test_el_resto_de_un_etf_del_tesoro_no_se_atribuye_a_riesgo_de_credito():
     """Solo hay ETFs del Tesoro de EEUU, cuyo riesgo de impago se trata como nulo en este análisis (es la referencia
-    libre de riesgo del propio informe). Nombrar el crédito como causa de su resto es un error objetivo."""
-    _, datos = _escenario_carry()
+    libre de riesgo del propio informe). Nombrar el crédito como causa de su resto es un error objetivo.
+
+    Hasta I-2 el defecto estaba en el resumen («…atribuible a cupones, riesgo de crédito…»). I-2 reemplazó esa frase
+    fija, pero el defecto sigue en la nota del Cuadro 2, que rotula el resto igual para todos los ETFs: la prueba se
+    extendió a esa nota para no perder la evidencia. Se corrige en I-3, con el resto rotulado según el activo."""
+    _, macro, precios = _entradas_carry()
+    datos = inf.calcular(macro, precios, 365, "Último año")
     _requisito((datos["etfs"]["Grupo"] == "Tesoro EEUU").all(), "solo deberían entrar ETFs del Tesoro")
     frase = _frase(inf._resumen(datos), "La duración explica")
     assert frase is None or "riesgo de crédito" not in frase, frase
+    texto = _texto_pdf(inf.generar(macro, precios, "Último año"))
+    _requisito("Cuadro 2." in texto, "el PDF debería traer el Cuadro 2")
+    nota = texto[texto.find("Cuadro 2."):texto.find("Gráfico 3")]
+    assert "riesgo de crédito" not in nota, nota
 
 
 def _precio_bono(tasa: float, cupon: float = 0.05, anios: int = 20, m: int = 2) -> float:
