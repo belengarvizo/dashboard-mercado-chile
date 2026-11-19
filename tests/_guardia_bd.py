@@ -314,6 +314,19 @@ def _instalar():
         )
 
     atexit.register(_imprimir_resumen)
+    _instalar_guardia_de_red()
+
+
+def _instalar_guardia_de_red():
+    """P-1: el guardia de red (servicios externos) se instala junto a este, así hereda sus mismas rutas protegidas.
+    Se carga por su ruta, sin tocar sys.path, y queda registrado como `_guardia_red` para que todos lo compartan."""
+    if "_guardia_red" not in sys.modules:
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("_guardia_red", CARPETA_TESTS / "_guardia_red.py")
+        modulo = importlib.util.module_from_spec(spec)
+        sys.modules["_guardia_red"] = modulo
+        spec.loader.exec_module(modulo)
+    sys.modules["_guardia_red"].instalar()
 
 
 def _imprimir_resumen():

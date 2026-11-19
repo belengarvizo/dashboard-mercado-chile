@@ -1,8 +1,9 @@
-"""Aislamiento entre tests: base de datos protegida y cachés de Streamlit vacías.
+"""Aislamiento entre tests: base de datos y red protegidas, y cachés de Streamlit vacías.
 
-La protección contra la base de producción vive en _guardia_bd.py (se importa
-primero, aquí y en cada archivo de prueba). Este archivo agrega el registro de
-pruebas de integración (más abajo) y la limpieza de cachés.
+La protección contra la base de producción vive en _guardia_bd.py y la de servicios externos en _guardia_red.py
+(_guardia_bd la instala; se importa primero, aquí y en cada archivo de prueba). Este archivo agrega el registro de
+pruebas de integración, la omisión de las pruebas externas, la contabilidad de red por prueba (más abajo) y la
+limpieza de cachés.
 
 POR QUÉ EXISTE ESTE ARCHIVO
 ===========================
@@ -46,12 +47,16 @@ que aparece.
 """
 import _guardia_bd  # noqa: F401  (debe ir primero: protege la base de producción)
 
+import contextlib
+import sys
 import time
 from pathlib import Path
 
 import pytest
 import streamlit as st
 from _pytest.runner import runtestprotocol
+
+_guardia_red = sys.modules["_guardia_red"]  # lo instaló _guardia_bd, en la línea de arriba de todo
 
 # ---------------------------------------------------------------------------
 # Pruebas de integración: se saltan mientras no haya base de pruebas local
@@ -208,6 +213,7 @@ ARCHIVOS_SIN_CONEXION_VERIFICADOS = {
 
 
 def pytest_collection_modifyitems(config, items):
+    _omitir_externas_sin_autorizacion(items)
     if _guardia_bd.base_de_pruebas_autorizada() is not None:
         return
     for item in items:
@@ -221,6 +227,54 @@ def pytest_collection_modifyitems(config, items):
             item.add_marker(pytest.mark.skip(
                 reason=f"Integración ({motivo}): requiere la base PostgreSQL local de pruebas, aún no configurada."
             ))
+
+
+# ---------------------------------------------------------------------------
+# Pruebas con servicios externos (P-1): offline por defecto
+# ---------------------------------------------------------------------------
+#
+# Las marcas están declaradas en pytest.ini (con --strict-markers, una marca mal escrita falla):
+#   externa                    necesita servicios externos reales; se omite salvo FRI_PRUEBAS_EXTERNAS=1, una
+#                              autorización SEPARADA de FRI_PRUEBAS_POSTGRES.
+#   simulada                   usa conexiones o servicios simulados (mocks, destinos ficticios).
+#   integracion_bd             necesita la base local de pruebas (quien decide si corre es el registro de arriba).
+#   intentos_de_red_esperados  provoca a propósito intentos de red bloqueados: solo las pruebas del guardia de red.
+# Sin marca, una prueba es offline. La protección NO depende de las marcas: el guardia de red bloquea igual, y
+# _guardia_de_red_por_prueba deja en rojo a la prueba que intente salir sin estar marcada 'externa'.
+
+def _omitir_externas_sin_autorizacion(items):
+    if _guardia_red.externas_autorizadas():
+        return
+    for item in items:
+        if item.get_closest_marker("externa") is not None:
+            item.add_marker(pytest.mark.skip(
+                reason="Externa: necesita servicios externos reales; se ejecuta solo con FRI_PRUEBAS_EXTERNAS=1."
+            ))
+
+
+def motivo_de_falla_por_red(intentos, marcada_externa, intentos_esperados):
+    """None si la prueba está en regla; si no, el motivo para dejarla en rojo. Un intento cuenta aunque el código lo
+    haya capturado: el dashboard degrada a «sin datos» ante cualquier excepción, y eso escondería la conexión."""
+    if not intentos or marcada_externa or intentos_esperados:
+        return None
+    detalle = ", ".join(sorted({f"{i['capa']} -> {i['destino']}" for i in intentos}))
+    return (
+        f"La prueba intentó {len(intentos)} conexión(es) a servicios externos sin estar marcada 'externa' ({detalle}). "
+        "El guardia de red las bloqueó; aunque el código haya capturado la excepción, la prueba queda en rojo. "
+        "Usa datos simulados, o márcala 'externa' (se ejecutará solo con FRI_PRUEBAS_EXTERNAS=1)."
+    )
+
+
+@pytest.fixture(autouse=True)
+def _guardia_de_red_por_prueba(request):
+    externa = request.node.get_closest_marker("externa") is not None
+    esperados = request.node.get_closest_marker("intentos_de_red_esperados") is not None
+    marca = _guardia_red.instantanea()
+    with (_guardia_red.prueba_externa() if externa else contextlib.nullcontext()):
+        yield
+    motivo = motivo_de_falla_por_red(_guardia_red.intentos_desde(marca), externa, esperados)
+    if motivo:
+        pytest.fail(motivo, pytrace=False)
 
 # ---------------------------------------------------------------------------
 # Reintento de un test que ni siquiera llegó a correr por un corte de red

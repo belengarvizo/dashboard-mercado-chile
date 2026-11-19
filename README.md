@@ -649,3 +649,21 @@ intentaron y cuántas se bloquearon.
 - No uses `TEST_DATABASE_URL` ni `FRI_PRUEBAS_POSTGRES` hasta que exista la
   base local de pruebas. Las reglas que debe cumplir están en
   `tests/_guardia_bd.py`.
+
+**Las pruebas tampoco salen a internet.** `tests/_guardia_red.py` (lo instala
+`_guardia_bd`) bloquea antes de conectar cualquier acceso a servicios
+externos: sockets y DNS de Python, `curl_cffi` (lo que usa yfinance), Gemini,
+`requests`, `httpx` y `aiohttp`. Además, dentro del proceso de pruebas los
+proxies apuntan a un puerto local cerrado y las claves de API del `.env`
+quedan vacías (el archivo `.env` no se modifica). Al terminar, la salida
+muestra las conexiones intentadas, permitidas y bloqueadas.
+
+- Una prueba que intenta salir a internet queda en rojo aunque el código
+  haya capturado el error.
+- Las pruebas que de verdad necesitan Yahoo u otra API llevan la marca
+  `externa` y se omiten. Para correrlas hace falta una autorización explícita
+  y separada de la base de datos: `FRI_PRUEBAS_EXTERNAS=1`. Aun así, las
+  claves de API siguen vacías.
+- Marcas disponibles (en `pytest.ini`): `externa`, `simulada`,
+  `integracion_bd` e `intentos_de_red_esperados` (esta última, solo para las
+  pruebas del propio guardia). Una marca mal escrita detiene la ejecución.

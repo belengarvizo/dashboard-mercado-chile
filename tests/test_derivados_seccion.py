@@ -32,10 +32,15 @@ DASHBOARD_PATH = os.path.join(os.path.dirname(__file__), "..", "app", "dashboard
 SECCION = "Derivados"
 
 
-@pytest.fixture(scope="module", autouse=True)
-def _requiere_yahoo_en_vivo():
-    """Si Yahoo Finance no responde ahora, se saltan todas las pruebas de este archivo: no hay nada más que
-    probar sin la fuente en vivo, y no es una falla del código del dashboard."""
+@pytest.fixture(autouse=True)
+def _requiere_yahoo_en_vivo(request):
+    """Si Yahoo Finance no responde ahora, se salta la prueba: no hay nada que probar sin la fuente en vivo, y no es
+    una falla del código del dashboard.
+
+    Solo para las pruebas marcadas 'externa' (P-1). Antes era de módulo y corría para TODAS las pruebas del archivo,
+    así que hasta las que no usan red consultaban Yahoo al empezar."""
+    if request.node.get_closest_marker("externa") is None:
+        return
     vencimientos = ui._vencimientos_disponibles("SPY")
     if not vencimientos:
         pytest.skip("Yahoo Finance no respondió con la cadena de opciones de SPY en este momento.")
@@ -72,18 +77,21 @@ def _numero(texto: str) -> float:
 # ---------------------------------------------------------------------------
 # La pantalla, en general
 # ---------------------------------------------------------------------------
+@pytest.mark.externa
 def test_la_seccion_esta_en_el_selector_y_avisa_que_es_distinta():
     at = _abrir()
     assert any("Derivados" in h.value for h in at.header)
     assert any("Yahoo Finance" in i.value and "en vivo" in i.value for i in at.info)
 
 
+@pytest.mark.externa
 def test_cada_paso_se_dibuja_sin_errores():
     at = _abrir()
     for paso in ui.PASOS:
         _ir_a(at, paso)
 
 
+@pytest.mark.externa
 def test_no_hay_calculadoras_con_valores_inventados():
     at = _abrir()
     for paso in ui.PASOS:
@@ -92,6 +100,7 @@ def test_no_hay_calculadoras_con_valores_inventados():
         assert len(at.slider) == 0, f"{paso}: hay un slider, o sea una calculadora"
 
 
+@pytest.mark.externa
 def test_ningun_texto_de_la_seccion_lleva_signo_de_dolar():
     at = _abrir()
     for paso in ui.PASOS:
@@ -104,6 +113,7 @@ def test_ningun_texto_de_la_seccion_lleva_signo_de_dolar():
 # ---------------------------------------------------------------------------
 # Paso 2: la cadena de opciones
 # ---------------------------------------------------------------------------
+@pytest.mark.externa
 def test_el_vencimiento_por_defecto_no_es_hoy_mismo_si_hay_otra_opcion():
     at = _abrir(ui.PASOS[1])
     vencimiento_elegido = at.selectbox(key="dv_vencimiento_cadena").value
@@ -115,6 +125,7 @@ def test_el_vencimiento_por_defecto_no_es_hoy_mismo_si_hay_otra_opcion():
         )
 
 
+@pytest.mark.externa
 def test_la_cadena_trae_precio_en_vivo_y_dias_al_vencimiento_coherentes():
     at = _abrir(ui.PASOS[1])
     spot = _numero(_metrica(at, "Precio de SPY ahora").value)
@@ -125,6 +136,7 @@ def test_la_cadena_trae_precio_en_vivo_y_dias_al_vencimiento_coherentes():
     assert dias >= 0
 
 
+@pytest.mark.externa
 def test_cambiar_cuantos_strikes_mostrar_cambia_el_tamano_de_la_tabla():
     at = _abrir(ui.PASOS[1])
     filas_10 = len(at.dataframe[0].value)
@@ -134,6 +146,7 @@ def test_cambiar_cuantos_strikes_mostrar_cambia_el_tamano_de_la_tabla():
     assert filas_todos >= filas_10  # con "Todos" nunca puede haber menos strikes que con la vista acotada
 
 
+@pytest.mark.externa
 def test_cambiar_de_subyacente_trae_otra_cadena_real():
     at = _abrir(ui.PASOS[1])
     at.selectbox(key="dv_subyacente_cadena").set_value("TLT").run()
@@ -146,6 +159,7 @@ def test_cambiar_de_subyacente_trae_otra_cadena_real():
 # ---------------------------------------------------------------------------
 # Paso 3: Black-Scholes, con cada número recalculado de forma independiente
 # ---------------------------------------------------------------------------
+@pytest.mark.externa
 def test_los_cinco_datos_mostrados_son_los_que_de_verdad_entran_al_modelo():
     at = _abrir(ui.PASOS[2])
     vencimiento = at.selectbox(key="dv_vencimiento_bs").value
@@ -168,6 +182,7 @@ def test_dias_al_vencimiento_nunca_es_negativo_para_una_fecha_pasada():
     assert ui._dias_al_vencimiento((pd.Timestamp.now() + pd.Timedelta(days=10)).strftime("%Y-%m-%d")) == 10
 
 
+@pytest.mark.externa
 def test_el_precio_de_mercado_es_el_punto_medio_entre_bid_y_ask_cuando_los_hay():
     """Función pura, con datos reales de la cadena: verifica el cálculo en sí, no solo que la pantalla sea
     consistente consigo misma (eso pasaría igual si la función usara, por error, solo el bid)."""
@@ -189,6 +204,7 @@ def test_el_precio_de_mercado_usa_el_ultimo_transado_si_no_hay_bid_ni_ask():
     assert ui._precio_de_mercado(fila_sin_nada) is None
 
 
+@pytest.mark.externa
 def test_el_strike_por_defecto_es_el_mas_cercano_al_precio_actual():
     at = _abrir(ui.PASOS[2])
     vencimiento = at.selectbox(key="dv_vencimiento_bs").value
@@ -199,6 +215,7 @@ def test_el_strike_por_defecto_es_el_mas_cercano_al_precio_actual():
     assert strike_elegido == pytest.approx(mas_cercano, abs=0.01)
 
 
+@pytest.mark.externa
 def test_el_precio_teorico_con_vol_realizada_coincide_con_recalcularlo_aparte():
     """El número que muestra la pantalla para "con la volatilidad realizada" tiene que ser exactamente
     bs.precio(...) con los mismos cinco insumos, recalculado fuera de la pantalla."""
@@ -230,6 +247,7 @@ def test_el_precio_teorico_con_vol_realizada_coincide_con_recalcularlo_aparte():
     assert mostrado == pytest.approx(precio_esperado, abs=0.02)
 
 
+@pytest.mark.externa
 def test_la_volatilidad_implicita_mostrada_de_verdad_reproduce_el_precio_de_mercado():
     """No se compara contra un recálculo (eso solo probaría que la pantalla usa la misma fórmula que el test):
     se comprueba la PROPIEDAD que define a la volatilidad implícita — que metida de vuelta en Black-Scholes
@@ -258,6 +276,7 @@ def test_la_volatilidad_implicita_mostrada_de_verdad_reproduce_el_precio_de_merc
     assert precio_con_iv == pytest.approx(precio_mercado, abs=0.05)
 
 
+@pytest.mark.externa
 def test_las_griegas_mostradas_coinciden_con_recalcularlas_aparte():
     at = _abrir(ui.PASOS[2])
     vencimiento = at.selectbox(key="dv_vencimiento_bs").value
@@ -270,6 +289,7 @@ def test_las_griegas_mostradas_coinciden_con_recalcularlas_aparte():
     assert -1 <= delta_mostrado <= 1  # un delta de call está entre 0 y 1; con margen por si el redondeo roza el borde
 
 
+@pytest.mark.externa
 def test_cambiar_a_put_trae_otra_tabla_de_strikes():
     at = _abrir(ui.PASOS[2])
     at.radio(key="dv_tipo").set_value("Put").run()
@@ -277,6 +297,7 @@ def test_cambiar_a_put_trae_otra_tabla_de_strikes():
     assert len(at.selectbox(key="dv_strike").options) > 0
 
 
+@pytest.mark.externa
 def test_el_aviso_de_vencimiento_hoy_solo_aparece_si_se_elige_ese_vencimiento():
     at = _abrir(ui.PASOS[2])
     vencimientos = ui._vencimientos_disponibles("SPY")

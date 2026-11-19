@@ -16,6 +16,7 @@ import sys
 sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
 
 import pandas as pd
+import pytest
 
 from defensa_topdown import verificar_prediccion, TOLERANCIA_PP
 
@@ -448,6 +449,7 @@ def test_export_resumen_compacto_con_datos():
                for b in at.download_button), "falta el download_button del CSV"
 
 
+@pytest.mark.simulada  # Yahoo se reemplaza por una función falsa (patch de Ticker.history): no sale a internet
 def test_yahoo_timeout_no_cuelga_la_pestana():
     """Con Yahoo Finance caído/lento, la pestaña Defensa Top-Down igual
     renderiza (sin excepción, con las 16 preguntas) y las secciones que
