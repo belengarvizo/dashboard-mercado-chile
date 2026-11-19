@@ -26,6 +26,7 @@ LÍMITES QUE EL INFORME DECLARA
 """
 from __future__ import annotations
 
+import numpy as np
 import pandas as pd
 
 import estructura_tasas as et
@@ -38,6 +39,175 @@ PERIODOS = {"Último mes": 30, "Últimos 3 meses": 90, "Último año": 365}
 # Los ETFs que se grafican: el tramo corto, el medio, el largo y el de crédito, que es donde se ve la diferencia.
 ETFS_DEL_GRAFICO = ["SHY", "IEF", "TLT", "HYG"]
 CAMBIOS_DE_SENSIBILIDAD = (-1.0, -0.5, 0.5, 1.0)  # puntos porcentuales
+
+# ---------------------------------------------------------------------------
+# Comparabilidad: fecha de corte y ventana común
+# ---------------------------------------------------------------------------
+# Todos los ETFs del catálogo cotizan en la misma bolsa y los baja el mismo proceso, así que con datos sanos comparten
+# su último precio. Una rueda de diferencia se tolera (una descarga que falló un día) y mueve la ventana de todos a lo
+# más un día; más que eso es una serie rota, y se excluye de la comparación en vez de arrastrar a las demás.
+TOLERANCIA_RUEDAS = 1
+# FRED publica la curva H.15 el día hábil siguiente: 1 a 2 ruedas detrás de los precios es lo normal. Más de 5 (el mismo
+# umbral de atraso que usa la pantalla) y la atribución se omite, en vez de llevar la comparación semanas atrás.
+MAX_RUEDAS_ATRASO_CURVA = rfui.DIAS_HABILES_DE_ATRASO
+# Desde cuántos días hábiles entre el último precio y la fecha de corte se advierte en la portada.
+DIAS_HABILES_SIN_ADVERTENCIA = 1
+
+ESTADO_CALCULABLE = "calculable"
+
+
+def _a_fecha(valor) -> pd.Timestamp:
+    return pd.Timestamp(valor).normalize()
+
+
+def _resolver_corte(precios: pd.DataFrame, fecha_corte) -> tuple[pd.Timestamp | None, bool]:
+    """(fecha de corte, si fue pedida). Sin pedirla, es la última fecha con precio de algún ETF del catálogo: nunca el
+    reloj del computador, para que las cifras dependan solo de los datos."""
+    if fecha_corte is not None:
+        return _a_fecha(fecha_corte), True
+    ultimas = [precios[t].last_valid_index() for t in ETFS_RENTA_FIJA if t in precios]
+    ultimas = [u for u in ultimas if u is not None]
+    return (_a_fecha(max(ultimas)) if ultimas else None), False
+
+
+def _recortar_al_corte(macro: pd.DataFrame, precios: pd.DataFrame, corte: pd.Timestamp | None):
+    """Nada posterior a la fecha de corte entra al cálculo."""
+    if corte is None:
+        return macro, precios
+    macro = macro[pd.to_datetime(macro["fecha"]) <= corte] if len(macro) else macro
+    precios = precios[precios.index <= corte] if len(precios) else precios
+    return macro, precios
+
+
+def _calendario_de_ruedas(precios: pd.DataFrame) -> pd.DatetimeIndex:
+    """Las ruedas bursátiles, sacadas de los propios datos: días hábiles en que cotizó algún ETF del catálogo.
+
+    Así los feriados de la bolsa quedan fuera sin una lista escrita a mano (que vencería cada año). Su límite: después
+    del último precio no hay datos, y ahí los feriados no se pueden ver."""
+    tickers = [t for t in ETFS_RENTA_FIJA if t in precios]
+    if not tickers or precios.empty:
+        return pd.DatetimeIndex([])
+    con_precio = precios[tickers].notna().any(axis=1)
+    habiles = pd.Series(precios.index.dayofweek < 5, index=precios.index)
+    return pd.DatetimeIndex(precios.index[con_precio & habiles])
+
+
+def _ruedas_entre(ruedas: pd.DatetimeIndex, desde, hasta) -> int:
+    """Ruedas r con desde < r ≤ hasta."""
+    return int(((ruedas > desde) & (ruedas <= hasta)).sum())
+
+
+def _comparabilidad(macro: pd.DataFrame, precios: pd.DataFrame, dias: int) -> dict:
+    """Qué ETFs se comparan, entre qué fechas exactas y cuáles quedan fuera, en pasos que no dependen unos de otros en
+    círculo:
+
+      1. Frescura: cada ETF contra el último precio de todos (U*), en ruedas. Pasa la tolerancia o se excluye.
+      2. Tasas: cada plazo de referencia contra el más reciente de la curva. Un plazo atrasado deja sin atribución solo
+         a los ETFs que lo usan; la curva entera atrasada respecto de los precios deja sin atribución a todos.
+      3. Fin E: la última fecha con precio de TODOS los ETFs vigentes y dato de TODAS las tasas vigentes que se usan.
+      4. Historia: un ETF sin precio antes de E − período se excluye (si ninguno lo tiene, el período no es calculable).
+      5. Inicio S: la última fecha con esos mismos datos en E − período o antes.
+
+    Retornos y cambios de tasa se miden entre S y E, las mismas dos fechas para todos. No se interpola ni se rellena."""
+    ruedas = _calendario_de_ruedas(precios)
+    ultimas = {t: precios[t].last_valid_index() for t in ETFS_RENTA_FIJA if t in precios}
+    excluidos = []
+    for t, u in ultimas.items():
+        if u is None:
+            excluidos.append({"ETF": t, "ultima_fecha": None, "ruedas": None, "motivo": "sin precios hasta la fecha de corte"})
+    con_datos = {t: u for t, u in ultimas.items() if u is not None}
+    resultado = {"ruedas": ruedas, "vigentes": [], "excluidos": excluidos, "ultimo_precio": None, "inicio": None,
+                 "fin": None, "estado": {}, "atribucion": False, "ultima_curva": None, "motivo_sin_ventana": None}
+    if not con_datos:
+        resultado["motivo_sin_ventana"] = "no hay precios de ETFs hasta la fecha de corte"
+        return resultado
+    ultimo = max(con_datos.values())
+    resultado["ultimo_precio"] = ultimo
+
+    # 1. Frescura de cada ETF.
+    vigentes = []
+    for t, u in con_datos.items():
+        atraso = _ruedas_entre(ruedas, u, ultimo)
+        if atraso <= TOLERANCIA_RUEDAS:
+            vigentes.append(t)
+        else:
+            excluidos.append({"ETF": t, "ultima_fecha": u, "ruedas": atraso,
+                              "motivo": f"último precio el {ib.fecha(u)}, {atraso} ruedas antes que el resto"})
+
+    # 2. Tasas de referencia de los vigentes.
+    plazos = sorted({float(ETFS_RENTA_FIJA[t]["plazo_referencia"]) for t in vigentes})
+    tasas = {}
+    for p in plazos:
+        serie = rfui._rendimiento_del_tesoro(macro, p).dropna()
+        tasas[p] = serie[~serie.index.duplicated(keep="last")]
+    ultimas_tasas = {p: s.index[-1] for p, s in tasas.items() if len(s)}
+    estado = {}
+    plazos_vigentes = []
+    if ultimas_tasas:
+        ultima_curva = max(ultimas_tasas.values())
+        resultado["ultima_curva"] = ultima_curva
+        atraso_curva = _ruedas_entre(ruedas, ultima_curva, ultimo)
+        if atraso_curva > MAX_RUEDAS_ATRASO_CURVA:
+            motivo_curva = (f"no calculable: la curva del Tesoro llega hasta el {ib.fecha(ultima_curva)}, "
+                            f"{atraso_curva} ruedas antes que los precios")
+        else:
+            motivo_curva = None
+            for p in plazos:
+                u = ultimas_tasas.get(p)
+                if u is not None and _ruedas_entre(ruedas, u, ultima_curva) <= TOLERANCIA_RUEDAS:
+                    plazos_vigentes.append(p)
+    else:
+        motivo_curva = "no calculable: no hay datos de la curva del Tesoro hasta la fecha de corte"
+    for t in vigentes:
+        p = float(ETFS_RENTA_FIJA[t]["plazo_referencia"])
+        if motivo_curva:
+            estado[t] = motivo_curva
+        elif p in plazos_vigentes:
+            estado[t] = ESTADO_CALCULABLE
+        else:
+            u = ultimas_tasas.get(p)
+            estado[t] = (f"no calculable: la tasa a {int(p)} años no tiene datos desde el {ib.fecha(u)}" if u is not None
+                         else f"no calculable: no hay datos de la tasa a {int(p)} años")
+    resultado["atribucion"] = bool(plazos_vigentes)
+
+    # 3. Fin común E.
+    def fechas_con_datos(tickers):
+        if not tickers:
+            return pd.DatetimeIndex([])
+        disponible = precios[tickers].notna().all(axis=1)
+        for p in plazos_vigentes:
+            disponible &= tasas[p].reindex(precios.index).notna()
+        return precios.index[disponible]
+
+    comunes = fechas_con_datos(vigentes)
+    if len(comunes) == 0:
+        resultado.update(vigentes=vigentes, estado=estado,
+                         motivo_sin_ventana="no hay ninguna fecha con precio de todos los ETFs vigentes y sus tasas")
+        return resultado
+    fin = comunes[-1]
+    objetivo = fin - pd.Timedelta(days=dias)
+
+    # 4. Historia suficiente para el período.
+    con_historia = [t for t in vigentes if precios[t].first_valid_index() <= objetivo]
+    if not con_historia:
+        resultado.update(vigentes=vigentes, estado=estado, fin=fin,
+                         motivo_sin_ventana=f"ningún ETF tiene precios desde antes del {ib.fecha(objetivo)}")
+        return resultado
+    for t in vigentes:
+        if t not in con_historia:
+            excluidos.append({"ETF": t, "ultima_fecha": con_datos[t], "ruedas": 0,
+                              "motivo": f"sin precios antes del {ib.fecha(objetivo)}, el inicio del período"})
+            estado.pop(t, None)
+
+    # 5. Inicio común S.
+    candidatos = fechas_con_datos(con_historia)
+    candidatos = candidatos[candidatos <= objetivo]
+    if len(candidatos) == 0:
+        resultado.update(vigentes=con_historia, estado=estado, fin=fin,
+                         motivo_sin_ventana=f"no hay una fecha común con todos los datos en o antes del {ib.fecha(objetivo)}")
+        return resultado
+    resultado.update(vigentes=con_historia, estado=estado, fin=fin, inicio=candidatos[-1])
+    return resultado
 
 
 # ---------------------------------------------------------------------------
@@ -61,26 +231,43 @@ def _tramo(serie: pd.Series, dias: int):
     return inicio[0], fin, inicio[1], fecha_fin
 
 
-def _retorno(serie: pd.Series, dias: int) -> float | None:
-    t = _tramo(serie, dias)
-    return None if t is None or t[0] == 0 else (t[1] / t[0] - 1) * 100
+def _valor_en(serie: pd.Series, fecha) -> float | None:
+    """El valor EXACTO de esa fecha, o None. No toma el día anterior ni interpola: la ventana ya eligió fechas con dato."""
+    if fecha is None:
+        return None
+    serie = serie.dropna()
+    serie = serie[~serie.index.duplicated(keep="last")]
+    return float(serie.loc[fecha]) if fecha in serie.index else None
 
 
-def _tabla_de_etfs(macro: pd.DataFrame, precios: pd.DataFrame, dias: int) -> pd.DataFrame:
-    """Una fila por ETF: lo que rindió en el período y la parte que explica su duración.
+def _tabla_de_etfs(macro: pd.DataFrame, precios: pd.DataFrame, ventana: dict) -> pd.DataFrame:
+    """Una fila por ETF que se compara: lo que rindió entre S y E y la parte que explica su duración.
 
-    `esperado` = −duración × cambio de la tasa de referencia (en puntos porcentuales). `resto` es lo que queda:
-    cupones devengados, riesgo de crédito y lo que el modelo no explica."""
-    resumen = rfui._resumen_de_etfs(precios, macro, pd.Timestamp.now().normalize())
+    `esperado` = −duración × cambio de la tasa de referencia (en puntos porcentuales) ENTRE LAS MISMAS DOS FECHAS que el
+    retorno. `resto` es lo que queda: todo lo que el modelo de duración no incluye. Las métricas que no dependen del
+    período (duración medida, volatilidad, caída máxima) usan los datos hasta E, para que toda la fila quede fechada ahí."""
+    vigentes, inicio, fin = ventana["vigentes"], ventana["inicio"], ventana["fin"]
+    if not vigentes:
+        return pd.DataFrame()
+    hasta = fin if fin is not None else ventana["ultimo_precio"]
+    macro_e, precios_e = _recortar_al_corte(macro, precios, hasta)
+    resumen = rfui._resumen_de_etfs(precios_e, macro_e, hasta)  # la fecha solo marca el atraso de la pantalla
     filas = []
-    for ticker, datos in ETFS_RENTA_FIJA.items():
-        if resumen is None or ticker not in resumen.index or ticker not in precios:
+    for ticker in vigentes:
+        if resumen is None or ticker not in resumen.index:
             continue
-        fila = resumen.loc[ticker]
-        retorno = _retorno(precios[ticker], dias)
-        tasa = rfui._rendimiento_del_tesoro(macro, datos["plazo_referencia"]) * 100  # a puntos porcentuales
-        tramo_tasa = _tramo(tasa, dias)
-        cambio = (tramo_tasa[1] - tramo_tasa[0]) if tramo_tasa else None
+        datos, fila = ETFS_RENTA_FIJA[ticker], resumen.loc[ticker]
+        p_inicio, p_fin = _valor_en(precios[ticker], inicio), _valor_en(precios[ticker], fin)
+        retorno = (p_fin / p_inicio - 1) * 100 if inicio is not None and p_inicio and p_fin is not None else None
+        if inicio is None:
+            estado = f"no calculable: {ventana['motivo_sin_ventana']}"
+        else:
+            estado = ventana["estado"].get(ticker, ESTADO_CALCULABLE)
+        cambio = None
+        if estado == ESTADO_CALCULABLE:
+            tasa = rfui._rendimiento_del_tesoro(macro, datos["plazo_referencia"]) * 100  # a puntos porcentuales
+            y_inicio, y_fin = _valor_en(tasa, inicio), _valor_en(tasa, fin)
+            cambio = y_fin - y_inicio if y_inicio is not None and y_fin is not None else None
         duracion = fila["Duración medida (años)"]
         esperado = None if cambio is None or pd.isna(duracion) else -duracion * cambio
         filas.append({
@@ -93,26 +280,32 @@ def _tabla_de_etfs(macro: pd.DataFrame, precios: pd.DataFrame, dias: int) -> pd.
             "Resto (%)": None if esperado is None or retorno is None else retorno - esperado,
             "Volatilidad (%)": fila["Volatilidad (%)"], "Caída máxima 1 año (%)": fila["Caída máxima 1 año (%)"],
             "ultima_fecha": fila["ultima_fecha"],
+            "Estado de la atribución": estado,
         })
-    return pd.DataFrame(filas).set_index("ETF") if filas else pd.DataFrame()
+    tabla = pd.DataFrame(filas).set_index("ETF") if filas else pd.DataFrame()
+    if len(tabla):
+        numericas = ["Retorno del período (%)", "Cambio de la tasa (pp)", "Explicado por la duración (%)", "Resto (%)"]
+        tabla[numericas] = tabla[numericas].apply(pd.to_numeric, errors="coerce")
+    return tabla
 
 
-def _curva(macro: pd.DataFrame, dias: int) -> dict | None:
-    """Curva del Tesoro al inicio y al final del período, en %, por plazo en años."""
-    pivote = rfui._pivote_curva(macro).dropna(how="all")
-    if pivote.empty:
+def _curva(macro: pd.DataFrame, ventana: dict) -> dict | None:
+    """Curva del Tesoro completa en el inicio y en el fin de la ventana común, en %, por plazo en años.
+
+    Si en alguna de las dos fechas falta un plazo, no hay gráfico: usar la curva de otro día volvería a desalinear las
+    fechas del informe."""
+    inicio, fin = ventana["inicio"], ventana["fin"]
+    if inicio is None or fin is None or not ventana["atribucion"]:
         return None
-    completas = pivote.dropna(how="any")
-    if len(completas) < 2:
+    pivote = rfui._pivote_curva(macro)
+    pivote = pivote[~pivote.index.duplicated(keep="last")]
+    if inicio not in pivote.index or fin not in pivote.index:
         return None
-    fecha_fin = completas.index[-1]
-    objetivo = fecha_fin - pd.Timedelta(days=dias)
-    anteriores = completas[completas.index <= objetivo]
-    if anteriores.empty:
+    curva_inicio, curva_fin = pivote.loc[inicio], pivote.loc[fin]
+    if curva_inicio.isna().any() or curva_fin.isna().any():
         return None
-    fecha_inicio = anteriores.index[-1]
-    inicio, fin = completas.loc[fecha_inicio], completas.loc[fecha_fin]
-    return {"inicio": inicio, "fin": fin, "fecha_inicio": fecha_inicio, "fecha_fin": fecha_fin, "cambio": fin - inicio}
+    return {"inicio": curva_inicio, "fin": curva_fin, "fecha_inicio": inicio, "fecha_fin": fin,
+            "cambio": curva_fin - curva_inicio}
 
 
 def _chile(macro: pd.DataFrame) -> dict:
@@ -144,16 +337,47 @@ def _credito(macro: pd.DataFrame, dias: int) -> dict | None:
     }
 
 
-def calcular(macro: pd.DataFrame, precios: pd.DataFrame, dias: int, nombre_periodo: str) -> dict:
-    """Todo lo que el informe va a decir, ya calculado. No arma PDF: así las pruebas pueden comprobar los números."""
-    etfs = _tabla_de_etfs(macro, precios, dias)
+def _ultima(serie: pd.Series):
+    serie = serie.dropna()
+    return serie.index[-1] if len(serie) else None
+
+
+def calcular(macro: pd.DataFrame, precios: pd.DataFrame, dias: int, nombre_periodo: str, fecha_corte=None) -> dict:
+    """Todo lo que el informe va a decir, ya calculado. No arma PDF: así las pruebas pueden comprobar los números.
+
+    `fecha_corte`: nada posterior entra al cálculo. Sin ella, es la última fecha con precio de un ETF. Con los mismos
+    datos, el mismo período y la misma fecha de corte, el resultado es siempre el mismo (no depende del reloj)."""
+    precios = precios if precios is not None else pd.DataFrame()
+    corte, solicitada = _resolver_corte(precios, fecha_corte)
+    macro, precios = _recortar_al_corte(macro, precios, corte)
+    ventana = _comparabilidad(macro, precios, dias)
+    etfs = _tabla_de_etfs(macro, precios, ventana)
+    pivote = rfui._pivote_curva(macro)
+    fechas = {
+        "corte": corte, "corte_solicitado": solicitada,
+        "inicio": ventana["inicio"], "fin": ventana["fin"],
+        "ruedas": _ruedas_entre(ventana["ruedas"], ventana["inicio"], ventana["fin"]) if ventana["inicio"] is not None else None,
+        "motivo_sin_ventana": ventana["motivo_sin_ventana"],
+        "ultima_por_fuente": {
+            "ETFs (Yahoo Finance)": ventana["ultimo_precio"],
+            "Curva del Tesoro (FRED)": _ultima(pivote.max(axis=1)) if len(pivote.columns) else None,
+            "Spread Baa (FRED)": _ultima(rfui._serie(macro, rfui.NOMBRE_BAA10Y)),
+            "Banco Central de Chile": max(
+                [u for u in (_ultima(rfui._serie(macro, n)) for n in (rfui.NOMBRE_BCP10, rfui.NOMBRE_BCU10, rfui.NOMBRE_TPM_CHILE))
+                 if u is not None], default=None),
+        },
+        "dias_habiles_de_atraso": (int(np.busday_count(ventana["ultimo_precio"].date(), corte.date()))
+                                   if corte is not None and ventana["ultimo_precio"] is not None else None),
+    }
     return {
         "periodo": nombre_periodo, "dias": dias,
         "etfs": etfs,
-        "curva": _curva(macro, dias),
+        "excluidos": ventana["excluidos"],
+        "fechas": fechas,
+        "curva": _curva(macro, ventana),
         "credito": _credito(macro, dias),
         "chile": _chile(macro),
-        "hasta": etfs["ultima_fecha"].max() if len(etfs) else None,
+        "hasta": ventana["fin"] if ventana["fin"] is not None else ventana["ultimo_precio"],
         "precios": precios,
     }
 
@@ -161,14 +385,13 @@ def calcular(macro: pd.DataFrame, precios: pd.DataFrame, dias: int, nombre_perio
 # ---------------------------------------------------------------------------
 # Gráficos
 # ---------------------------------------------------------------------------
-def _grafico_retornos(precios: pd.DataFrame, dias: int):
+def _grafico_retornos(precios: pd.DataFrame, tickers: list[str], inicio, fin):
+    """Base 100 en el inicio S de la ventana común, hasta su fin E: las mismas fechas que el Cuadro 1."""
     def dibujar(ax):
-        for ticker in ETFS_DEL_GRAFICO:
-            if ticker not in precios:
-                continue
+        for ticker in [t for t in ETFS_DEL_GRAFICO if t in tickers and t in precios]:
             serie = precios[ticker].dropna()
-            serie = serie[serie.index >= serie.index[-1] - pd.Timedelta(days=dias)]
-            if len(serie) < 2:
+            serie = serie[(serie.index >= inicio) & (serie.index <= fin)]
+            if len(serie) < 2 or serie.index[0] != inicio:
                 continue
             ax.plot(serie.index, serie / serie.iloc[0] * 100, linewidth=1.3, label=ticker)
         ax.set_ylabel("Base 100 al inicio", fontsize=7.5, color=ib.INK)
@@ -317,17 +540,72 @@ def _tabla_sensibilidad(etfs: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(tabla)
 
 
-def generar(macro: pd.DataFrame, precios: pd.DataFrame, nombre_periodo: str) -> bytes:
-    """El informe completo en PDF, en bytes. `macro` y `precios` vienen como los usa la pantalla."""
+def _lineas_de_fechas(datos: dict) -> list[str]:
+    """La portada separa tres cosas distintas: la fecha de corte pedida, lo último que trae cada fuente y la ventana que
+    de verdad se compara. (Sin «—»: en este PDF ese signo solo va en el pie de página.)"""
+    f = datos["fechas"]
+    if f["corte"] is None:
+        return ["Sin datos de mercado."]
+    lineas = [
+        f"Datos de mercado al {ib.fecha(datos['hasta'])}." if datos["hasta"] is not None else "Sin datos de mercado.",
+        f"Fecha de corte: {ib.fecha(f['corte'])} "
+        + ("(solicitada)." if f["corte_solicitado"] else "(la última fecha con precios en la base)."),
+    ]
+    if f["inicio"] is not None:
+        lineas.append(
+            f"Ventana comparada: del {ib.fecha(f['inicio'])} al {ib.fecha(f['fin'])} ({f['ruedas']} ruedas). Retornos, "
+            "cambios de tasa y atribución se miden entre esas dos mismas fechas."
+        )
+    else:
+        lineas.append(f"Sin ventana comparable para el período: {f['motivo_sin_ventana']}.")
+    ultimas = "; ".join(f"{fuente}, {ib.fecha(u)}" for fuente, u in f["ultima_por_fuente"].items() if u is not None)
+    if ultimas:
+        lineas.append(f"Último dato disponible al corte: {ultimas}.")
+    ultimo_precio = f["ultima_por_fuente"]["ETFs (Yahoo Finance)"]
+    if f["fin"] is not None and ultimo_precio is not None and f["fin"] < ultimo_precio:
+        lineas.append(
+            f"La ventana termina antes del último precio ({ib.fecha(ultimo_precio)}) porque la curva del Tesoro se publica con "
+            "rezago y la atribución exige precio y tasa en la misma fecha. Por eso estos retornos pueden diferir por unos días "
+            "de los que muestra el dashboard, que usa el último precio."
+        )
+    if f["dias_habiles_de_atraso"] is not None and f["dias_habiles_de_atraso"] > DIAS_HABILES_SIN_ADVERTENCIA:
+        lineas.append(
+            f"Advertencia: el último precio de la base es del {ib.fecha(ultimo_precio)}, unos {f['dias_habiles_de_atraso']} días "
+            "hábiles antes de la fecha de corte (estimado sin feriados, que después del último dato no se pueden ver)."
+        )
+    return lineas
+
+
+def _nota_de_excluidos(excluidos: list[dict]) -> str | None:
+    if not excluidos:
+        return None
+    detalle = "; ".join(f"{e['ETF']} ({e['motivo']})" for e in excluidos)
+    return (f"No se comparan, para no medir retornos en fechas distintas: {detalle}. Ningún precio se rellenó ni se "
+            "estimó.")
+
+
+def _nota_de_no_calculables(etfs: pd.DataFrame) -> str | None:
+    if "Estado de la atribución" not in etfs:
+        return None
+    sin = etfs[etfs["Estado de la atribución"] != ESTADO_CALCULABLE]
+    if sin.empty:
+        return None
+    detalle = "; ".join(f"{t} ({estado})" for t, estado in sin["Estado de la atribución"].items())
+    return f"Sin atribución en este período: {detalle}. Su retorno, si se pudo medir, sí aparece en el Cuadro 1."
+
+
+def generar(macro: pd.DataFrame, precios: pd.DataFrame, nombre_periodo: str, fecha_corte=None) -> bytes:
+    """El informe completo en PDF, en bytes. `macro` y `precios` vienen como los usa la pantalla; `fecha_corte` (opcional)
+    regenera el informe con los datos hasta esa fecha."""
     dias = PERIODOS[nombre_periodo]
-    datos = calcular(macro, precios, dias, nombre_periodo)
+    datos = calcular(macro, precios, dias, nombre_periodo, fecha_corte=fecha_corte)
     etfs, curva, chile, credito = datos["etfs"], datos["curva"], datos["chile"], datos["credito"]
+    fechas = datos["fechas"]
 
     piezas = ib.portada(
         "Renta fija: qué pasó y por qué",
         f"Bonos del Tesoro, crédito y curva chilena · {nombre_periodo.lower()}",
-        [
-            f"Datos de mercado al {ib.fecha(datos['hasta'])}." if datos["hasta"] is not None else "Sin datos de mercado.",
+        _lineas_de_fechas(datos) + [
             "Fuentes: Yahoo Finance (ETFs), Reserva Federal vía FRED (curva del Tesoro y spread Baa), Banco Central de Chile (BCP, BCU y TPM).",
         ],
     )
@@ -337,6 +615,9 @@ def generar(macro: pd.DataFrame, precios: pd.DataFrame, nombre_periodo: str) -> 
             "No hay datos de los ETFs de bonos en la base en este momento, así que este informe no puede calcular nada. "
             "No se muestran cifras de ejemplo."
         ))
+        nota = _nota_de_excluidos(datos["excluidos"])
+        if nota:
+            piezas.append(ib.nota(nota))
         return ib.construir_pdf(piezas, "Renta fija", "Informe de renta fija")
 
     # ---- Resumen
@@ -354,13 +635,20 @@ def generar(macro: pd.DataFrame, precios: pd.DataFrame, nombre_periodo: str) -> 
     piezas.append(ib.nota(
         "Cuadro 1. Retornos totales del período: los precios vienen ajustados por distribuciones, así que ya incluyen los cupones que el "
         "fondo repartió. La volatilidad y la peor caída se miden sobre el último año de retornos diarios, no sobre el período del informe. "
-        f"Fuente: Yahoo Finance, datos al {ib.fecha(datos['hasta'])}."
+        + (f"Todos los retornos van del {ib.fecha(fechas['inicio'])} al {ib.fecha(fechas['fin'])}, las mismas fechas para cada ETF. "
+           if fechas["inicio"] is not None else f"Sin retornos del período: {fechas['motivo_sin_ventana']}. ")
+        + f"Fuente: Yahoo Finance, datos al {ib.fecha(datos['hasta'])}."
     ))
-    piezas.append(ib.con_su_nota(
-        _grafico_retornos(datos["precios"], dias),
-        f"Gráfico 1. Retorno acumulado de cuatro ETFs representativos, base 100 al inicio del período ({nombre_periodo.lower()}). "
-        "SHY son bonos del Tesoro de 1 a 3 años; IEF, de 7 a 10; TLT, de 20 o más; HYG, bonos de empresas de alto rendimiento.",
-    ))
+    nota_excluidos = _nota_de_excluidos(datos["excluidos"])
+    if nota_excluidos:
+        piezas.append(ib.nota(nota_excluidos))
+    if fechas["inicio"] is not None:
+        piezas.append(ib.con_su_nota(
+            _grafico_retornos(datos["precios"], list(etfs.index), fechas["inicio"], fechas["fin"]),
+            f"Gráfico 1. Retorno acumulado de ETFs representativos, base 100 el {ib.fecha(fechas['inicio'])} y hasta el "
+            f"{ib.fecha(fechas['fin'])} ({nombre_periodo.lower()}). "
+            "SHY son bonos del Tesoro de 1 a 3 años; IEF, de 7 a 10; TLT, de 20 o más; HYG, bonos de empresas de alto rendimiento.",
+        ))
 
     # ---- 2. Por qué
     piezas += ib.titulo_seccion("2. Por qué: la duración manda")
@@ -373,20 +661,33 @@ def generar(macro: pd.DataFrame, precios: pd.DataFrame, nombre_periodo: str) -> 
     if curva is not None:
         piezas.append(ib.con_su_nota(
             _grafico_curva(curva),
-            "Gráfico 2. Curva de rendimientos del Tesoro de EEUU al inicio y al final del período. "
-            f"Fuente: Reserva Federal (H.15) vía FRED, al {ib.fecha(curva['fecha_fin'])}.",
+            f"Gráfico 2. Curva de rendimientos del Tesoro de EEUU el {ib.fecha(curva['fecha_inicio'])} y el "
+            f"{ib.fecha(curva['fecha_fin'])}, el inicio y el fin de la ventana comparada. Fuente: Reserva Federal (H.15) vía FRED.",
         ))
-    piezas.append(ib.tabla(_tabla_atribucion(etfs)))
-    piezas.append(ib.nota(
-        "Cuadro 2. «Explicado» = −duración × cambio de la tasa. «Resto» = retorno real menos explicado: cupones devengados, riesgo de "
-        "crédito y lo que el modelo no captura. **R²** indica qué parte del movimiento diario del precio explican las tasas: bajo el 0,5 "
-        "la duración de ese instrumento es poco confiable."
-    ))
-    piezas.append(ib.con_su_nota(
-        _grafico_atribucion(etfs),
-        "Gráfico 3. Lo que anticipaba la duración frente al retorno real de cada ETF en el período.",
-    ))
-    frase_cupon = _frase_del_resto(etfs, dias)
+    elif fechas["inicio"] is not None:
+        piezas.append(ib.nota(
+            "Sin Gráfico 2: la curva completa del Tesoro no está disponible en las dos fechas de la ventana, y usar la de otro "
+            "día volvería a mezclar fechas."
+        ))
+    con_atribucion = etfs["Explicado por la duración (%)"].notna().any()
+    if con_atribucion:
+        piezas.append(ib.tabla(_tabla_atribucion(etfs)))
+        piezas.append(ib.nota(
+            "Cuadro 2. «Explicado» = −duración × cambio de la tasa. «Resto» = retorno real menos explicado: cupones devengados, riesgo de "
+            "crédito y lo que el modelo no captura. **R²** indica qué parte del movimiento diario del precio explican las tasas: bajo el 0,5 "
+            "la duración de ese instrumento es poco confiable. Retorno y cambio de tasa se miden entre las mismas dos fechas "
+            f"({ib.fecha(fechas['inicio'])} y {ib.fecha(fechas['fin'])})."
+        ))
+    nota_sin = _nota_de_no_calculables(etfs)
+    if nota_sin:
+        piezas.append(ib.nota(nota_sin))
+    if con_atribucion:
+        piezas.append(ib.con_su_nota(
+            _grafico_atribucion(etfs),
+            "Gráfico 3. Lo que anticipaba la duración frente al retorno real de cada ETF en el período.",
+        ))
+    dias_de_la_ventana = (fechas["fin"] - fechas["inicio"]).days if fechas["inicio"] is not None else dias
+    frase_cupon = _frase_del_resto(etfs, dias_de_la_ventana or dias)
     if frase_cupon:
         piezas.append(ib.parrafo(frase_cupon))
     piezas.append(ib.recuadro_concepto(
@@ -424,9 +725,11 @@ def generar(macro: pd.DataFrame, precios: pd.DataFrame, nombre_periodo: str) -> 
     if credito:
         verbo = "se amplió" if credito["cambio"] > 0 else "se comprimió"
         piezas.append(ib.parrafo(
-            f"En el período el spread Baa {verbo} de {ib.num(credito['inicio'])} a {ib.num(credito['fin'])} puntos porcentuales "
-            f"({ib.num(credito['cambio'], 2, True)} pp). Su máximo del período fue {ib.num(credito['maximo'])} pp, el "
-            f"{ib.fecha(credito['fecha_maximo'])}. Es un indicador de **EEUU**, no de empresas chilenas."
+            f"Entre el {ib.fecha(credito['fecha_inicio'])} y el {ib.fecha(credito['fecha_fin'])} el spread Baa {verbo} de "
+            f"{ib.num(credito['inicio'])} a {ib.num(credito['fin'])} puntos porcentuales "
+            f"({ib.num(credito['cambio'], 2, True)} pp). Su máximo en esas fechas fue {ib.num(credito['maximo'])} pp, el "
+            f"{ib.fecha(credito['fecha_maximo'])}. Es un indicador de **EEUU**, no de empresas chilenas. Se mide con sus propias "
+            "fechas de publicación, que pueden no coincidir con la ventana de los ETFs."
         ))
     else:
         piezas.append(ib.parrafo("No hay datos del spread de bonos corporativos Baa en la base para este período."))

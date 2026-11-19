@@ -149,8 +149,8 @@ def test_control_con_calendarios_iguales_lo_explicado_coincide_con_lo_real():
     assert _frase(inf._resumen(inf.calcular(_macro(lambda p: y), precios, DIAS_MES, MES)), "La duración explica la mayor parte")
 
 
-@defecto("I-1", "el retorno del ETF y el cambio de tasa se miden en ventanas con distinta fecha final")
 def test_precio_y_tasa_con_fechas_de_actualizacion_distintas_se_atribuyen_en_la_misma_ventana():
+    # Fue xfail en I-0 (defecto); corregido en I-1 con la ventana común.
     """Las tasas (FRED) llegan 3 ruedas atrasadas respecto de los precios (Yahoo), como en el informe real del 18-11.
     En esas 3 ruedas los ETFs caen 2% por un movimiento de tasas que todavía no está en la base.
 
@@ -431,8 +431,8 @@ def test_el_informe_no_afirma_que_la_pendiente_sea_la_duracion():
 # ---------------------------------------------------------------------------
 # 8. Datos atrasados (I-7)
 # ---------------------------------------------------------------------------
-@defecto("I-7", "un ETF con 20 ruedas de atraso entra al informe con su retorno medido en otra ventana")
 def test_un_etf_atrasado_no_se_compara_con_los_demas_bajo_una_fecha_general():
+    # Fue xfail en I-0 (asignado a I-7); se adelantó a I-1 porque la ventana común no es correcta sin excluir atrasados.
     """La portada dice «Datos de mercado al <la fecha MÁS reciente>» y TLT entra con su retorno hasta 20 ruedas antes,
     comparado en la misma tabla con ETFs al día. La pantalla ya marca el atraso (más de 5 días hábiles); el informe
     no lo usa. Esperado: TLT fuera de la comparación o sin retorno del período."""
@@ -491,8 +491,8 @@ def _numeros(etfs: pd.DataFrame) -> pd.DataFrame:
 
 
 def test_las_cifras_no_dependen_del_dia_en_que_se_genera(monkeypatch):
-    """Precisión al diagnóstico: `calcular` llama a pd.Timestamp.now(), pero solo para la marca de atraso de la pantalla,
-    que el informe no usa. Con la misma base, las cifras no cambian con el día de generación."""
+    """Con la misma base, las cifras no cambian con el día de generación. (Antes de I-1 `calcular` llamaba a
+    pd.Timestamp.now() solo para la marca de atraso de la pantalla; desde I-1 le pasa el fin de la ventana.)"""
     y, precios = _mundo_lineal(101, DURACIONES_LINEALES)
     macro = _macro(lambda p: y)
     hoy = _numeros(inf.calcular(macro, precios, DIAS_MES, MES)["etfs"])
@@ -502,8 +502,8 @@ def test_las_cifras_no_dependen_del_dia_en_que_se_genera(monkeypatch):
     pd.testing.assert_frame_equal(hoy, otro_dia)
 
 
-@defecto("I-1", "no hay fecha de corte explícita: el informe usa todo lo que haya en la base al generarse")
 def test_con_una_fecha_de_corte_explicita_el_informe_de_un_dia_pasado_se_reproduce():
+    # Fue xfail en I-0 (defecto); corregido en I-1 con `fecha_corte`.
     """Con datos que siguieron llegando después de T, pedir el informe «al T» debe dar lo mismo que se habría obtenido
     el día T. Hoy calcular() y generar() no aceptan una fecha de corte."""
     y, precios = _mundo_lineal(102, DURACIONES_LINEALES)
