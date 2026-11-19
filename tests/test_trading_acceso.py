@@ -12,6 +12,8 @@ LA CONTRASEÑA REAL NO APARECE ACÁ. Estas pruebas definen una de juguete en
 la variable de entorno, la usan y la borran. No leen ni escriben la de
 producción, y ninguna prueba toca la base de datos.
 """
+import _guardia_bd  # noqa: F401  (debe ir primero: protege la base de producción)
+
 import os
 import sys
 import time
@@ -433,7 +435,3 @@ def test_el_titulo_de_defensa_no_tiene_emoji():
     assert '"Defensa Top-Down"' in bloque, bloque
     assert "🎯" not in bloque, f"volvió el emoji a la lista de secciones: {bloque}"
     assert 'st.header("Defensa Top-Down")' in codigo, "el encabezado cambió"
-
-
-if __name__ == "__main__":
-    print("Correr con pytest: python -m pytest tests/test_trading_acceso.py")

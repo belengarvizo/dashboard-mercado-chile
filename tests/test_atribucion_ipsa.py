@@ -8,6 +8,8 @@ También confirma, contra datos reales de la base, que ECH (el proxy del
 IPSA que no es un ticker `.SN`) no está afectado por el apagón de Yahoo
 Finance para el mercado chileno documentado en sesiones anteriores.
 """
+import _guardia_bd  # noqa: F401  (debe ir primero: protege la base de producción)
+
 import os
 import sys
 
@@ -99,9 +101,3 @@ def test_atribucion_ipsa_en_la_app_coincide_con_calculo_independiente():
     # El grafico de barras apiladas y el de historial del residual deben
     # existir (st.plotly_chart) dentro de la pestaña.
     assert len(at.get("plotly_chart")) >= 2
-
-
-if __name__ == "__main__":
-    test_ech_no_esta_afectado_por_el_apagon_de_yahoo()
-    test_atribucion_ipsa_en_la_app_coincide_con_calculo_independiente()
-    print("OK: todas las pruebas pasaron.")

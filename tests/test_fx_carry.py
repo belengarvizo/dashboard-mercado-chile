@@ -5,6 +5,8 @@ da un retorno de tramo igual a 6 % × días / 365; una estrategia que invierte s
 de modo que un error de fórmula, de signo o de alineación de fechas no pueda pasar inadvertido. Los datos reales se prueban
 aparte, en test_fx_carry_seccion.py.
 """
+import _guardia_bd  # noqa: F401  (debe ir primero: protege la base de producción)
+
 import os
 import sys
 

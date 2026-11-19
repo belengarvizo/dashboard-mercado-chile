@@ -7,6 +7,8 @@ rango verdadero sin que se note.
 
 Módulo puro: estas pruebas no tocan la base de datos ni la red.
 """
+import _guardia_bd  # noqa: F401  (debe ir primero: protege la base de producción)
+
 import os
 import sys
 
@@ -540,10 +542,6 @@ def test_sin_los_datos_necesarios_no_se_afirma_nada():
     assert stop_demasiado_cerca(Decimal("1.10"), Decimal("1.09"), sin_atr) == (None, None)
     # y un stop en el mismo precio de entrada no es "cerca": es un dato malo
     assert stop_demasiado_cerca(Decimal("1.10"), Decimal("1.10"), r) == (None, None)
-
-
-if __name__ == "__main__":
-    print("Correr con pytest: python -m pytest tests/test_trading_atr.py")
 
 
 # ================== el stop contra el ruido del día (tramos)

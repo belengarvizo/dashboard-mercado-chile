@@ -14,6 +14,8 @@ correcta es posicional (una de cada dos reuniones). Para que un año futuro
 que rompa también ese patrón se note, acá se comparan las fechas DERIVADAS
 contra las que el propio Banco Central publica.
 """
+import _guardia_bd  # noqa: F401  (debe ir primero: protege la base de producción)
+
 import os
 import sys
 from datetime import date, timedelta
@@ -107,14 +109,3 @@ def test_ipom_tiene_indicador_visual_propio():
     assert ind["organismo"] == "Banco Central de Chile"
     otros = {v["color"] for k, v in cal.INDICADOR_POR_TIPO.items() if k != "IPoM"}
     assert ind["color"] not in otros, "el IPoM no debería reusar el color de otro tipo"
-
-
-if __name__ == "__main__":
-    test_el_ipom_derivado_coincide_con_el_que_publica_el_banco_central()
-    test_todos_los_anios_cargados_tienen_su_ipom_contrastado()
-    test_hay_cuatro_ipom_por_anio()
-    test_cada_ipom_es_el_dia_siguiente_a_una_rpm()
-    test_ipom_de_septiembre_2027_viene_de_la_rpm_de_agosto()
-    test_ipom_de_septiembre_2026_es_el_9()
-    test_ipom_tiene_indicador_visual_propio()
-    print("OK: las siete pruebas pasaron.")

@@ -17,6 +17,8 @@ once secciones en cada rerun; el selector ejecuta solo la activa. Como
 consecuencia, para ver el contenido de una sección hay que fijar
 session_state["seccion_activa"] antes de correr.
 """
+import _guardia_bd  # noqa: F401  (debe ir primero: protege la base de producción)
+
 import os
 import sys
 
@@ -146,13 +148,3 @@ def test_valor_de_vista_desconocido_se_comporta_como_dashboard_normal():
     assert not at.exception, f"?vista=otracosa lanzo una excepcion: {at.exception}"
     assert any("Mercado Económico Chileno" in t.value for t in at.title), "?vista=otracosa deberia mostrar el dashboard normal"
     assert len(at.segmented_control) > 0, "?vista=otracosa deberia renderizar el selector de secciones"
-
-
-if __name__ == "__main__":
-    test_dashboard_normal_sin_query_param()
-    test_vista_aislada_labfin_renderiza_solo_el_laboratorio()
-    test_la_autoria_aparece_en_el_sidebar()
-    test_la_autoria_se_ve_sin_depender_del_sidebar()
-    test_la_autoria_no_se_cuela_en_la_vista_aislada()
-    test_valor_de_vista_desconocido_se_comporta_como_dashboard_normal()
-    print("OK: las seis pruebas pasaron.")

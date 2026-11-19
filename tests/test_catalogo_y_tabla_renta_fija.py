@@ -6,6 +6,8 @@ Lo que se protege acá:
 - que cada explicación lleve el número real de su fila y no un ejemplo genérico;
 - que la tabla pinte con la misma escala que las de acciones, escape el HTML y apague las filas atrasadas.
 """
+import _guardia_bd  # noqa: F401  (debe ir primero: protege la base de producción)
+
 import os
 import re
 import sys

@@ -5,6 +5,8 @@ pestaña) y que la alineación trimestral de las series de FRED con
 base_recesion_us.xlsx queda correcta pese al desfase de convención de fecha
 (el Excel marca cada trimestre con el 1er día de su ÚLTIMO mes, FRED con
 fechas de observación reales cualquier día del trimestre)."""
+import _guardia_bd  # noqa: F401  (debe ir primero: protege la base de producción)
+
 import os
 import sys
 
@@ -66,10 +68,3 @@ def test_modelo_original_reproduce_la_sensibilidad_conocida():
     assert abs(modelo["sensibilidad"] - 9 / 28) < 1e-6
     assert abs(modelo["especificidad"] - 225 / 229) < 1e-6
     assert abs(modelo["precision_global"] - 234 / 257) < 1e-6
-
-
-if __name__ == "__main__":
-    test_metricas_matriz_confusion_calcula_bien()
-    test_agregar_series_fred_trimestral_alinea_por_periodo_no_por_fecha_exacta()
-    test_modelo_original_reproduce_la_sensibilidad_conocida()
-    print("OK: las tres pruebas pasaron.")

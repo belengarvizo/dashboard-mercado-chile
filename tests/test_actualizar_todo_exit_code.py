@@ -8,6 +8,8 @@
 
 Tests de la función pura _decidir_exit_code, sin BD ni red.
 """
+import _guardia_bd  # noqa: F401  (debe ir primero: protege la base de producción)
+
 import os
 import sys
 
@@ -101,15 +103,3 @@ def test_correr_con_limite_corta_un_paso_colgado_sin_bloquear_el_proceso():
         transcurrido = time.time() - t0
         assert transcurrido < 5, f"el timeout debería cortar cerca de 1s, tardó {transcurrido:.1f}s"
         assert "no terminó" in str(e)
-
-
-if __name__ == "__main__":
-    test_todo_ok_exit_0()
-    test_falla_critica_exit_1()
-    test_falla_no_critica_racha_corta_exit_0()
-    test_falla_no_critica_racha_larga_escala_a_exit_1()
-    test_critica_manda_aunque_no_critica_tambien_falle()
-    test_correr_con_limite_devuelve_el_resultado_si_termina_a_tiempo()
-    test_correr_con_limite_relanza_la_excepcion_real()
-    test_correr_con_limite_corta_un_paso_colgado_sin_bloquear_el_proceso()
-    print("OK: las ocho pruebas pasaron.")

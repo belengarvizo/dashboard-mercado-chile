@@ -7,6 +7,8 @@
   - IMACEC y OPEP+: sin hora oficial publicada -> campo `hora` vacío
     (no se inventa un valor).
 """
+import _guardia_bd  # noqa: F401  (debe ir primero: protege la base de producción)
+
 import os
 import sys
 
@@ -45,11 +47,3 @@ def test_imacec_y_opep_sin_hora():
             f"{tipo} no debería tener hora inventada: "
             + str([(str(e.fecha_inicio), e.hora) for e in eventos])
         )
-
-
-if __name__ == "__main__":
-    test_ipc_todos_a_las_08_00()
-    test_rpm_todos_a_las_18_00()
-    test_ipom_todos_a_las_09_00()
-    test_imacec_y_opep_sin_hora()
-    print("OK: las cuatro pruebas pasaron.")

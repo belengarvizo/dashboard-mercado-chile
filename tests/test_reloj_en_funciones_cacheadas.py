@@ -26,6 +26,8 @@ Limitación conocida: solo detecta la llamada DIRECTA al reloj dentro del
 cuerpo. Si una función cacheada llama a otra función que lee el reloj, esto
 no lo ve.
 """
+import _guardia_bd  # noqa: F401  (debe ir primero: protege la base de producción)
+
 import ast
 import os
 
@@ -149,10 +151,3 @@ def test_las_funciones_arregladas_reciben_la_fecha_como_argumento():
         "Estas funciones perdieron el parámetro `hoy`, así que volvieron a depender "
         f"de un reloj que no es parte de la clave del caché: {sin_hoy}"
     )
-
-
-if __name__ == "__main__":
-    test_ninguna_funcion_cacheada_lee_el_reloj_adentro()
-    test_las_excepciones_aceptadas_siguen_existiendo()
-    test_las_funciones_arregladas_reciben_la_fecha_como_argumento()
-    print("OK: las tres guardas pasaron.")

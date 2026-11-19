@@ -17,6 +17,8 @@ la app corriendo, ver conversación), pero sí confirma:
    analistas ni una atribución de noticias específica por acción —
    ambas explícitamente fuera de alcance.
 """
+import _guardia_bd  # noqa: F401  (debe ir primero: protege la base de producción)
+
 import os
 import sys
 
@@ -173,10 +175,3 @@ def test_tooltips_no_mencionan_lo_explicitamente_excluido():
         texto_minuscula = html.lower()
         for frase in FRASES_PROHIBIDAS:
             assert frase not in texto_minuscula, f"El heatmap {nombre} menciona '{frase}', fuera de alcance"
-
-
-if __name__ == "__main__":
-    test_heatmap_ipsa_completo_con_tooltips_y_atribucion()
-    test_heatmap_dow_jones_completo_con_tooltips_sin_atribucion()
-    test_tooltips_no_mencionan_lo_explicitamente_excluido()
-    print("OK: todas las pruebas pasaron.")

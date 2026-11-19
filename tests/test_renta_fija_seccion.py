@@ -8,6 +8,8 @@ pruebas no fijan valores de mercado: comprueban relaciones que tienen que cumpli
 bono del Tesoro corto es menor que la de uno largo, la inflación implícita es la resta de dos tasas mostradas,
 una tasa es positiva, etc.).
 """
+import _guardia_bd  # noqa: F401  (debe ir primero: protege la base de producción)
+
 import os
 import re
 import sys

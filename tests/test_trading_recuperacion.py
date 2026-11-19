@@ -8,6 +8,8 @@ se puede, y hay que decirlo sin dividir por cero).
 
 Módulo puro: estas pruebas no tocan la base de datos ni la red.
 """
+import _guardia_bd  # noqa: F401  (debe ir primero: protege la base de producción)
+
 import os
 import sys
 
@@ -181,7 +183,3 @@ def test_la_tabla_trae_las_dos_rachas_y_en_orden():
 def test_la_tabla_queda_vacia_si_no_hay_nada_que_calcular():
     assert tabla_de_rachas(Decimal(0), CAPITAL) == []
     assert tabla_de_rachas(Decimal("0.01"), None) == []
-
-
-if __name__ == "__main__":
-    print("Correr con pytest: python -m pytest tests/test_trading_recuperacion.py")

@@ -14,6 +14,8 @@ horarias reales, la última semana del torneo saldría corrida.
 ESTE TEST ESCRIBE EN LA BASE, dentro de una transacción que SIEMPRE se
 revierte. No deja ninguna fila en el diario real.
 """
+import _guardia_bd  # noqa: F401  (debe ir primero: protege la base de producción)
+
 import os
 import sys
 from datetime import datetime
@@ -140,11 +142,3 @@ def test_el_desfase_nueva_york_chile_cambia_el_1_de_noviembre():
     assert diferencia("2026-10-14 08:30") == 1, "CPI de octubre: Chile debería ir +1h"
     assert diferencia("2026-10-28 14:00") == 1, "FOMC de octubre: Chile debería ir +1h"
     assert diferencia("2026-11-04 08:30") == 2, "después del 1-nov Chile va +2h"
-
-
-if __name__ == "__main__":
-    test_la_hora_guardada_es_la_que_se_escribio_antes_y_despues_del_1_de_noviembre()
-    test_un_datetime_ingenuo_se_guardaria_mal_y_por_eso_hay_que_ponerle_zona()
-    test_las_escrituras_de_prueba_nunca_se_confirman()
-    test_el_desfase_nueva_york_chile_cambia_el_1_de_noviembre()
-    print("OK: las cuatro pruebas pasaron.")

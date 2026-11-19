@@ -14,6 +14,8 @@ quien escribe es la app, con su propia conexión. En su lugar marca la fila
 con una nota única, la borra en un `finally` pase lo que pase, y al terminar
 verifica que el diario volvió a tener exactamente las filas que tenía antes.
 """
+import _guardia_bd  # noqa: F401  (debe ir primero: protege la base de producción)
+
 import os
 import sys
 
@@ -110,13 +112,6 @@ def test_la_hora_inicial_no_cambia_entre_recargas():
     assert at.session_state["trd_hora_inicial"] == primera, (
         "la hora inicial cambió entre recargas: el widget puede perder lo que "
         "el usuario escribió")
-
-
-if __name__ == "__main__":
-    test_el_formulario_no_pisa_la_hora_que_se_escribio()
-    test_ninguna_prueba_de_este_archivo_escribe_en_el_diario()
-    test_la_hora_inicial_no_cambia_entre_recargas()
-    print("OK: las dos pruebas pasaron.")
 
 
 def test_el_boton_ahora_actualiza_la_hora_por_defecto():

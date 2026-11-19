@@ -626,3 +626,26 @@ dashboard-mercado-chile/
    ```
    streamlit run app/dashboard.py
    ```
+
+## Cómo correr las pruebas
+
+```
+py -m pytest tests/
+```
+
+Funciona igual desde la raíz, desde `tests/` o con un archivo suelto.
+
+**Las pruebas nunca se conectan a la base de producción.** `tests/_guardia_bd.py`
+se importa primero en `conftest.py` y en cada archivo de prueba, y bloquea
+toda conexión a PostgreSQL **antes de abrirla** mientras no exista una base de
+pruebas local autorizada. Al terminar, la salida muestra cuántas conexiones se
+intentaron y cuántas se bloquearon.
+
+- Las pruebas que necesitan base de datos (las que levantan el dashboard con
+  `AppTest` o leen y escriben tablas) aparecen como *skipped*, con el motivo.
+  Se activarán más adelante con una base PostgreSQL local y datos sintéticos.
+- Los archivos de prueba no se ejecutan con `python tests/archivo.py`: el
+  guardia lo impide. Usa siempre pytest.
+- No uses `TEST_DATABASE_URL` ni `FRI_PRUEBAS_POSTGRES` hasta que exista la
+  base local de pruebas. Las reglas que debe cumplir están en
+  `tests/_guardia_bd.py`.

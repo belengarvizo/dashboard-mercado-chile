@@ -5,6 +5,8 @@ el valor justo en el límite, uno abajo y uno arriba. Y se prueba que cuando
 falta un dato el chequeo diga SIN_DATOS en vez de pintar verde, porque un
 verde falso en un panel de riesgo es peor que no tener panel.
 """
+import _guardia_bd  # noqa: F401  (debe ir primero: protege la base de producción)
+
 import os
 import sys
 from decimal import Decimal
@@ -152,13 +154,6 @@ def test_ningun_chequeo_pinta_verde_cuando_le_falta_el_dato():
     ]
     for c in sin_datos:
         assert c.estado == SIN_DATOS, f"{c.nombre} pintó {c.estado} sin tener el dato"
-
-
-if __name__ == "__main__":
-    for nombre, funcion in sorted(list(globals().items())):
-        if nombre.startswith("test_"):
-            funcion()
-            print("OK:", nombre)
 
 
 def test_una_posicion_abierta_sin_dato_no_puede_pintar_verde():

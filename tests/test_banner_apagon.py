@@ -14,6 +14,8 @@ con Yahoo Finance — más un chequeo liviano con AppTest de que la app
 corre sin excepciones y, si hay un apagón real en curso al momento de
 correr la prueba, el banner que muestra tiene formato correcto (sin
 exigirlo, porque no siempre va a haber uno)."""
+import _guardia_bd  # noqa: F401  (debe ir primero: protege la base de producción)
+
 import os
 import sys
 
@@ -93,10 +95,3 @@ def test_banner_no_se_dispara_con_datos_frescos_simulados():
 
     resultado = detectar_apagon_mercado(df_fresco, TICKERS_IPSA)
     assert resultado is None, f"No deberia detectar apagon con datos frescos, pero devolvio: {resultado}"
-
-
-if __name__ == "__main__":
-    test_banner_apagon_se_dispara_con_datos_simulados_de_apagon()
-    test_banner_apagon_app_corre_sin_excepciones_y_formato_es_correcto_si_hay_uno()
-    test_banner_no_se_dispara_con_datos_frescos_simulados()
-    print("OK: las tres pruebas pasaron.")

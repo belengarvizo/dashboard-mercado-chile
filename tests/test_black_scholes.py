@@ -5,6 +5,8 @@ call ≈10,45, put ≈5,57), la paridad put-call, la volatilidad implícita recu
 se generó el precio, y el límite T→0 convergiendo al valor intrínseco. Así un error de signo o de fórmula no puede
 pasar inadvertido.
 """
+import _guardia_bd  # noqa: F401  (debe ir primero: protege la base de producción)
+
 import math
 import os
 import sys

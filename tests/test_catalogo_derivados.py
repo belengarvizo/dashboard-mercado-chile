@@ -1,4 +1,6 @@
 """Pruebas del catálogo de subyacentes de «Derivados»."""
+import _guardia_bd  # noqa: F401  (debe ir primero: protege la base de producción)
+
 import os
 import sys
 

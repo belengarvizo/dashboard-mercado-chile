@@ -8,6 +8,8 @@ forma independiente (con black_scholes.py, sin pasar por la pantalla) y se compa
 muestra, además de identidades que tienen que cumplirse siempre (T = días/365, call-put en el mismo strike tienen
 el mismo spot y la misma tasa, etc.).
 """
+import _guardia_bd  # noqa: F401  (debe ir primero: protege la base de producción)
+
 import math
 import os
 import re

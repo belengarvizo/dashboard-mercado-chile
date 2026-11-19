@@ -5,6 +5,8 @@ una suma hecha a mano, una fórmula cerrada conocida (bono a la par, cero
 cupón) o una derivada numérica por diferencias finitas. Así, si la fórmula del
 motor tuviera un error, la prueba lo notaría en vez de repetirlo.
 """
+import _guardia_bd  # noqa: F401  (debe ir primero: protege la base de producción)
+
 import os
 import sys
 

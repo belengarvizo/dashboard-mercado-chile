@@ -6,6 +6,8 @@ test_catalogo_y_glosario_fx.py (catálogo, tasas del cron y explicaciones). Como
 mercado: comprueban relaciones que tienen que cumplirse siempre (total = spot + carry, el lado de la estrategia sigue el signo del
 diferencial, el cruce EUR/GBP es el cociente de EUR/USD y GBP/USD).
 """
+import _guardia_bd  # noqa: F401  (debe ir primero: protege la base de producción)
+
 import html as html_lib
 import os
 import re

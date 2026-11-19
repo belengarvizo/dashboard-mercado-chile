@@ -9,6 +9,8 @@ sección vacía que parece normal. El propio código tenía escrito que había
 que actualizarlo ("RPM 2027 se publica en septiembre 2026"), pero un
 comentario no falla cuando se incumple.
 """
+import _guardia_bd  # noqa: F401  (debe ir primero: protege la base de producción)
+
 import os
 import sys
 from datetime import date, timedelta
@@ -131,14 +133,3 @@ def test_el_dashboard_no_tiene_el_pie_viejo_escrito_a_mano():
             f"volvió el pie del calendario escrito a mano ({frase!r}): se desincroniza "
             "apenas se carga un año nuevo. Usar cobertura_por_tipo()."
         )
-
-
-if __name__ == "__main__":
-    test_el_calendario_no_esta_a_punto_de_quedarse_vacio()
-    test_cada_tipo_mantenido_tiene_cobertura_suficiente()
-    test_la_regla_del_ipc_reproduce_el_calendario_oficial_del_INE()
-    test_no_hay_ninguna_fecha_estimada()
-    test_no_hay_eventos_duplicados()
-    test_el_pie_del_calendario_sale_de_los_datos_y_no_de_un_texto_fijo()
-    test_el_dashboard_no_tiene_el_pie_viejo_escrito_a_mano()
-    print("OK: las siete pruebas pasaron.")

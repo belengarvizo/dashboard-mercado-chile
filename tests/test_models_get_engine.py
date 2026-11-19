@@ -9,6 +9,8 @@ psycopg2 explícito en la URL, sin importar qué esquema venga en
 DATABASE_URL. create_engine() no conecta de forma ansiosa, así que este
 test no necesita una BD real ni red.
 """
+import _guardia_bd  # noqa: F401  (debe ir primero: protege la base de producción)
+
 import os
 import sys
 
@@ -117,14 +119,3 @@ def test_get_session_usa_el_engine_compartido():
         )
     finally:
         sesion.close()
-
-
-if __name__ == "__main__":
-    test_esquema_postgresql_ambiguo_se_fuerza_a_psycopg2()
-    test_esquema_postgres_viejo_estilo_heroku_tambien_se_fuerza()
-    test_esquema_ya_explicito_no_se_toca()
-    test_ninguna_consulta_puede_colgarse_para_siempre()
-    test_el_engine_se_reusa_en_vez_de_crear_un_pool_nuevo_por_llamada()
-    test_urls_distintas_no_comparten_engine()
-    test_get_session_usa_el_engine_compartido()
-    print("OK: las siete pruebas pasaron.")

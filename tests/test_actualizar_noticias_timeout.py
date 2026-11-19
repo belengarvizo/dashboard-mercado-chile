@@ -4,6 +4,8 @@ que no tiene parámetro de timeout (se verificó en su firma instalada) y se
 cuelga sin límite si el servidor acepta la conexión y no manda datos. Ahora
 el fetch va por requests (que sí tiene timeout real y lanza una excepción
 al vencer, algo que con_reintentos puede reintentar)."""
+import _guardia_bd  # noqa: F401  (debe ir primero: protege la base de producción)
+
 import os
 import sys
 from unittest.mock import patch, MagicMock
@@ -53,9 +55,3 @@ def test_descargar_titulares_no_traga_el_timeout_de_requests():
             assert False, "debería haber lanzado requests.exceptions.Timeout"
         except requests.exceptions.Timeout:
             pass
-
-
-if __name__ == "__main__":
-    test_descargar_titulares_pasa_timeout_explicito_a_requests()
-    test_descargar_titulares_no_traga_el_timeout_de_requests()
-    print("OK: las dos pruebas pasaron.")

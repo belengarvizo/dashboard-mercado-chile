@@ -5,6 +5,8 @@ para poder diagnosticar sin el log de Railway.
 
 No llama a Gemini de verdad: usa clientes/excepciones simuladas.
 """
+import _guardia_bd  # noqa: F401  (debe ir primero: protege la base de producción)
+
 import os
 import sys
 
@@ -353,18 +355,3 @@ def test_el_watchdog_del_paso_brief_deja_lugar_a_las_esperas():
         f"tasa se pueden ir {peor_caso_esperando}s, sin contar el trabajo real"
     )
     print(f"OK: watchdog {limite}s > peor caso de espera {peor_caso_esperando}s")
-
-
-if __name__ == "__main__":
-    test_clasificacion_por_tipo_de_error()
-    test_texto_de_respuesta_bloqueada_lanza_briefbloqueado()
-    test_reintenta_solo_transitorios()
-    test_prueba_modelos_de_respaldo_si_el_principal_agota_reintentos()
-    test_registrar_error_persiste_fila_en_la_bd()
-    test_espera_sugerida_solo_cuando_la_api_la_indica()
-    test_limite_por_minuto_espera_lo_que_pide_la_api_y_reintenta_igual_modelo()
-    test_cuota_diaria_sigue_sin_reintentarse()
-    test_si_el_modelo_sigue_limitado_pasa_al_siguiente()
-    test_el_tiempo_total_dormido_nunca_supera_el_presupuesto()
-    test_el_watchdog_del_paso_brief_deja_lugar_a_las_esperas()
-    print("OK: las once pruebas pasaron.")

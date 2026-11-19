@@ -9,6 +9,8 @@ contra la BD real (mismo criterio que el resto de los tests de este
 proyecto — sin mocks), y lo borra al final para no dejar basura en
 producción.
 """
+import _guardia_bd  # noqa: F401  (debe ir primero: protege la base de producción)
+
 import os
 import sys
 
@@ -140,8 +142,3 @@ def test_detector_de_reajuste_historico_distingue_split_de_ruido_de_dividendo():
     finally:
         _limpiar(session)
         session.close()
-
-
-if __name__ == "__main__":
-    test_ruido_de_punto_flotante_no_dispara_update_pero_cambio_real_si()
-    test_detector_de_reajuste_historico_distingue_split_de_ruido_de_dividendo()

@@ -8,6 +8,8 @@ hay media apuesta donde hay dos.
 
 Módulo puro: estas pruebas no tocan la base de datos ni la red.
 """
+import _guardia_bd  # noqa: F401  (debe ir primero: protege la base de producción)
+
 import math
 import os
 import sys
@@ -527,7 +529,3 @@ def test_una_posicion_en_el_indice_cuenta_en_el_riesgo_pero_no_se_agrupa():
     assert bruto == Decimal("160000"), "el riesgo del índice no se contó"
     assert racimos == []
     assert riesgo_por_direccion(posiciones)[COMPRA] == Decimal("160000")
-
-
-if __name__ == "__main__":
-    print("Correr con pytest: python -m pytest tests/test_trading_correlacion.py")

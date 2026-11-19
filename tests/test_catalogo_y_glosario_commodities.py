@@ -7,6 +7,8 @@ Lo que se protege acá:
 - que cada grupo (Energía, Metales, Agrícolas) reparta el catálogo sin repetir ni olvidar ninguno;
 - que cada explicación lleve el número real de su fila y no un ejemplo genérico, y que sin dato lo diga.
 """
+import _guardia_bd  # noqa: F401  (debe ir primero: protege la base de producción)
+
 import os
 import re
 import sys

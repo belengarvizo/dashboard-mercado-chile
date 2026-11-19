@@ -9,6 +9,8 @@ Dos niveles, como en el resto del proyecto:
 Las piezas del PDF (informe_base) se prueban aparte al final: ahí vive un error que ya ocurrió y que no se ve leyendo
 el código, solo contando páginas.
 """
+import _guardia_bd  # noqa: F401  (debe ir primero: protege la base de producción)
+
 import os
 import re
 import sys

@@ -6,6 +6,8 @@ las probabilidades de los escenarios justo en el límite. En todos, la
 respuesta correcta es None o un aviso, nunca un cero que se lea como "la
 expectativa es cero".
 """
+import _guardia_bd  # noqa: F401  (debe ir primero: protege la base de producción)
+
 import os
 import sys
 from decimal import Decimal
@@ -220,13 +222,6 @@ def test_checklist_avisa_pero_no_bloquea():
     puede2, noes2 = evaluar_checklist(con_un_no)
     assert not puede2
     assert noes2 == [PREGUNTAS_CHECKLIST[3]]
-
-
-if __name__ == "__main__":
-    for nombre, funcion in sorted(list(globals().items())):
-        if nombre.startswith("test_"):
-            funcion()
-            print("OK:", nombre)
 
 
 def test_valor_esperado_con_el_movimiento_sin_completar():

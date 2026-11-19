@@ -5,6 +5,8 @@ sabemos que la optimización encuentra el mínimo GLOBAL, no uno local
 cualquiera), y valida el comportamiento con datos reales conocidos
 (la curva del 30-jun-2017 que se verificó a mano contra la BD antes de
 construir la sección en el dashboard)."""
+import _guardia_bd  # noqa: F401  (debe ir primero: protege la base de producción)
+
 import os
 import sys
 
@@ -64,10 +66,3 @@ def test_svensson_nunca_ajusta_peor_que_nelson_siegel():
     # Sanity check adicional: ambos ajustes deben ser razonablemente
     # buenos sobre datos reales (no un caso patológico).
     assert ns["rmse"] < 0.5, f"RMSE de Nelson-Siegel sospechosamente alto: {ns['rmse']}"
-
-
-if __name__ == "__main__":
-    test_nelson_siegel_recupera_parametros_de_una_curva_sintetica()
-    test_svensson_recupera_parametros_de_una_curva_sintetica()
-    test_svensson_nunca_ajusta_peor_que_nelson_siegel()
-    print("OK: las tres pruebas pasaron.")

@@ -1,4 +1,8 @@
-"""Aislamiento entre tests: cada uno arranca con las cachés de Streamlit vacías.
+"""Aislamiento entre tests: base de datos protegida y cachés de Streamlit vacías.
+
+La protección contra la base de producción vive en _guardia_bd.py (se importa
+primero, aquí y en cada archivo de prueba). Este archivo agrega el registro de
+pruebas de integración (más abajo) y la limpieza de cachés.
 
 POR QUÉ EXISTE ESTE ARCHIVO
 ===========================
@@ -40,11 +44,183 @@ vuelven a leer la base. Es el precio correcto — una suite rápida que miente
 no sirve de nada, y este tipo de fallo cuesta horas de diagnóstico cada vez
 que aparece.
 """
+import _guardia_bd  # noqa: F401  (debe ir primero: protege la base de producción)
+
 import time
+from pathlib import Path
 
 import pytest
 import streamlit as st
 from _pytest.runner import runtestprotocol
+
+# ---------------------------------------------------------------------------
+# Pruebas de integración: se saltan mientras no haya base de pruebas local
+# ---------------------------------------------------------------------------
+#
+# Estas pruebas necesitan una base de datos (leen o escriben, directamente o
+# levantando el dashboard con AppTest). Antes corrían contra producción; ahora
+# se saltan hasta que exista una base PostgreSQL local con datos sintéticos
+# autorizada por el guardia. Si alguien las fuerza igual (por ejemplo con
+# --noconftest), el guardia bloquea la conexión antes de abrirla y fallan.
+#
+# Para cada archivo: el motivo, y las pruebas de ese archivo que NO necesitan
+# base y por lo tanto siguen corriendo. Una prueba nueva en estos archivos se
+# salta por defecto; en cualquier otro archivo corre, y si intentara
+# conectarse, el guardia la haría fallar a la vista.
+
+TODAS_NECESITAN_BASE = frozenset()
+
+ARCHIVOS_DE_INTEGRACION = {
+    "test_atribucion_ipsa.py": ("lee precios reales de la base", TODAS_NECESITAN_BASE),
+    "test_glosario_tooltips.py": ("levanta el dashboard con AppTest", TODAS_NECESITAN_BASE),
+    "test_guardar_historico_tolerancia.py": ("escribe y borra filas en precios_acciones", TODAS_NECESITAN_BASE),
+    "test_heatmap_atraso.py": ("levanta el dashboard y lee precios de la base", TODAS_NECESITAN_BASE),
+    "test_labfin_view.py": ("levanta el dashboard con AppTest", TODAS_NECESITAN_BASE),
+    "test_divisas_formulario_hora.py": ("levanta el dashboard y lee el diario de trading", TODAS_NECESITAN_BASE),
+    "test_banner_apagon.py": ("levanta el dashboard con AppTest", frozenset({
+        "test_banner_apagon_se_dispara_con_datos_simulados_de_apagon",
+        "test_banner_no_se_dispara_con_datos_frescos_simulados",
+    })),
+    "test_commodities_seccion.py": ("levanta el dashboard con datos de la base", frozenset({
+        "test_sin_una_divergencia_grande_no_hay_mensaje",
+        "test_justo_en_el_umbral_no_hay_mensaje_y_un_poco_mas_arriba_si",
+        "test_una_divergencia_grande_dentro_de_la_ventana_del_arancel_cita_esa_causa",
+        "test_una_divergencia_grande_fuera_de_la_ventana_del_arancel_no_inventa_una_causa",
+        "test_justo_en_los_bordes_de_la_ventana_del_arancel",
+        "test_una_fila_con_precio_viejo_se_marca_como_atrasada_y_una_fresca_no",
+        "test_el_tramo_del_grafico_solo_mira_las_columnas_elegidas_y_no_las_demas",
+    })),
+    "test_defensa_topdown.py": ("levanta el dashboard y escribe predicciones", frozenset({
+        "test_prediccion_pendiente",
+        "test_acierto_dentro_de_tolerancia",
+        "test_mal_calibrado_direccion_ok_magnitud_lejos",
+        "test_fallo_solo_si_la_direccion_es_la_contraria",
+        "test_prediccion_sin_datos",
+        "test_16_preguntas_exactas_del_pdf",
+        "test_sliders_defensa_sin_porcentaje_suelto_en_format",
+    })),
+    "test_derivados_seccion.py": ("levanta el dashboard y lee precios de la base", frozenset({
+        "test_dias_al_vencimiento_nunca_es_negativo_para_una_fecha_pasada",
+        "test_el_precio_de_mercado_es_el_punto_medio_entre_bid_y_ask_cuando_los_hay",
+        "test_el_precio_de_mercado_usa_el_ultimo_transado_si_no_hay_bid_ni_ask",
+    })),
+    "test_divisas_seccion.py": ("levanta el dashboard y lee el diario de trading", frozenset({
+        "test_la_seccion_conserva_su_lugar_entre_riesgo_y_benchmark",
+        "test_el_limite_por_operacion_no_bloquea_nada",
+        "test_el_aviso_de_stop_cerca_no_bloquea_nada",
+        "test_la_tabla_de_atr_no_da_senales_ni_se_puede_editar",
+        "test_el_bloque_del_atr_no_da_senales_ni_bloquea",
+        "test_el_aviso_de_antimartingala_no_bloquea_nada",
+        "test_la_comprobacion_de_lotes_no_bloquea_el_guardado",
+        "test_el_aviso_del_stop_no_bloquea_ni_da_senales",
+        "test_el_atr_se_guarda_con_la_operacion",
+        "test_el_sql_filtra_las_eliminadas_en_la_consulta_y_no_en_pandas",
+        "test_editar_avisa_del_desajuste_de_lotes_igual_que_al_crear",
+        "test_editar_eliminar_y_restaurar_exigen_una_sola_fila",
+        "test_las_sentencias_del_diario_usan_parametros_y_no_texto_armado",
+        "test_el_bloque_de_correlacion_avisa_y_no_bloquea",
+        "test_el_bloque_de_correlacion_va_despues_de_la_puerta",
+    })),
+    "test_fx_carry_seccion.py": ("levanta el dashboard con datos de la base", frozenset({
+        "test_la_columna_carry_sobre_riesgo_es_la_del_motor_y_no_se_recalcula_con_otra_volatilidad",
+        "test_las_columnas_de_spot_carry_y_total_tambien_son_las_del_motor",
+    })),
+    "test_generar_brief_errores.py": ("escribe y borra filas en errores_actualizacion", frozenset({
+        "test_clasificacion_por_tipo_de_error",
+        "test_texto_de_respuesta_bloqueada_lanza_briefbloqueado",
+        "test_reintenta_solo_transitorios",
+        "test_prueba_modelos_de_respaldo_si_el_principal_agota_reintentos",
+        "test_espera_sugerida_solo_cuando_la_api_la_indica",
+        "test_limite_por_minuto_espera_lo_que_pide_la_api_y_reintenta_igual_modelo",
+        "test_cuota_diaria_sigue_sin_reintentarse",
+        "test_si_el_modelo_sigue_limitado_pasa_al_siguiente",
+        "test_el_tiempo_total_dormido_nunca_supera_el_presupuesto",
+        "test_el_watchdog_del_paso_brief_deja_lugar_a_las_esperas",
+    })),
+    "test_informe_renta_fija.py": ("algunas pruebas generan el informe con datos de la base", frozenset({
+        "test_la_duracion_medida_recupera_la_que_se_uso_para_construir_los_precios",
+        "test_lo_explicado_por_la_duracion_es_exactamente_menos_duracion_por_el_cambio_de_tasa",
+        "test_el_resto_es_exactamente_el_retorno_real_menos_lo_explicado",
+        "test_el_retorno_del_periodo_se_mide_entre_las_puntas_del_periodo",
+        "test_el_cambio_de_tasa_es_el_de_la_tasa_de_referencia_de_cada_etf",
+        "test_con_la_curva_al_alza_lo_explicado_es_negativo_y_mas_para_el_plazo_largo",
+        "test_con_la_curva_a_la_baja_se_invierte_el_signo",
+        "test_la_curva_del_informe_son_las_dos_puntas_del_periodo",
+        "test_sin_historia_suficiente_no_se_inventa_un_periodo",
+        "test_la_frase_del_cupon_solo_aparece_cuando_los_datos_la_sostienen",
+        "test_sin_datos_el_informe_lo_dice_en_vez_de_mostrar_cifras_de_ejemplo",
+        "test_el_markdown_del_pdf_convierte_negrita_cursiva_y_escapa_el_html",
+        "test_los_numeros_sin_dato_salen_como_guion_y_nunca_como_cero",
+        "test_una_nota_no_se_parte_entre_paginas_pero_no_se_anida_dentro_de_otro_bloque",
+    })),
+    "test_key_indicators_frescura.py": ("dos pruebas levantan el dashboard con AppTest", frozenset({
+        "test_diaria_fresca_muestra_badge_y_diaria_atrasada_lo_oculta",
+        "test_umbral_de_un_dia_habil",
+        "test_mensuales_siempre_muestran_badge_aunque_tengan_meses_de_atraso",
+        "test_delta_sin_direccion_cuando_el_cambio_mostrado_es_0",
+    })),
+    "test_renta_fija_seccion.py": ("levanta el dashboard con datos de la base", frozenset({
+        "test_los_nombres_de_series_coinciden_con_los_del_script_de_descarga",
+        "test_un_hueco_corta_la_linea_en_vez_de_unir_los_bordes",
+        "test_fines_de_semana_y_feriados_no_son_huecos",
+        "test_el_umbral_del_hueco_es_estricto",
+    })),
+    "test_renta_variable_seccion.py": ("levanta el dashboard con datos de la base", frozenset({
+        "test_dos_puntos_casi_iguales_ponen_su_etiqueta_uno_arriba_y_el_otro_abajo",
+        "test_un_punto_en_el_borde_no_pone_su_etiqueta_hacia_afuera_del_grafico",
+        "test_cada_punto_recibe_una_posicion_valida_y_los_casos_degenerados_no_rompen",
+        "test_los_puntos_sin_etiqueta_no_reciben_posicion_pero_siguen_siendo_obstaculos",
+    })),
+    "test_trading_acceso.py": ("levanta el dashboard con AppTest", frozenset({
+        "test_sin_variable_configurada_no_entra_ni_con_cadena_vacia",
+        "test_una_variable_vacia_cuenta_como_no_configurada",
+        "test_la_contrasena_correcta_entra_y_la_incorrecta_no",
+        "test_el_motivo_nunca_revela_la_contrasena",
+        "test_el_limite_de_intentos_es_del_servidor_y_no_de_la_sesion",
+        "test_el_bloqueo_se_levanta_solo_al_pasar_el_tiempo",
+        "test_un_acierto_reinicia_el_contador",
+        "test_el_titulo_de_defensa_no_tiene_emoji",
+    })),
+    "test_trading_fx.py": ("una prueba levanta el dashboard con AppTest", frozenset({
+        "test_separa_las_divisas_del_par",
+        "test_el_ticket_de_eurusd_implica_una_tasa_coherente_con_el_banco_central",
+        "test_valor_de_posicion_usa_la_divisa_base",
+        "test_pip_de_un_par_que_cotiza_en_usd",
+        "test_pip_encadenado_cuando_la_cotizacion_no_es_usd",
+        "test_se_niega_cuando_el_pip_esta_pendiente",
+        "test_se_niega_cuando_falta_la_tasa_de_conversion",
+        "test_la_tasa_manual_pisa_la_de_la_base",
+        "test_avisa_cuando_la_tasa_de_la_base_esta_vieja",
+        "test_marca_como_supuesto_el_contrato_de_los_pares_no_verificados",
+        "test_lotes_para_un_riesgo_dado",
+        "test_lotes_rechaza_un_stop_invalido",
+        "test_la_cadena_a_clp_queda_documentada_paso_a_paso",
+    })),
+    "test_trading_zona_horaria.py": ("inserta filas en trading_operaciones", frozenset({
+        "test_el_desfase_nueva_york_chile_cambia_el_1_de_noviembre",
+    })),
+}
+
+# Archivos que mencionan la base pero verificadamente no se conectan.
+ARCHIVOS_SIN_CONEXION_VERIFICADOS = {
+    "test_models_get_engine.py": "crea motores con create_engine, que no conecta hasta la primera consulta",
+}
+
+
+def pytest_collection_modifyitems(config, items):
+    if _guardia_bd.base_de_pruebas_autorizada() is not None:
+        return
+    for item in items:
+        archivo = Path(str(item.fspath)).name
+        registro = ARCHIVOS_DE_INTEGRACION.get(archivo)
+        if registro is None:
+            continue
+        motivo, pueden_correr = registro
+        nombre = getattr(item, "originalname", None) or item.name
+        if nombre not in pueden_correr:
+            item.add_marker(pytest.mark.skip(
+                reason=f"Integración ({motivo}): requiere la base PostgreSQL local de pruebas, aún no configurada."
+            ))
 
 # ---------------------------------------------------------------------------
 # Reintento de un test que ni siquiera llegó a correr por un corte de red

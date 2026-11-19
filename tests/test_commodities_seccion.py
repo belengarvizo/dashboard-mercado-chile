@@ -6,6 +6,8 @@ Es una prueba de la pantalla (AppTest sobre app/dashboard.py), complementaria a 
 que tienen que cumplirse siempre (la diferencia mostrada es exactamente comex/bcch - 1, el aviso del arancel de 2025
 solo aparece cuando el máximo del período realmente cae en esa fecha).
 """
+import _guardia_bd  # noqa: F401  (debe ir primero: protege la base de producción)
+
 import html as html_lib
 import os
 import re

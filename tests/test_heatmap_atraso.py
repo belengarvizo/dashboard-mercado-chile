@@ -16,6 +16,8 @@ Corre la app COMPLETA vía streamlit.testing.v1.AppTest porque el pedido
 original fue validar lo que la UI realmente renderiza, no solo la funcion
 de calculo por separado.
 """
+import _guardia_bd  # noqa: F401  (debe ir primero: protege la base de producción)
+
 import os
 import sys
 
@@ -125,9 +127,3 @@ def test_columna_atraso_no_usa_cero_dias_confuso():
     con el patrón anterior sin que hubiera ningún "0 días" real."""
     for df in _tablas_heatmap_html():
         assert not df["Atraso"].astype(str).str.contains(r"(?<!\d)0 días", regex=True).any()
-
-
-if __name__ == "__main__":
-    test_columna_atraso_ipsa_coincide_con_calculo_manual_para_todos_los_tickers()
-    test_columna_atraso_no_usa_cero_dias_confuso()
-    print("OK: ambas pruebas pasaron.")

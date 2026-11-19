@@ -6,6 +6,8 @@ test_catalogo_y_glosario_renta_variable.py (catálogo y explicaciones). Como los
 valores de mercado: comprueban relaciones que tienen que cumplirse siempre (SPY contra sí mismo tiene beta 1; el beta es
 la correlación por el cociente de volatilidades; la diferencia contra el S&P 500 es una resta de dos columnas mostradas).
 """
+import _guardia_bd  # noqa: F401  (debe ir primero: protege la base de producción)
+
 import html as html_lib
 import os
 import re

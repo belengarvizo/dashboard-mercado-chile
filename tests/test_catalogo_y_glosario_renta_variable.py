@@ -6,6 +6,8 @@ Lo que se protege acá:
 - que cada explicación lleve el número real de su fila y no un ejemplo genérico;
 - que sin dato la explicación lo diga en vez de inventar un número.
 """
+import _guardia_bd  # noqa: F401  (debe ir primero: protege la base de producción)
+
 import os
 import re
 import sys

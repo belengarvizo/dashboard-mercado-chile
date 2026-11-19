@@ -4,6 +4,8 @@ Cada prueba arma precios cuya respuesta se sabe de antemano (un ETF que se mueve
 mercado tiene beta 2; uno que se mueve al revés, correlación -1), de modo que un error de fórmula no pueda pasar
 inadvertido. Los datos reales se prueban aparte, en test_renta_variable_seccion.py.
 """
+import _guardia_bd  # noqa: F401  (debe ir primero: protege la base de producción)
+
 import os
 import sys
 

@@ -9,6 +9,8 @@
 
 Datos simulados (sin BD ni red).
 """
+import _guardia_bd  # noqa: F401  (debe ir primero: protege la base de producción)
+
 import os
 import sys
 from datetime import date
@@ -231,13 +233,3 @@ def test_menor_es_mejor_invierte_el_color_del_badge():
             assert m.proto.color == 0, (
                 f"{label} subió ({m.proto.delta!r}) -> debe ser ROJO, es color={m.proto.color}"
             )
-
-
-if __name__ == "__main__":
-    test_diaria_fresca_muestra_badge_y_diaria_atrasada_lo_oculta()
-    test_umbral_de_un_dia_habil()
-    test_mensuales_siempre_muestran_badge_aunque_tengan_meses_de_atraso()
-    test_delta_sin_direccion_cuando_el_cambio_mostrado_es_0()
-    test_render_sin_argumento_delta_cuando_no_hay_cambio()
-    test_menor_es_mejor_invierte_el_color_del_badge()
-    print("OK: las seis pruebas pasaron.")

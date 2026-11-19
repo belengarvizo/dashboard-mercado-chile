@@ -5,6 +5,8 @@ del 30% del margen por subyacente descalifica del torneo. Por eso se prueban
 los bordes y, sobre todo, que el módulo SE NIEGUE a calcular cuando le falta
 un dato en vez de asumirlo.
 """
+import _guardia_bd  # noqa: F401  (debe ir primero: protege la base de producción)
+
 import os
 import sys
 from datetime import date, timedelta
@@ -169,13 +171,6 @@ def test_la_cadena_a_clp_queda_documentada_paso_a_paso():
     assert len(tasa.pasos) >= 3, tasa.pasos
     assert any("158.11" in p for p in tasa.pasos), "falta la cotización usada"
     assert any("975.06" in p for p in tasa.pasos), "falta el USD/CLP usado"
-
-
-if __name__ == "__main__":
-    for nombre, funcion in sorted(list(globals().items())):
-        if nombre.startswith("test_"):
-            funcion()
-            print("OK:", nombre)
 
 
 def test_un_nan_de_la_base_cuenta_como_dato_faltante():

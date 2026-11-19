@@ -9,6 +9,8 @@ LAS PALABRAS PROHIBIDAS SE CONSTRUYEN AL VUELO, a partir de los
 infinitivos. Si estuvieran escritas tal cual, este archivo contendría
 justamente lo que prohíbe y la prueba se encontraría a sí misma.
 """
+import _guardia_bd  # noqa: F401  (debe ir primero: protege la base de producción)
+
 import io
 import os
 import re
@@ -134,7 +136,3 @@ def test_no_hay_voseo_en_el_codigo():
     assert not hallazgos, (
         "Hay voseo en el código. Los textos van en tuteo chileno "
         "(\"revisa\", \"puedes\", \"tienes\"):\n" + "\n".join(hallazgos))
-
-
-if __name__ == "__main__":
-    print("Correr con pytest: python -m pytest tests/test_tuteo_chileno.py")

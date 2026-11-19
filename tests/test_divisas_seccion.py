@@ -5,6 +5,8 @@ panel se presente como un espejo y no como un guardián, que el calculador se
 niegue a calcular cuando le falta el tamaño del pip, y que el diario se
 dibuje con UNA sola llamada en vez de una por fila.
 """
+import _guardia_bd  # noqa: F401  (debe ir primero: protege la base de producción)
+
 import os
 import sys
 
@@ -1040,15 +1042,3 @@ def test_el_bloque_de_correlacion_va_despues_de_la_puerta():
     inicio = codigo.index("def render_divisas():")
     cuerpo = codigo[inicio:]
     assert cuerpo.index("_trd_puerta_de_acceso()") < cuerpo.index("_trd_riesgo_agrupado(")
-
-
-if __name__ == "__main__":
-    test_la_seccion_existe_entre_riesgo_y_benchmark()
-    test_la_seccion_renderiza_sin_excepcion()
-    test_se_presenta_como_espejo_y_no_como_guardian()
-    test_declara_que_no_opera_ni_recomienda()
-    test_el_calculador_se_niega_cuando_el_pip_esta_pendiente()
-    test_el_calculador_si_funciona_donde_el_pip_esta_cargado()
-    test_el_diario_no_dibuja_una_llamada_por_fila()
-    test_el_panel_muestra_los_controles_del_reglamento()
-    print("OK: las ocho pruebas pasaron.")

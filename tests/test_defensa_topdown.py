@@ -8,6 +8,8 @@
     Tarea de Inversiones (AppTest sobre app/dashboard.py, datos reales).
   - El comparador de decisión muestra 2 tickers de prueba sin mezclar datos.
 """
+import _guardia_bd  # noqa: F401  (debe ir primero: protege la base de producción)
+
 import os
 import sys
 
@@ -535,20 +537,3 @@ def test_yahoo_timeout_no_cuelga_la_pestana():
         with eng.begin() as c:
             c.execute(_text("DELETE FROM defensa_topdown_predicciones WHERE ticker = :tk"),
                       {"tk": tk_test})
-
-
-if __name__ == "__main__":
-    test_prediccion_pendiente()
-    test_acierto_dentro_de_tolerancia()
-    test_mal_calibrado_direccion_ok_magnitud_lejos()
-    test_fallo_solo_si_la_direccion_es_la_contraria()
-    test_prediccion_sin_datos()
-    test_16_preguntas_exactas_del_pdf()
-    test_sliders_defensa_sin_porcentaje_suelto_en_format()
-    test_pestana_propia_sin_boton()
-    test_calculadoras_recalculan_en_vivo()
-    test_sectoriales_y_tecnicas_sin_calculo_inventado()
-    test_comparador_checklist_preparacion()
-    test_export_resumen_compacto_con_datos()
-    test_yahoo_timeout_no_cuelga_la_pestana()
-    print("OK: defensa top-down — todas las pruebas pasaron.")
