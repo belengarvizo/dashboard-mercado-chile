@@ -262,7 +262,7 @@ def test_el_informe_declara_sus_limites_y_no_se_presenta_como_asesoria(datos_rea
 def test_el_informe_trae_sus_seis_secciones_y_la_explicacion_de_cada_una(datos_reales):
     macro, precios = datos_reales
     texto = _texto(inf.generar(macro, precios, "Último año"))
-    secciones = ["RESUMEN", "1. QUÉ PASÓ", "2. POR QUÉ: LA DURACIÓN MANDA", "3. EL OTRO MOTOR: EL RIESGO DE CRÉDITO",
+    secciones = ["RESUMEN", "1. QUÉ PASÓ", "2. SENSIBILIDAD A TASAS Y ATRIBUCIÓN DE RETORNOS", "3. EL OTRO MOTOR: EL RIESGO DE CRÉDITO",
                  "4. CHILE: PESOS, UF Y POLÍTICA MONETARIA", "5. QUÉ PASARÍA SI LAS TASAS SE MUEVEN", "6. QUÉ NO DICE ESTE INFORME"]
     posiciones = [texto.find(s) for s in secciones]
     assert all(p >= 0 for p in posiciones), [s for s, p in zip(secciones, posiciones) if p < 0]
