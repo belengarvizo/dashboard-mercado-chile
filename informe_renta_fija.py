@@ -293,7 +293,8 @@ def _tabla_de_etfs(macro: pd.DataFrame, precios: pd.DataFrame, ventana: dict) ->
         else:
             estado = ventana["estado"].get(ticker, ESTADO_CALCULABLE)
         cambio = devengo = None
-        if estado == ESTADO_CALCULABLE:
+        # I-4a: TIP responde a la tasa real; contra la nominal no hay cambio de tasa, explicado, resto ni devengo.
+        if estado == ESTADO_CALCULABLE and rfui.usa_tasa_nominal(ticker):
             tasa = rfui._rendimiento_del_tesoro(macro, datos["plazo_referencia"]) * 100  # a puntos porcentuales
             y_inicio, y_fin = _valor_en(tasa, inicio), _valor_en(tasa, fin)
             cambio = y_fin - y_inicio if y_inicio is not None and y_fin is not None else None
@@ -622,6 +623,8 @@ def _contexto(macro: pd.DataFrame, precios: pd.DataFrame, ventana: dict, credito
     if tickers and fin is not None:
         retornos = (precios.loc[precios.index <= fin, tickers].pct_change(fill_method=None) * 100).tail(rf.DIAS_HABILES_ANIO)
         for t in tickers:
+            if not rfui.usa_tasa_nominal(t):   # I-4a: la tasa nominal no es la tasa de referencia de TIP
+                continue
             tasa = rfui._rendimiento_del_tesoro(macro, ETFS_RENTA_FIJA[t]["plazo_referencia"]) * 100
             tasa_inicio[t] = _valor_en(tasa, inicio)
     sigma_retorno = {t: float(retornos[t].dropna().std()) for t in retornos.columns if retornos[t].notna().sum() >= 30}
@@ -759,10 +762,11 @@ def _evaluar_atribucion(ticker: str, fila: pd.Series, ctx: dict, credito: dict |
         ev["condiciones"] = tuple(ev["condiciones"])
         return ev
 
+    if not rfui.usa_tasa_nominal(ticker):
+        # I-4a: TIP responde a la tasa real y al reajuste por inflación; sin tasas reales no se contrasta.
+        return cerrar("sin_tasa_real")
     if estado != ESTADO_CALCULABLE or pd.isna(R) or pd.isna(X) or pd.isna(beta) or pd.isna(cambio):
         return cerrar("no_calculable")
-    if grupo == "Inflación":
-        return cerrar("tasa_nominal")
     tau_y = _umbral(u["pb_tasa"], ctx.get("sigma_plazo", {}).get(plazo), n)
     tau_r = _umbral(u["pp_retorno"], ctx.get("sigma_retorno", {}).get(ticker), n)
     tau_x = max(tau_r, u["errores_estandar"] * (se if pd.notna(se) else 0.0) * abs(float(cambio)))
@@ -849,9 +853,9 @@ def _frase_de_evaluacion(ev: dict) -> str:
         return (f"{t} rindió {R} y su sensibilidad a tasas anticipaba {X}, pero el spread de crédito también se movió "
                 f"({ib.num(ev['spread_pb'], 0, True)} pb): la coincidencia puede reflejar efectos que se compensan y no permite "
                 "separarlos.")
-    if clase == "tasa_nominal":
-        return (f"La sensibilidad de {t} se mide contra la tasa nominal del Tesoro, mientras su precio responde a tasas reales; "
-                "su atribución no se interpreta.")
+    if clase == "sin_tasa_real":
+        return (f"{t} rindió {R}. Su precio responde a la tasa real del Tesoro y al reajuste de su capital por inflación, y la "
+                "base solo tiene tasas nominales: no se estima su sensibilidad ni se contrasta su retorno con las tasas.")
     return f"{t}: atribución {ev['estado']}."
 
 
@@ -881,9 +885,13 @@ def _afirmacion_atribucion(datos: dict, evaluaciones: list[dict]) -> Afirmacion:
                       "de tasas no da cuenta de su resultado.")
     if por_clase.get("sin_movimiento"):
         partes.append(f"En {_lista(por_clase['sin_movimiento'])}, ni la tasa de referencia ni el precio se movieron de forma material.")
-    otros = [ev["ETF"] for ev in evaluaciones if ev["clase"] not in ("consistente", "parcial", "contraria", "sin_movimiento")]
+    otros = [ev["ETF"] for ev in evaluaciones
+             if ev["clase"] not in ("consistente", "parcial", "contraria", "sin_movimiento", "sin_tasa_real")]
     if otros:
         partes.append(f"Para {_lista(otros)}, la evidencia no permite una conclusión sobre el papel de las tasas (ver sección 2).")
+    if por_clase.get("sin_tasa_real"):
+        partes.append(f"{_lista(por_clase['sin_tasa_real'])} no se contrasta con las tasas: su precio responde a la tasa real del "
+                      "Tesoro y al reajuste por inflación, y el informe solo dispone de tasas nominales.")
     con_resto = _residuo_comparado(etfs)
     if len(con_resto):
         mayor = con_resto.abs().idxmax()
@@ -1091,22 +1099,37 @@ def _tabla_desempeno(etfs: pd.DataFrame) -> pd.DataFrame:
 NO_ESTIMADO = "n. e."
 
 
+def _filas_del_cuadro_2(etfs: pd.DataFrame) -> pd.DataFrame:
+    """Los ETFs con atribución y, además, los que no se atribuyen por falta de tasa real (TIP, I-4a) si tienen retorno:
+    aparecen con su retorno real y «n. e.» en lo demás, en vez de desaparecer del cuadro sin explicación."""
+    con_atribucion = etfs["Explicado por la duración (%)"].notna()
+    if "Grupo" in etfs:
+        sin_tasa_real = etfs["Grupo"].isin(rfui.GRUPOS_SIN_TASA_NOMINAL) & etfs["Retorno del período (%)"].notna()
+        return etfs[con_atribucion | sin_tasa_real]
+    return etfs[con_atribucion]
+
+
 def _tabla_atribucion(etfs: pd.DataFrame) -> pd.DataFrame:
-    datos = etfs.dropna(subset=["Explicado por la duración (%)"])
+    datos = _filas_del_cuadro_2(etfs)
+    sin_tasa = ([not rfui.usa_tasa_nominal(t) if t in ETFS_RENTA_FIJA else False for t in datos.index])
+
+    def celda(valores, formato):
+        return [NO_ESTIMADO if (s and pd.isna(v)) else formato(v) for v, s in zip(valores, sin_tasa)]
+
     tabla = {
         "ETF": datos.index,
-        "Tasa de ref.": [f"{int(p)} años" for p in datos["Plazo de referencia"]],
-        "Cambio de la tasa": [f"{ib.num(v, 2, True)} pp" for v in datos["Cambio de la tasa (pp)"]],
-        "Duración": [ib.num(v, 2) for v in datos["Duración medida (años)"]],
-        "Explicado": [ib.pct(v, 2, True) for v in datos["Explicado por la duración (%)"]],
+        "Tasa de ref.": [NO_ESTIMADO if s else f"{int(p)} años" for p, s in zip(datos["Plazo de referencia"], sin_tasa)],
+        "Cambio de la tasa": celda(datos["Cambio de la tasa (pp)"], lambda v: f"{ib.num(v, 2, True)} pp"),
+        "Duración": celda(datos["Duración medida (años)"], lambda v: ib.num(v, 2)),
+        "Explicado": celda(datos["Explicado por la duración (%)"], lambda v: ib.pct(v, 2, True)),
         "Real": [ib.pct(v, 2, True) for v in datos["Retorno del período (%)"]],
-        "Resto": [ib.pct(v, 2, True) for v in datos["Resto (%)"]],
+        "Resto": celda(datos["Resto (%)"], lambda v: ib.pct(v, 2, True)),
     }
     if "Devengo aproximado (%)" in datos and datos["Devengo aproximado (%)"].notna().any():
         # I-3: solo los fondos del Tesoro tienen devengo aproximado; en los demás no se estima (n. e.).
         tabla["Devengo aprox."] = [ib.pct(v, 2, True) if pd.notna(v) else NO_ESTIMADO for v in datos["Devengo aproximado (%)"]]
         tabla["No explicado"] = [ib.pct(v, 2, True) if pd.notna(v) else NO_ESTIMADO for v in datos["No explicado (%)"]]
-    tabla["R²"] = [ib.num(v, 2) for v in datos["R² con la tasa"]]
+    tabla["R²"] = celda(datos["R² con la tasa"], lambda v: ib.num(v, 2))
     return pd.DataFrame(tabla)
 
 
@@ -1124,7 +1147,7 @@ def _anchos_atribucion(columnas: list[str]) -> list[float]:
 def _nota_cuadro_2(etfs: pd.DataFrame, fechas: dict) -> str:
     """La nota del Cuadro 2 según los grupos que de verdad aparecen en el cuadro. Ningún residuo se atribuye a una causa:
     se dice qué puede contener y qué no se separa. El riesgo de crédito solo se nombra si hay fondos con crédito."""
-    datos = etfs.dropna(subset=["Explicado por la duración (%)"])
+    datos = _filas_del_cuadro_2(etfs)
     grupos = set(datos["Grupo"]) if "Grupo" in datos else set()
     con_devengo = "Devengo aproximado (%)" in datos and datos["Devengo aproximado (%)"].notna().any()
     partes = ["Cuadro 2. «Explicado» = −sensibilidad estimada × cambio de la tasa de referencia. «Resto» = retorno real menos "
@@ -1142,9 +1165,10 @@ def _nota_cuadro_2(etfs: pd.DataFrame, fechas: dict) -> str:
         partes.append(
             "En los fondos con crédito no se estima su devengo (n. e.: no estimado): su resto puede incluir el devengo de la tasa base y del spread, "
             "los movimientos del spread de crédito, la convexidad y otros factores, sin separarlos.")
-    if "Inflación" in grupos:
-        partes.append("En TIP, la sensibilidad se mide contra una tasa nominal mientras su precio responde a tasas reales: no se "
-                      "estima su devengo (n. e.: no estimado) y su fila no se interpreta.")
+    if grupos & rfui.GRUPOS_SIN_TASA_NOMINAL:
+        partes.append("En TIP solo se informa el retorno: su precio responde a la tasa real del Tesoro y al reajuste de su capital "
+                      "por inflación, y la base solo tiene tasas nominales, así que no se estiman su sensibilidad, lo explicado, el "
+                      "resto ni el devengo (n. e.: no estimado).")
     partes.append("**R²** indica qué parte del movimiento diario del precio explican las tasas: bajo el 0,5 la sensibilidad de ese "
                   "instrumento es poco confiable.")
     if fechas.get("inicio") is not None:
@@ -1415,6 +1439,8 @@ def generar(macro: pd.DataFrame, precios: pd.DataFrame, nombre_periodo: str, fec
         "Cuadro 3. Cambio estimado del precio ante movimientos paralelos de la tasa de referencia de cada ETF, calculado como "
         "−duración × cambio. «Margen» son dos errores estándar de la duración medida: el rango dentro del cual es razonable que esté el "
         "valor verdadero. La estimación ignora la convexidad, así que para movimientos grandes subestima las alzas de precio y sobreestima las caídas."
+        + (" TIP no se incluye: su precio responde a la tasa real del Tesoro, que la base no tiene, y una sensibilidad medida contra la "
+           "tasa nominal no anticipa su reacción." if any(not rfui.usa_tasa_nominal(t) for t in etfs.index if t in ETFS_RENTA_FIJA) else "")
     ))
 
     # ---- 6. Límites

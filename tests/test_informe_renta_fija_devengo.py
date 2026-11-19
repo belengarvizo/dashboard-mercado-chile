@@ -287,9 +287,9 @@ def test_tip_no_recibe_devengo_nominal_y_su_fila_no_se_interpreta():
     datos = inf.calcular(_macro(tasa), precios, 90, "Últimos 3 meses")
     assert pd.isna(datos["etfs"].loc["TIP", "Devengo aproximado (%)"])
     ev = next(e for e in datos["evaluaciones"] if e["ETF"] == "TIP")
-    assert ev["clase"] == "tasa_nominal" and ev["devengo"] is None
+    assert ev["clase"] == "sin_tasa_real" and ev["devengo"] is None   # clase renombrada en I-4a
     nota = _nota_cuadro_2(_texto_pdf(inf.generar(_macro(tasa), precios, "Últimos 3 meses")))
-    assert "En TIP" in nota and "no se interpreta" in nota
+    assert "En TIP solo se informa el retorno" in nota and "n. e.: no estimado" in nota   # texto de I-4a
 
 
 # ---------------------------------------------------------------------------

@@ -196,8 +196,8 @@ def test_spread_de_credito(cambio_pp, debe, no_debe):
     # fondo de crédito con el spread moviéndose 25 pb: la coincidencia puede ser compensación de efectos
     ("LQD", _fila(1.45, 6.5, -0.20, plazo=10), _credito(0.25), "credito"),
     ("LQD", _fila(1.45, 6.5, -0.20, plazo=10), _credito(0.02), "consistente"),
-    # TIP se mide contra la tasa nominal: no se interpreta (la corrección de fondo es I-4a)
-    ("TIP", _fila(1.45, 6.5, -0.20, plazo=5), None, "tasa_nominal"),
+    # TIP: aunque la fila traiga una sensibilidad contra la tasa nominal, no se contrasta (I-4a: responde a tasas reales)
+    ("TIP", _fila(1.45, 6.5, -0.20, plazo=5), None, "sin_tasa_real"),
     ("TLT", _fila(1.45, 6.5, None, plazo=20, estado="no calculable: la tasa a 20 años no tiene datos desde el 30-10-2026"),
      None, "no_calculable"),
 ])

@@ -330,15 +330,19 @@ def _escenario_tip():
     return real, nominal, inf.calcular(_macro(lambda p: nominal), precios, DIAS_MES, MES)["etfs"]
 
 
-def test_hoy_la_tasa_de_referencia_de_tip_es_la_nominal_del_tesoro():
-    """Caracterización: el informe mide TIP contra la tasa NOMINAL a 5 años (no hay serie de tasa real en la base)."""
+def test_tip_ya_no_se_mide_contra_la_tasa_nominal_del_tesoro():
+    """Caracterización. Hasta I-4a el informe medía TIP contra la tasa NOMINAL a 5 años (esta prueba lo fijaba como
+    «cambio de la tasa = Δ nominal»). Desde I-4a, sin serie de tasa real en la base, TIP no tiene cambio de tasa, duración,
+    explicado ni resto; su retorno se sigue midiendo. El catálogo no cambia (plazo 5, solo como dato del fondo)."""
     _, nominal, etfs = _escenario_tip()
     assert ETFS_RENTA_FIJA["TIP"]["plazo_referencia"] == 5
-    assert etfs.loc["TIP", "Cambio de la tasa (pp)"] == pytest.approx(_delta(nominal, DIAS_MES))
+    for columna in ("Cambio de la tasa (pp)", "Duración medida (años)", "Explicado por la duración (%)", "Resto (%)"):
+        assert pd.isna(etfs.loc["TIP", columna]), columna
+    assert pd.notna(etfs.loc["TIP", "Retorno del período (%)"])
 
 
-@defecto("I-4a", "a TIP se le atribuye un movimiento con la tasa nominal, que incluye la inflación de equilibrio")
 def test_tip_no_se_atribuye_con_una_tasa_nominal():
+    # Fue xfail en I-0 (asignado a I-4a); corregido en I-4a: TIP queda fuera de la atribución (NaN), sin tasa real en la base.
     """Lo correcto, si se atribuye, es −4,5 × Δ tasa real (≈ 0 aquí). Hoy se usa −duración medida × Δ nominal, que
     arrastra los 0,40 pp de inflación de equilibrio: «explica» una caída que no ocurrió y deja un «resto» positivo
     que el informe llama cupones o riesgo de crédito (TIP no tiene riesgo de crédito). Vale también excluir a TIP de

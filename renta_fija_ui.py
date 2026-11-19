@@ -34,6 +34,9 @@ DECISIONES DE DISEÑO
 """
 from __future__ import annotations
 
+import html as html_lib
+import re
+
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
@@ -117,6 +120,24 @@ ENCABEZADOS = {
 }
 COLUMNAS_DE_VARIACION = ["1D %", "1W %", "1M %", "YTD %"]
 COLUMNAS_SECUENCIALES = ["Vol. %", "Duración", "R²", "Beta", "Sharpe"]
+
+# I-4a: grupos cuyo precio NO responde a la tasa nominal del Tesoro. TIP (bonos ligados a la inflación) responde a la
+# tasa real y al reajuste del capital por el IPC; la base solo tiene la curva nominal, así que su sensibilidad contra
+# ella no es una duración real y no se estima (se muestra «n. e.»). Retornos, volatilidad, caída, beta y Sharpe no
+# dependen de esa tasa y se conservan.
+GRUPOS_SIN_TASA_NOMINAL = {"Inflación"}
+COLUMNAS_DE_SENSIBILIDAD_NOMINAL = ["Duración medida (años)", "Error de la duración", "R² con la tasa"]
+NO_ESTIMADO = "n. e."
+NOTA_SIN_TASA_REAL = (
+    "En **TIP** no se estiman duración ni R² (n. e.: no estimado): su precio responde a la tasa **real** del Tesoro y al "
+    "reajuste de su capital por inflación, y la base solo tiene tasas nominales. Medirlo contra la tasa nominal mezclaría "
+    "la inflación esperada con la tasa real."
+)
+
+
+def usa_tasa_nominal(ticker: str) -> bool:
+    """True si la sensibilidad del ETF contra la tasa nominal del Tesoro tiene sentido económico (todos menos TIP)."""
+    return ETFS_RENTA_FIJA[ticker]["grupo"] not in GRUPOS_SIN_TASA_NOMINAL
 
 
 # ---------------------------------------------------------------------------
@@ -256,6 +277,9 @@ def _resumen_de_etfs(precios: pd.DataFrame, macro: pd.DataFrame, hoy: pd.Timesta
         if r is None:
             continue
         atraso = int(np.busday_count(r["ultima_fecha"].date(), hoy.date()))
+        if not usa_tasa_nominal(ticker):
+            # I-4a: la regresión contra la tasa nominal no es la duración real de TIP: no se estima.
+            r.update({columna: None for columna in COLUMNAS_DE_SENSIBILIDAD_NOMINAL})
         r.update({
             "Grupo": datos["grupo"], "Plazo de referencia": datos["plazo_referencia"],
             "_atrasado_bool": atraso > DIAS_HABILES_DE_ATRASO,
@@ -276,13 +300,14 @@ def _tabla_de_etfs_html(resumen: pd.DataFrame, tasa_libre: float | None) -> str:
 
     def tooltip(ticker: str, fila: pd.Series) -> str:
         completa = resumen.loc[ticker]
+        duracion = (gl.explicacion_duracion_medida(
+            _valor(completa, "Duración medida (años)"), _valor(completa, "Error de la duración"),
+            _valor(completa, "R² con la tasa"), int(completa["Plazo de referencia"]),
+        ) if usa_tasa_nominal(ticker) else "<b>Duración y R²: n. e. (no estimado)</b><br>" + NOTA_SIN_TASA_REAL.replace("**", ""))
         return "<hr>".join([
             gl.explicacion_instrumento(ticker),
             gl.explicacion_retorno(_valor(completa, "1M %"), _valor(completa, "YTD %")),
-            gl.explicacion_duracion_medida(
-                _valor(completa, "Duración medida (años)"), _valor(completa, "Error de la duración"),
-                _valor(completa, "R² con la tasa"), int(completa["Plazo de referencia"]),
-            ),
+            duracion,
             gl.explicacion_volatilidad(_valor(completa, "Volatilidad (%)")),
             gl.explicacion_caida_maxima(_valor(completa, "Caída máxima 1 año (%)")),
             gl.explicacion_beta(_valor(completa, "Beta vs S&P 500")),
@@ -295,7 +320,41 @@ def _tabla_de_etfs_html(resumen: pd.DataFrame, tasa_libre: float | None) -> str:
         "Duración": "{:.2f}", "R²": "{:.2f}", "Beta": "{:.2f}", "Sharpe": "{:.2f}",
     })
     vista = resumen[COLUMNAS_TABLA + ["_atrasado_bool"]].rename(columns=ENCABEZADOS)
-    return tabla_con_tooltips(vista, COLUMNAS_DE_VARIACION, COLUMNAS_SECUENCIALES, formatos, tooltip, "ETF")
+    html = tabla_con_tooltips(vista, COLUMNAS_DE_VARIACION, COLUMNAS_SECUENCIALES, formatos, tooltip, "ETF")
+    sin_tasa = [t for t in vista.index if not usa_tasa_nominal(t)]
+    encabezados = [ENCABEZADOS.get(c, c) for c in COLUMNAS_DE_SENSIBILIDAD_NOMINAL if c in COLUMNAS_TABLA]
+    return _marcar_no_estimado(html, sin_tasa, encabezados)
+
+
+_PATRON_ENCABEZADO = re.compile(r"<th[^>]*>(.*?)</th>", re.S)
+_PATRON_TICKER = re.compile(r'<span class="glosario-tooltip">(.*?)<span class="glosario-tooltip-texto">', re.S)
+
+
+def _marcar_no_estimado(html: str, tickers: list[str], encabezados: list[str]) -> str:
+    """Cambia «—» por «n. e.» en las celdas de los `encabezados` dados, solo en las filas de los `tickers` (I-4a).
+
+    Ubicación SEMÁNTICA, no por posiciones supuestas: la columna se busca por el texto de su encabezado en la propia
+    tabla dibujada, y la fila por el ticker visible en su primera celda. Solo reemplaza una celda vacía («—»): nunca
+    pisa un número. Si el formato de la tabla cambiara y no encontrara la fila o la columna, no toca nada (se vería
+    «—», nunca un «n. e.» en el lugar equivocado)."""
+    if not tickers or not encabezados:
+        return html
+    fin_encabezado = html.find("</tr>") + len("</tr>")
+    cabeza, cuerpo = html[:fin_encabezado], html[fin_encabezado:]
+    titulos = [re.sub(r"<[^>]+>", "", t).strip() for t in _PATRON_ENCABEZADO.findall(cabeza)]
+    posiciones = [titulos.index(html_lib.escape(e)) for e in encabezados if html_lib.escape(e) in titulos]
+    buscados = {html_lib.escape(t) for t in tickers}
+    filas = cuerpo.split("</tr>")
+    for i, fila in enumerate(filas):
+        celdas = fila.split("</td>")
+        etiqueta = _PATRON_TICKER.search(celdas[0]) if celdas else None
+        if etiqueta is None or etiqueta.group(1).strip() not in buscados:
+            continue
+        for p in posiciones:
+            if p < len(celdas) and celdas[p].endswith(">—"):
+                celdas[p] = celdas[p][:-1] + NO_ESTIMADO
+        filas[i] = "</td>".join(celdas)
+    return cabeza + "</tr>".join(filas)
 
 
 # ---------------------------------------------------------------------------
@@ -337,6 +396,8 @@ def _paso_mercado(macro: pd.DataFrame, precios: pd.DataFrame) -> None:
             "diaria del último año); **R²** dice cuánto de su movimiento explican las tasas. "
             "Pasa el mouse sobre el ticker de cada ETF para ver una explicación en simple de cada indicador, con los números de esa fila."
         )
+        if any(not usa_tasa_nominal(t) for t in resumen.index):
+            st.caption(NOTA_SIN_TASA_REAL)
 
         elegidos = st.multiselect(
             "Elige ETFs a comparar", list(ETFS_RENTA_FIJA), default=["SHY", "IEF", "LQD", "HYG"],
@@ -476,6 +537,28 @@ def _paso_valorizacion(macro: pd.DataFrame, precios: pd.DataFrame) -> None:
 # ---------------------------------------------------------------------------
 # Paso 3: riesgo de mercado
 # ---------------------------------------------------------------------------
+def _filas_de_duracion(resumen: pd.DataFrame, curva_actual) -> list[dict]:
+    """Filas de la tabla de duración medida. En TIP (I-4a), las columnas que dependen de la tasa nominal van «n. e.»:
+    su duración contra la nominal no es su duración real, y la «duración teórica» es la de un bono nominal a la par."""
+    filas = []
+    for ticker, r in resumen.iterrows():
+        plazo = int(r["Plazo de referencia"])
+        if not usa_tasa_nominal(ticker):
+            filas.append({"ETF": ticker, "Grupo": r["Grupo"], "Ref. Tesoro": NO_ESTIMADO, "Duración medida": NO_ESTIMADO,
+                          "Margen (±2 err.)": NO_ESTIMADO, "R²": NO_ESTIMADO, "Duración teórica": NO_ESTIMADO})
+            continue
+        teorica = rf.bono_a_la_par(curva_actual, plazo)["modificada"] if curva_actual is not None else None
+        medida, error = r["Duración medida (años)"], r["Error de la duración"]
+        filas.append({
+            "ETF": ticker, "Grupo": r["Grupo"], "Ref. Tesoro": f"{plazo} años",
+            "Duración medida": _fmt(medida) if pd.notna(medida) else "—",
+            "Margen (±2 err.)": f"±{_fmt(2 * error)}" if pd.notna(error) else "—",
+            "R²": _fmt(r["R² con la tasa"]) if pd.notna(r["R² con la tasa"]) else "—",
+            "Duración teórica": _fmt(teorica) if teorica is not None else "—",
+        })
+    return filas
+
+
 def _paso_riesgo_mercado(macro: pd.DataFrame, precios: pd.DataFrame) -> None:
     st.markdown(
         "Si las tasas suben, el precio de un bono ya emitido **baja**: nadie paga lo mismo por un cupón de 5% si "
@@ -489,18 +572,7 @@ def _paso_riesgo_mercado(macro: pd.DataFrame, precios: pd.DataFrame) -> None:
         return
     actual = _curva_actual(macro)
 
-    filas = []
-    for ticker, r in resumen.iterrows():
-        plazo = int(r["Plazo de referencia"])
-        teorica = rf.bono_a_la_par(actual[2], plazo)["modificada"] if actual else None
-        medida, error = r["Duración medida (años)"], r["Error de la duración"]
-        filas.append({
-            "ETF": ticker, "Grupo": r["Grupo"], "Ref. Tesoro": f"{plazo} años",
-            "Duración medida": _fmt(medida) if pd.notna(medida) else "—",
-            "Margen (±2 err.)": f"±{_fmt(2 * error)}" if pd.notna(error) else "—",
-            "R²": _fmt(r["R² con la tasa"]) if pd.notna(r["R² con la tasa"]) else "—",
-            "Duración teórica": _fmt(teorica) if teorica is not None else "—",
-        })
+    filas = _filas_de_duracion(resumen, actual[2] if actual else None)
     _tabla(pd.DataFrame(filas), numericas=[c for c in filas[0] if c not in ("ETF", "Grupo", "Ref. Tesoro")], mostrar_todo=True)
     st.caption(
         "Lectura: una duración medida de 6.5 significa que, en el último año, el precio cayó cerca de 6.5% por cada punto porcentual que subió la "
@@ -508,8 +580,12 @@ def _paso_riesgo_mercado(macro: pd.DataFrame, precios: pd.DataFrame) -> None:
         "el ETF mezcla bonos de distintos plazos y cupones. Con un **R² bajo** (los bonos de empresas y de alto rendimiento), la tasa explica poco del "
         "movimiento: manda el riesgo de crédito y la duración medida es poco confiable."
     )
+    if any(not usa_tasa_nominal(t) for t in resumen.index):
+        st.caption(NOTA_SIN_TASA_REAL + " Por eso TIP tampoco aparece en el gráfico de abajo.")
 
-    disponibles = list(resumen.index)
+    disponibles = [t for t in resumen.index if usa_tasa_nominal(t)]
+    if not disponibles:
+        return
     ticker = st.selectbox("ETF para ver la medición", disponibles, index=min(2, len(disponibles) - 1), key="rf_etf_duracion",
                           format_func=_etiqueta_de_etf)
     datos = ETFS_RENTA_FIJA[ticker]
