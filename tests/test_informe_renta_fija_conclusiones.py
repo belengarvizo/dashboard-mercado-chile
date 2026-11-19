@@ -324,24 +324,49 @@ def test_sin_datos_suficientes_la_atribucion_lo_dice():
 
 
 def test_en_un_anio_sin_carry_modelado_el_informe_advierte_que_el_modelo_es_parcial():
-    """Precios que devengan ~4% anual además de responder a las tasas. En este mundo |R − X| es el devengo, así que un
-    fondo cuyo devengo supera la mitad de su retorno NO puede quedar como consistente (por la regla |R − X| ≤ 0,5·|R|).
-    El texto dimensiona el devengo omitido: tasa mediana al inicio × días / 365, sin presentarlo como carry estimado."""
-    y, macro, precios = _escenario({"SHY": 1.9, "IEF": 6.5}, carry=True, semilla=7)
+    """Precios que devengan ~4% anual además de responder a las tasas.
+
+    Hasta I-2 ningún fondo tenía devengo en el modelo, y esta prueba exigía que un fondo dominado por el devengo no
+    quedara «consistente» (regla |R − X| ≤ 0,5·|R|). Desde I-3, en los fondos del Tesoro se descuenta un devengo
+    aproximado y se compara R − c con X: esa protección sigue vigente para los fondos cuyo devengo NO se estima (aquí
+    VCSH, de crédito y duración corta, donde el devengo pesa más que el efecto de tasas), y el texto la sigue
+    advirtiendo, dimensionada con la tasa mediana al inicio × días / 365, sin presentarla como carry estimado.
+
+    Tesoro (SHY, IEF): lo comparado es R − tasa al inicio × días / 365; la conclusión se presenta como compatibilidad
+    con una aproximación (no como identificación de todas las causas) y, en un año, advierte su menor precisión.
+    Crédito (VCSH): ningún texto atribuye su residuo al spread, al crédito o al cupón por separado."""
+    y, macro, precios = _escenario({"SHY": 1.9, "IEF": 6.5, "VCSH": 1.5}, carry=True, semilla=7)
     datos = inf.calcular(macro, precios, 365, "Último año")
     texto = next(a for a in datos["afirmaciones"] if a.clave == "atribucion").texto
     inicio = FECHAS.get_loc(datos["fechas"]["inicio"])
     fin = FECHAS.get_loc(datos["fechas"]["fin"])
     devengo = (np.prod(1 + y[inicio:fin] / 100 / 252) - 1) * 100  # cuenta aparte, con los datos construidos
+    orden = y[inicio] * datos["contexto"]["dias"] / 365
     evaluadas = 0
     for ev in datos["evaluaciones"]:
-        if devengo > 0.5 * abs(ev["retorno"]) + 0.2:  # holgura por el efecto compuesto
-            assert ev["clase"] != "consistente", ev
-            evaluadas += 1
-    assert evaluadas >= 1, "el escenario debería tener al menos un fondo dominado por el devengo"
-    orden = y[inicio] * datos["contexto"]["dias"] / 365
-    assert "no incluye el devengo de cupones" in texto and f"del orden de {ib.num(orden, 2)} pp" in texto
+        if ev["ETF"] == "VCSH":
+            assert ev["devengo"] is None
+            if devengo > 0.5 * abs(ev["retorno"]) + 0.2:  # holgura por el efecto compuesto
+                assert ev["clase"] != "consistente", ev
+                evaluadas += 1
+        else:
+            assert ev["retorno_comparado"] == pytest.approx(ev["retorno"] - orden, abs=1e-9), ev
+    assert evaluadas == 1, "VCSH debería quedar dominado por el devengo que no se estima"
+    assert "VCSH la comparación es parcial" in texto and "no incluye el devengo de cupones" in texto
+    assert f"del orden de {ib.num(orden, 2)} pp" in texto
     assert "carry estimado" not in texto
+    # Tesoro: compatibilidad con una aproximación, no identificación de causas, y menor precisión en un año.
+    assert "no el rendimiento ni el carry de cada fondo" in texto
+    assert "no que se hayan identificado todos los componentes del retorno" in texto
+    assert "la aproximación es menos precisa" in texto
+    for ev in datos["evaluaciones"]:
+        frase = inf._frase_de_evaluacion(ev)
+        if ev["ETF"] in ("SHY", "IEF"):
+            assert "devengo aproximado" in frase, frase
+        else:  # crédito: ningún residuo se asigna a un factor
+            assert not re.search(r"(spread|crédito|cup[oó]n)[^.]*(explica|corresponde|se debe|atribuible)", frase, re.I), frase
+            assert not re.search(r"(resto|diferencia|residuo)[^.]*(spread|crédito|cup[oó]n)", frase, re.I), frase
+    assert not re.search(r"(resto|diferencia|residuo)[^.]*(corresponde|se debe|es atribuible)", texto, re.I), texto
 
 
 def test_ninguna_frase_generada_usa_lenguaje_causal():

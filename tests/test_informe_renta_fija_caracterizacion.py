@@ -381,8 +381,8 @@ def test_limitacion_sin_termino_de_carry_el_devengo_de_un_anio_queda_entero_en_e
         assert resto > 4.0, ticker  # materialmente distinto de cero
 
 
-@defecto("I-3", "el resto de un ETF del Tesoro se atribuye a «riesgo de crédito» (nota del Cuadro 2; en el resumen, hasta I-2)")
 def test_el_resto_de_un_etf_del_tesoro_no_se_atribuye_a_riesgo_de_credito():
+    # Fue xfail en I-0 (asignado a I-3); corregido en I-3: la nota del Cuadro 2 se arma según los grupos presentes.
     """Solo hay ETFs del Tesoro de EEUU, cuyo riesgo de impago se trata como nulo en este análisis (es la referencia
     libre de riesgo del propio informe). Nombrar el crédito como causa de su resto es un error objetivo.
 

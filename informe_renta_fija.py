@@ -19,8 +19,11 @@ DE DÓNDE SALEN LOS NÚMEROS
 LÍMITES QUE EL INFORME DECLARA
     - La duración se mide con el último año de datos diarios y se aplica a períodos más cortos: es una aproximación de
       primer orden, no una identidad contable.
-    - La base no tiene el rendimiento ni el cupón devengado de cada ETF, así que lo que no explica la duración se informa
-      junto («cupones, crédito y lo no explicado») en vez de inventar una descomposición más fina.
+    - La base no tiene el rendimiento ni el cupón devengado de cada ETF. En los fondos del Tesoro nominal se descuenta
+      un DEVENGO APROXIMADO (tasa de referencia al inicio × días / 365): una aproximación al rendimiento de la tasa base,
+      no el rendimiento ni el carry del fondo. En los demás no se estima ningún devengo: lo que no explica la sensibilidad
+      a tasas queda junto (devengo de la tasa base y del spread, movimientos del spread y otros factores), sin inventar
+      una descomposición más fina ni atribuirlo a una causa.
     - No hay recomendaciones de compra ni de venta: el informe no conoce el horizonte, el perfil ni las restricciones de
       quien lo lee.
 """
@@ -56,6 +59,30 @@ MAX_RUEDAS_ATRASO_CURVA = rfui.DIAS_HABILES_DE_ATRASO
 DIAS_HABILES_SIN_ADVERTENCIA = 1
 
 ESTADO_CALCULABLE = "calculable"
+
+# ---------------------------------------------------------------------------
+# Devengo aproximado (I-3)
+# ---------------------------------------------------------------------------
+# Solo en los fondos del Tesoro nominal: su cartera son bonos del mismo emisor que la curva H.15, así que la tasa de su
+# plazo de referencia es una aproximación razonable al rendimiento de la tasa base de lo que tienen. NO es su rendimiento
+# ni su carry: no incluye la diferencia entre esa tasa y el rendimiento real de la cartera, los gastos del fondo, el
+# roll-down, la reinversión ni los cambios de cartera, y usa la tasa del INICIO (en una ventana con tasas muy cambiantes,
+# el devengo efectivo sigue a la tasa del camino). En crédito, agregados y emergentes la tasa del Tesoro no representa su
+# carry (falta el spread), y en TIP la tasa relevante es real: ahí no se estima.
+GRUPOS_CON_DEVENGO_APROXIMADO = {"Tesoro EEUU"}
+# Desde qué largo de ventana (días) el texto advierte que la aproximación pierde precisión. Con curva quieta su error
+# en una cartera del Tesoro es de hasta ~0,06 pp a 3 meses y ~0,2 pp a 12 (roll-down, diferencia entre la tasa de
+# referencia y la cartera); si la tasa se mueve, el devengo efectivo sigue a la tasa del camino y no a la del inicio
+# (≈ 0,5 pp en un año con la tasa subiendo 1 pp). Por eso se advierte en ventanas de más de un trimestre.
+DIAS_DEVENGO_MENOS_PRECISO = 120
+
+
+def devengo_aproximado(tasa_inicio_pct: float | None, dias: int | None) -> float | None:
+    """Tasa de referencia al inicio (% anual) × días calendario / 365, en puntos porcentuales. Interés simple: en un año
+    al 4% la diferencia con capitalizar es del orden de 0,1 pp, menor que la imprecisión de usar la tasa de referencia."""
+    if tasa_inicio_pct is None or dias is None or pd.isna(tasa_inicio_pct) or dias <= 0:
+        return None
+    return float(tasa_inicio_pct) * dias / 365.0
 
 
 def _a_fecha(valor) -> pd.Timestamp:
@@ -265,13 +292,16 @@ def _tabla_de_etfs(macro: pd.DataFrame, precios: pd.DataFrame, ventana: dict) ->
             estado = f"no calculable: {ventana['motivo_sin_ventana']}"
         else:
             estado = ventana["estado"].get(ticker, ESTADO_CALCULABLE)
-        cambio = None
+        cambio = devengo = None
         if estado == ESTADO_CALCULABLE:
             tasa = rfui._rendimiento_del_tesoro(macro, datos["plazo_referencia"]) * 100  # a puntos porcentuales
             y_inicio, y_fin = _valor_en(tasa, inicio), _valor_en(tasa, fin)
             cambio = y_fin - y_inicio if y_inicio is not None and y_fin is not None else None
+            if datos["grupo"] in GRUPOS_CON_DEVENGO_APROXIMADO and fin is not None:
+                devengo = devengo_aproximado(y_inicio, (fin - inicio).days)
         duracion = fila["Duración medida (años)"]
         esperado = None if cambio is None or pd.isna(duracion) else -duracion * cambio
+        resto = None if esperado is None or retorno is None else retorno - esperado
         filas.append({
             "ETF": ticker, "Grupo": datos["grupo"], "Plazo de referencia": datos["plazo_referencia"],
             "Retorno del período (%)": retorno,
@@ -279,14 +309,18 @@ def _tabla_de_etfs(macro: pd.DataFrame, precios: pd.DataFrame, ventana: dict) ->
             "R² con la tasa": fila["R² con la tasa"],
             "Cambio de la tasa (pp)": cambio,
             "Explicado por la duración (%)": esperado,
-            "Resto (%)": None if esperado is None or retorno is None else retorno - esperado,
+            "Resto (%)": resto,
+            # Solo fondos del Tesoro: retorno = explicado + devengo aproximado + no explicado.
+            "Devengo aproximado (%)": devengo if resto is not None else None,
+            "No explicado (%)": resto - devengo if resto is not None and devengo is not None else None,
             "Volatilidad (%)": fila["Volatilidad (%)"], "Caída máxima 1 año (%)": fila["Caída máxima 1 año (%)"],
             "ultima_fecha": fila["ultima_fecha"],
             "Estado de la atribución": estado,
         })
     tabla = pd.DataFrame(filas).set_index("ETF") if filas else pd.DataFrame()
     if len(tabla):
-        numericas = ["Retorno del período (%)", "Cambio de la tasa (pp)", "Explicado por la duración (%)", "Resto (%)"]
+        numericas = ["Retorno del período (%)", "Cambio de la tasa (pp)", "Explicado por la duración (%)", "Resto (%)",
+                     "Devengo aproximado (%)", "No explicado (%)"]
         tabla[numericas] = tabla[numericas].apply(pd.to_numeric, errors="coerce")
     return tabla
 
@@ -704,12 +738,18 @@ def _evaluar_atribucion(ticker: str, fila: pd.Series, ctx: dict, credito: dict |
     u = UMBRALES
     n = ctx.get("ruedas")
     grupo = ETFS_RENTA_FIJA[ticker]["grupo"]
-    R, X = fila["Retorno del período (%)"], fila["Explicado por la duración (%)"]
+    R_total, X = fila["Retorno del período (%)"], fila["Explicado por la duración (%)"]
     beta, se, r2 = fila["Duración medida (años)"], fila["Error de la duración"], fila["R² con la tasa"]
     cambio = fila["Cambio de la tasa (pp)"]
     plazo = float(fila["Plazo de referencia"])
     estado = fila.get("Estado de la atribución", ESTADO_CALCULABLE)
-    ev = {"ETF": ticker, "grupo": grupo, "retorno": R, "anticipado": X, "plazo": plazo, "r2": r2, "estado": estado,
+    # I-3: en los fondos del Tesoro se compara lo anticipado con el retorno NETO del devengo aproximado. En los demás,
+    # con el retorno total (su devengo no se estima). R es el retorno que se compara en cada caso.
+    devengo = fila.get("Devengo aproximado (%)")
+    devengo = None if devengo is None or pd.isna(devengo) else float(devengo)
+    R = R_total - devengo if devengo is not None and pd.notna(R_total) else R_total
+    ev = {"ETF": ticker, "grupo": grupo, "retorno": R_total, "anticipado": X, "plazo": plazo, "r2": r2, "estado": estado,
+          "devengo": devengo, "retorno_comparado": R,
           "cambio_pb": None if pd.isna(cambio) else float(cambio) * 100, "spread_pb": None, "condiciones": []}
 
     def cerrar(clase: str) -> dict:
@@ -728,7 +768,8 @@ def _evaluar_atribucion(ticker: str, fila: pd.Series, ctx: dict, credito: dict |
     tau_x = max(tau_r, u["errores_estandar"] * (se if pd.notna(se) else 0.0) * abs(float(cambio)))
     ev.update(umbral_tasa_pb=tau_y, umbral_retorno=tau_r, diferencia=R - X)
     ev["condiciones"] += [("cambio de tasa material (pb)", abs(ev["cambio_pb"]) >= tau_y, round(ev["cambio_pb"], 2), round(tau_y, 2)),
-                          ("retorno material (pp)", abs(R) >= tau_r, round(R, 4), round(tau_r, 4)),
+                          ("retorno material (pp)" if devengo is None else "retorno neto del devengo aproximado material (pp)",
+                           abs(R) >= tau_r, round(R, 4), round(tau_r, 4)),
                           ("efecto anticipado material (pp)", abs(X) >= tau_x, round(X, 4), round(tau_x, 4))]
     if abs(ev["cambio_pb"]) < tau_y:
         return cerrar("sin_movimiento" if abs(R) < tau_r else "tasa_quieta")
@@ -770,28 +811,39 @@ def _frase_de_evaluacion(ev: dict) -> str:
     tasa = f"su tasa de referencia a {int(ev['plazo'])} años"
     pb = f"{ib.num(ev['cambio_pb'], 0, True)} pb" if ev.get("cambio_pb") is not None else None
     dif = ib.num(abs(ev.get("diferencia", 0.0)), 2)
+    devengo = ev.get("devengo")
+    if devengo is not None and pd.notna(ev["retorno"]):
+        # I-3: se nombra el devengo aproximado y el retorno que de verdad se compara (neto de ese devengo).
+        Rn = ib.pct(ev["retorno_comparado"], 2, True)
+        rindio = f"rindió {R}; descontado un devengo aproximado de {ib.num(devengo, 2)} pp, queda {Rn}"
+        neto = f"su retorno neto del devengo aproximado ({Rn})"
+    else:
+        rindio, neto = f"rindió {R}", f"su retorno ({R})"
     if clase == "consistente":
         extra = " El modelo no incluye su riesgo de crédito." if ev["grupo"] in GRUPOS_CON_CREDITO else ""
-        return f"{t} rindió {R}, en línea con el {X} que anticipaba su sensibilidad estimada ante el cambio de {pb} de {tasa}.{extra}"
+        return f"{t} {rindio}, en línea con el {X} que anticipaba su sensibilidad estimada ante el cambio de {pb} de {tasa}.{extra}"
     if clase == "parcial":
-        return (f"{t} rindió {R}; su sensibilidad anticipaba {X}, en la misma dirección pero con una diferencia de {dif} pp, de modo "
+        return (f"{t} {rindio}; su sensibilidad anticipaba {X}, en la misma dirección pero con una diferencia de {dif} pp, de modo "
                 "que el movimiento de tasas da cuenta solo de una parte del resultado.")
     if clase == "magnitud":
-        return (f"En {t}, el retorno ({R}) y lo anticipado ({X}) van en la misma dirección, pero difieren en {dif} pp, más de lo que "
+        return (f"En {t}, {neto} y lo anticipado ({X}) van en la misma dirección, pero difieren en {dif} pp, más de lo que "
                 "permite considerarlos consistentes.")
     if clase == "contraria":
-        return f"{t} rindió {R} pese a que su sensibilidad a tasas anticipaba {X}: el movimiento de tasas no da cuenta de su resultado."
+        return f"{t} {rindio}, pese a que su sensibilidad a tasas anticipaba {X}: el movimiento de tasas no da cuenta de su resultado."
     if clase == "sin_movimiento":
+        if devengo is not None:
+            return (f"En {t}, {tasa} no se movió de forma material ({pb}) y su retorno ({R}) es del orden del devengo aproximado "
+                    f"({ib.num(devengo, 2)} pp).")
         return f"En {t}, ni {tasa} ({pb}) ni su precio ({R}) se movieron de forma material."
     if clase == "tasa_quieta":
-        return (f"{t} rindió {R} con {tasa} prácticamente sin cambio ({pb}); su resultado no puede asociarse al movimiento de "
+        return (f"{t} {rindio} con {tasa} prácticamente sin cambio ({pb}); ese resultado no puede asociarse al movimiento de "
                 "tasas.")
     if clase == "efecto_pequeno":
-        return f"En {t}, el efecto anticipado por su sensibilidad ({X}) es demasiado pequeño para contrastarlo con su retorno ({R})."
+        return f"En {t}, el efecto anticipado por su sensibilidad ({X}) es demasiado pequeño para contrastarlo con {neto}."
     if clase == "precio_quieto":
-        return f"La sensibilidad de {t} anticipaba {X}, pero su precio prácticamente no se movió ({R})."
+        return f"La sensibilidad de {t} anticipaba {X}, pero {neto} prácticamente no se movió."
     if clase == "imprecisa":
-        return (f"{t} rindió {R} y su sensibilidad anticipaba {X}; la coincidencia no es concluyente porque la relación diaria con "
+        return (f"{t} {rindio}, y su sensibilidad anticipaba {X}; la coincidencia no es concluyente porque la relación diaria con "
                 f"{tasa} es débil o imprecisa (R² {ib.num(ev['r2'], 2)}).")
     if clase == "credito":
         return (f"{t} rindió {R} y su sensibilidad a tasas anticipaba {X}, pero el spread de crédito también se movió "
@@ -832,7 +884,7 @@ def _afirmacion_atribucion(datos: dict, evaluaciones: list[dict]) -> Afirmacion:
     otros = [ev["ETF"] for ev in evaluaciones if ev["clase"] not in ("consistente", "parcial", "contraria", "sin_movimiento")]
     if otros:
         partes.append(f"Para {_lista(otros)}, la evidencia no permite una conclusión sobre el papel de las tasas (ver sección 2).")
-    con_resto = etfs["Resto (%)"].dropna() if "Resto (%)" in etfs else pd.Series(dtype=float)
+    con_resto = _residuo_comparado(etfs)
     if len(con_resto):
         mayor = con_resto.abs().idxmax()
         umbral_mayor = next((ev.get("umbral_retorno") for ev in evaluaciones if ev["ETF"] == mayor and ev.get("umbral_retorno")),
@@ -840,14 +892,36 @@ def _afirmacion_atribucion(datos: dict, evaluaciones: list[dict]) -> Afirmacion:
         if abs(con_resto[mayor]) >= umbral_mayor:  # una diferencia inmaterial no merece una frase
             partes.append(f"La mayor diferencia entre lo anticipado y lo observado se registró en {mayor} "
                           f"({ib.num(con_resto[mayor], 2, True)} pp); con estos datos no es posible asignarla a un factor específico.")
+    con_devengo = [ev["ETF"] for ev in calculables if ev.get("devengo") is not None]
+    sin_devengo = [ev["ETF"] for ev in calculables if ev.get("devengo") is None and ev["grupo"] != "Inflación"]
+    if con_devengo:
+        partes.append(f"En {_lista(con_devengo)}, fondos del Tesoro, lo anticipado se contrasta con el retorno neto de un devengo "
+                      "aproximado (tasa de referencia al inicio × días / 365): una aproximación al rendimiento de la tasa base, no el "
+                      "rendimiento ni el carry de cada fondo, de modo que una coincidencia indica compatibilidad con esa aproximación "
+                      "y no que se hayan identificado todos los componentes del retorno.")
+        if (ctx.get("dias") or 0) > DIAS_DEVENGO_MENOS_PRECISO:
+            partes.append(f"En una ventana de {ctx['dias']} días la aproximación es menos precisa: no sigue la tasa a lo largo del "
+                          "período ni el roll-down, y la diferencia puede llegar a algunas décimas de punto.")
     devengo = _orden_del_devengo(ctx)
-    if devengo is not None and devengo >= UMBRALES["pp_retorno"]:
-        partes.append(f"La comparación es parcial: el modelo de sensibilidad no incluye el devengo de cupones, que en una ventana de "
-                      f"{ctx['dias']} días y con tasas de referencia cercanas a {ib.pct(_mediana_tasa_inicio(ctx), 1)} puede ser del orden de "
-                      f"{ib.num(devengo, 2)} pp, ni el riesgo de crédito ni la convexidad.")
+    if sin_devengo and devengo is not None and devengo >= UMBRALES["pp_retorno"]:
+        partes.append(f"En {_lista(sin_devengo)} la comparación es parcial: el modelo de sensibilidad no incluye el devengo de cupones, "
+                      f"que en una ventana de {ctx['dias']} días y con tasas de referencia cercanas a "
+                      f"{ib.pct(_mediana_tasa_inicio(ctx), 1)} puede ser del orden de {ib.num(devengo, 2)} pp solo por la tasa base, "
+                      "más el de su spread, ni los movimientos del spread ni la convexidad.")
     nivel = NIVEL_INTERPRETACION if por_clase.get("consistente") else NIVEL_HALLAZGO
     return Afirmacion("atribucion", nivel, "**Sensibilidad a tasas.** " + " ".join(partes),
                       tuple((ev["ETF"], ev["clase"]) for ev in evaluaciones))
+
+
+def _residuo_comparado(etfs: pd.DataFrame) -> pd.Series:
+    """El residuo que de verdad se contrasta: «No explicado» en los fondos con devengo aproximado y «Resto» en los
+    demás."""
+    if "Resto (%)" not in etfs:
+        return pd.Series(dtype=float)
+    residuo = etfs["Resto (%)"]
+    if "No explicado (%)" in etfs:
+        residuo = etfs["No explicado (%)"].where(etfs["No explicado (%)"].notna(), residuo)
+    return residuo.dropna()
 
 
 def _mediana_tasa_inicio(ctx: dict) -> float | None:
@@ -919,15 +993,21 @@ def _afirmacion_comparacion(datos: dict) -> Afirmacion | None:
                   else "no es posible contrastarla con su sensibilidad a tasas")
         return Afirmacion("comparacion", NIVEL_INSUFICIENTE,
                           f"**Comparación entre fondos.** {cifras}: una diferencia de {ib.num(brecha, 2)} pp; {motivo}.", tuple(condiciones))
-    anticipada = float(x_m - x_p)
+    # I-3: los dos son del Tesoro; si ambos tienen devengo aproximado, la brecha anticipada lo incluye (sus tasas de
+    # referencia, de plazos distintos, pueden diferir).
+    c_m, c_p = (etfs.loc[t, "Devengo aproximado (%)"] if "Devengo aproximado (%)" in etfs else np.nan for t in (mejor, peor))
+    con_devengo = pd.notna(c_m) and pd.notna(c_p)
+    anticipada = float(x_m - x_p) + (float(c_m - c_p) if con_devengo else 0.0)
     coincide = (anticipada > 0) == (brecha > 0) and abs(brecha - anticipada) <= max(u["tolerancia_consistente"] * abs(brecha), tau)
     condiciones.append(("brecha anticipada consistente (pp)", coincide, round(anticipada, 4), None))
     if coincide:
+        base = ("sus distintas sensibilidades a tasas y la diferencia entre sus devengos aproximados" if con_devengo
+                else "sus distintas sensibilidades a tasas")
         texto = (f"La diferencia de {ib.num(brecha, 2)} pp entre {mejor} ({ib.pct(r_m, 2, True)}) y {peor} ({ib.pct(r_p, 2, True)}) es "
-                 f"consistente con sus distintas sensibilidades a tasas: medidas contra sus propias tasas de referencia, anticipaban una "
+                 f"consistente con {base}: medidas contra sus propias tasas de referencia, anticipaban una "
                  f"brecha de {ib.num(anticipada, 2)} pp. Ambos fondos invierten en bonos del Tesoro de EEUU, sin diferencias de riesgo de "
-                 "crédito, por lo que el plazo es la diferencia económica más directa entre ellos, aunque no la única: el devengo y la "
-                 "convexidad, no modelados aquí, también pueden contribuir.")
+                 "crédito, por lo que el plazo es la diferencia económica más directa entre ellos, aunque no la única: la diferencia "
+                 "entre sus rendimientos reales y las tasas de referencia y la convexidad, no modeladas aquí, también pueden contribuir.")
         # Un factor común a ambos se cancela en la diferencia: la brecha puede ser consistente aunque el nivel de cada
         # retorno no lo sea. Si es así, se dice, para que una frase no parezca contradecir a la otra.
         clases = {ev["ETF"]: ev["clase"] for ev in _evaluaciones(datos)}
@@ -936,7 +1016,9 @@ def _afirmacion_comparacion(datos: dict) -> Afirmacion | None:
                       "movimiento de tasas, lo que sugiere un componente común a los dos que el modelo no identifica.")
         return Afirmacion("comparacion", NIVEL_INTERPRETACION, "**Comparación entre fondos.** " + texto, tuple(condiciones))
     texto = (f"{cifras}: una diferencia de {ib.num(brecha, 2)} pp que no coincide con la brecha de {ib.num(anticipada, 2, True)} pp que "
-             "anticipaban sus sensibilidades a tasas; los datos no permiten atribuirla al plazo.")
+             + ("anticipaban sus sensibilidades a tasas y sus devengos aproximados" if con_devengo
+                else "anticipaban sus sensibilidades a tasas")
+             + "; los datos no permiten atribuirla al plazo.")
     return Afirmacion("comparacion", NIVEL_INSUFICIENTE, "**Comparación entre fondos.** " + texto, tuple(condiciones))
 
 
@@ -988,9 +1070,10 @@ def _nota_metodologica(datos: dict) -> str:
         f"supera la mitad del retorno observado (con un piso de {ib.num(u['pp_retorno'], 2)} pp) y la sensibilidad es precisa (R² de al "
         f"menos {ib.num(u['r2_minimo'], 1)} y error estándar de hasta {ib.num(u['error_relativo_maximo'] * 100, 0)}% de la estimación). "
         "El R² describe la relación diaria del último año: no mide qué parte del retorno del período explican las tasas ni establece "
-        "causalidad. Dos fondos solo se comparan por plazo si ambos son bonos nominales del Tesoro. Estas reglas indican compatibilidad "
-        "con un modelo de sensibilidad a tasas que omite el devengo de cupones, el riesgo de crédito y la convexidad; no identifican causas, "
-        "y sus umbrales son hipótesis de trabajo, no estándares estadísticos ni regulatorios."
+        "causalidad. Dos fondos solo se comparan por plazo si ambos son bonos nominales del Tesoro. En los fondos del Tesoro se descuenta "
+        "un devengo aproximado (tasa de referencia al inicio × días / 365), que no es el rendimiento del fondo; en los demás no se estima "
+        "su devengo. Estas reglas indican compatibilidad con un modelo de sensibilidad a tasas que omite el riesgo de crédito y la "
+        "convexidad; no identifican causas, y sus umbrales son hipótesis de trabajo, no estándares estadísticos ni regulatorios."
     )
 
 
@@ -1005,9 +1088,12 @@ def _tabla_desempeno(etfs: pd.DataFrame) -> pd.DataFrame:
     })
 
 
+NO_ESTIMADO = "n. e."
+
+
 def _tabla_atribucion(etfs: pd.DataFrame) -> pd.DataFrame:
     datos = etfs.dropna(subset=["Explicado por la duración (%)"])
-    return pd.DataFrame({
+    tabla = {
         "ETF": datos.index,
         "Tasa de ref.": [f"{int(p)} años" for p in datos["Plazo de referencia"]],
         "Cambio de la tasa": [f"{ib.num(v, 2, True)} pp" for v in datos["Cambio de la tasa (pp)"]],
@@ -1015,8 +1101,56 @@ def _tabla_atribucion(etfs: pd.DataFrame) -> pd.DataFrame:
         "Explicado": [ib.pct(v, 2, True) for v in datos["Explicado por la duración (%)"]],
         "Real": [ib.pct(v, 2, True) for v in datos["Retorno del período (%)"]],
         "Resto": [ib.pct(v, 2, True) for v in datos["Resto (%)"]],
-        "R²": [ib.num(v, 2) for v in datos["R² con la tasa"]],
-    })
+    }
+    if "Devengo aproximado (%)" in datos and datos["Devengo aproximado (%)"].notna().any():
+        # I-3: solo los fondos del Tesoro tienen devengo aproximado; en los demás no se estima (n. e.).
+        tabla["Devengo aprox."] = [ib.pct(v, 2, True) if pd.notna(v) else NO_ESTIMADO for v in datos["Devengo aproximado (%)"]]
+        tabla["No explicado"] = [ib.pct(v, 2, True) if pd.notna(v) else NO_ESTIMADO for v in datos["No explicado (%)"]]
+    tabla["R²"] = [ib.num(v, 2) for v in datos["R² con la tasa"]]
+    return pd.DataFrame(tabla)
+
+
+_PESO_COLUMNA_ATRIBUCION = {"ETF": 0.8, "Tasa de ref.": 0.95, "Cambio de la tasa": 1.05, "Duración": 1.0, "Explicado": 1.15,
+                            "Real": 0.95, "Resto": 0.95, "Devengo aprox.": 1.05, "No explicado": 1.15, "R²": 0.7}
+
+
+def _anchos_atribucion(columnas: list[str]) -> list[float]:
+    """Anchos del Cuadro 2 proporcionales a lo que ocupa cada encabezado (con 10 columnas, el reparto parejo corta
+    «Explicado» a mitad de palabra)."""
+    pesos = [_PESO_COLUMNA_ATRIBUCION.get(c, 1.0) for c in columnas]
+    return [ib.ANCHO_UTIL * p / sum(pesos) for p in pesos]
+
+
+def _nota_cuadro_2(etfs: pd.DataFrame, fechas: dict) -> str:
+    """La nota del Cuadro 2 según los grupos que de verdad aparecen en el cuadro. Ningún residuo se atribuye a una causa:
+    se dice qué puede contener y qué no se separa. El riesgo de crédito solo se nombra si hay fondos con crédito."""
+    datos = etfs.dropna(subset=["Explicado por la duración (%)"])
+    grupos = set(datos["Grupo"]) if "Grupo" in datos else set()
+    con_devengo = "Devengo aproximado (%)" in datos and datos["Devengo aproximado (%)"].notna().any()
+    partes = ["Cuadro 2. «Explicado» = −sensibilidad estimada × cambio de la tasa de referencia. «Resto» = retorno real menos "
+              "explicado."]
+    if con_devengo:
+        partes.append(
+            "En los fondos del Tesoro, «Devengo aprox.» = tasa de referencia al inicio × días / 365: una aproximación al rendimiento "
+            "de la tasa base, no el rendimiento ni el carry del fondo. «No explicado» = resto menos ese devengo; puede incluir la "
+            "diferencia entre la tasa de referencia y el rendimiento de la cartera, los gastos del fondo, el roll-down, la convexidad "
+            "y el error de la sensibilidad estimada, sin separarlos. No es una medida de riesgo.")
+    elif grupos & GRUPOS_COMPARABLES_POR_PLAZO:
+        partes.append("En los fondos del Tesoro, el resto puede incluir el devengo de cupones, la convexidad y el error de la "
+                      "sensibilidad estimada, sin separarlos.")
+    if grupos & GRUPOS_CON_CREDITO:
+        partes.append(
+            "En los fondos con crédito no se estima su devengo (n. e.: no estimado): su resto puede incluir el devengo de la tasa base y del spread, "
+            "los movimientos del spread de crédito, la convexidad y otros factores, sin separarlos.")
+    if "Inflación" in grupos:
+        partes.append("En TIP, la sensibilidad se mide contra una tasa nominal mientras su precio responde a tasas reales: no se "
+                      "estima su devengo (n. e.: no estimado) y su fila no se interpreta.")
+    partes.append("**R²** indica qué parte del movimiento diario del precio explican las tasas: bajo el 0,5 la sensibilidad de ese "
+                  "instrumento es poco confiable.")
+    if fechas.get("inicio") is not None:
+        partes.append(f"Retorno, cambio de tasa y devengo se miden entre las mismas dos fechas ({ib.fecha(fechas['inicio'])} y "
+                      f"{ib.fecha(fechas['fin'])}).")
+    return " ".join(partes)
 
 
 def _tabla_sensibilidad(etfs: pd.DataFrame) -> pd.DataFrame:
@@ -1159,28 +1293,23 @@ def generar(macro: pd.DataFrame, precios: pd.DataFrame, nombre_periodo: str, fec
         ))
     con_atribucion = etfs["Explicado por la duración (%)"].notna().any()
     if con_atribucion:
-        piezas.append(ib.tabla(_tabla_atribucion(etfs)))
-        piezas.append(ib.nota(
-            "Cuadro 2. «Explicado» = −duración × cambio de la tasa. «Resto» = retorno real menos explicado: cupones devengados, riesgo de "
-            "crédito y lo que el modelo no captura. **R²** indica qué parte del movimiento diario del precio explican las tasas: bajo el 0,5 "
-            "la duración de ese instrumento es poco confiable. Retorno y cambio de tasa se miden entre las mismas dos fechas "
-            f"({ib.fecha(fechas['inicio'])} y {ib.fecha(fechas['fin'])})."
-        ))
+        tabla_atribucion = _tabla_atribucion(etfs)
+        piezas.append(ib.tabla(tabla_atribucion, anchos=_anchos_atribucion(list(tabla_atribucion.columns))))
+        piezas.append(ib.nota(_nota_cuadro_2(etfs, fechas)))
     nota_sin = _nota_de_no_calculables(etfs)
     if nota_sin:
         piezas.append(ib.nota(nota_sin))
     if con_atribucion:
         piezas.append(ib.con_su_nota(
             _grafico_atribucion(etfs),
-            "Gráfico 3. Lo que anticipaba la duración frente al retorno real de cada ETF en el período.",
+            "Gráfico 3. Lo que anticipaba la sensibilidad a tasas frente al retorno real de cada ETF en el período. La barra de lo "
+            "anticipado no incluye el devengo aproximado de los fondos del Tesoro (Cuadro 2).",
         ))
     lectura = [_frase_de_evaluacion(ev) for ev in datos["evaluaciones"] if ev["clase"] != "no_calculable"]
     if lectura:
         piezas.append(ib.parrafo("**Lectura de la atribución.** " + " ".join(lectura)))
-    dias_de_la_ventana = (fechas["fin"] - fechas["inicio"]).days if fechas["inicio"] is not None else dias
-    frase_cupon = _frase_del_resto(etfs, dias_de_la_ventana or dias)
-    if frase_cupon:
-        piezas.append(ib.parrafo(frase_cupon))
+    # I-3: ya no se usa _frase_del_resto, que leía el resto de TODOS los fondos como cupón devengado. En los fondos del
+    # Tesoro ese devengo se muestra aproximado en el Cuadro 2; en los demás, el resto mezcla factores que no se separan.
     piezas.append(ib.recuadro_concepto(
         "Recuadro 1. Por qué la duración se mide y no se calcula",
         [
