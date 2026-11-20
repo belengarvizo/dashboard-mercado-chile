@@ -250,9 +250,15 @@ def construir_pdf(piezas: list, titulo_corto: str, titulo_documento: str) -> byt
 # Formato de números: el mismo de las tablas del dashboard (punto decimal)
 # ---------------------------------------------------------------------------
 def num(valor, decimales: int = 2, con_signo: bool = False) -> str:
-    """Número formateado, o «—» si no hay dato (nunca un cero inventado)."""
+    """Número formateado, o «—» si no hay dato (nunca un cero inventado).
+
+    Un valor que a la precisión mostrada es cero se imprime sin signo («0.00», no «-0.00» ni «+0.00»): el signo de algo
+    que se lee como cero no informa nada y sugiere una dirección que la cifra no tiene (I-7). Solo cambia el texto: el
+    valor que se calcula y se guarda no se toca."""
     if valor is None or pd.isna(valor):
         return "—"
+    if float(f"{abs(valor):.{decimales}f}") == 0:
+        return f"{0.0:,.{decimales}f}"
     return f"{valor:{'+' if con_signo else ''},.{decimales}f}"
 
 

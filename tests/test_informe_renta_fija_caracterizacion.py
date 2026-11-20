@@ -504,8 +504,8 @@ def test_el_recuadro_de_la_uf_usa_las_tasas_de_los_datos_y_no_cifras_fijas():
     assert "2,6%" not in texto and "6,0%" not in texto
 
 
-@defecto("I-7", "un valor que redondea a cero sale como «-0.00%», un signo que el dato no tiene (presentación)")
 def test_un_valor_que_redondea_a_cero_no_se_imprime_con_signo_negativo():
+    # Fue xfail en I-0 (asignado a I-7); corregido en I-7: informe_base.num imprime sin signo lo que se lee como cero.
     etfs = pd.DataFrame({
         "Plazo de referencia": [3], "Cambio de la tasa (pp)": [0.0004], "Duración medida (años)": [2.43],
         "Explicado por la duración (%)": [-0.0009], "Retorno del período (%)": [0.13], "Resto (%)": [0.1309],
