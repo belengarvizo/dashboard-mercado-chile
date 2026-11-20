@@ -5,7 +5,7 @@ dice la base.
 Es una prueba de la pantalla (AppTest sobre app/dashboard.py), complementaria a test_renta_fija.py (el motor)
 y a test_catalogo_y_tabla_renta_fija.py (catálogo, explicaciones y tabla). Como los datos son reales, las
 pruebas no fijan valores de mercado: comprueban relaciones que tienen que cumplirse siempre (la duración de un
-bono del Tesoro corto es menor que la de uno largo, la inflación implícita es la resta de dos tasas mostradas,
+bono del Tesoro corto es menor que la de uno largo, el diferencial BCP − BCU es la resta de dos tasas mostradas,
 una tasa es positiva, etc.).
 """
 import _guardia_bd  # noqa: F401  (debe ir primero: protege la base de producción)
@@ -262,9 +262,10 @@ def test_el_banco_central_muestra_las_cuatro_tasas_el_diferencial_y_la_curva_chi
     curva = _tabla(at, "Tasa (%)")
     assert list(curva["Bono"]) == ["BCP (pesos)"] * 3 + ["BCU (UF, tasa real)"] * 3
     assert all(0 < float(v) < 30 for v in curva["Tasa (%)"] if v != "—")
-    # la inflación implícita de cada plazo es una tasa nominal menos una real: positiva y de un orden razonable
-    for plazo in ("A 5 años", "A 10 años"):
-        assert -1 < _numero(_metrica(at, plazo).value) < 10
+    # el diferencial BCP − BCU de cada plazo es una tasa nominal menos una real: en pp y de un orden razonable (I-6b-1)
+    for plazo in ("Diferencial BCP − BCU a 5 años", "Diferencial BCP − BCU a 10 años"):
+        valor = _metrica(at, plazo).value
+        assert valor == "—" or (valor.endswith(" pp") and -1 < _numero(valor) < 10), valor
 
 
 def test_el_paso_5_avisa_los_huecos_de_datos_en_vez_de_unir_los_bordes():

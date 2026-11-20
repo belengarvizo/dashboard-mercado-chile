@@ -135,6 +135,21 @@ NOTA_SIN_TASA_REAL = (
 )
 
 
+# I-6b-1: el diferencial BCP − BCU se presenta como en el PDF de renta fija (I-6c): una aproximación a la compensación
+# por inflación, en puntos porcentuales; nunca como inflación esperada ni como medición exacta. Solo cambian textos:
+# las series, las fechas comunes y la resta son las mismas.
+AYUDA_DIFERENCIAL_BCP_BCU = (
+    "Tasa del BCP (nominal, en pesos) menos tasa del BCU (real, en UF) del mismo plazo, en puntos porcentuales, en la última "
+    "fecha con dato en ambas series. Es una aproximación a la compensación por inflación, no la inflación esperada."
+)
+NOTA_DIFERENCIAL_BCP_BCU = (
+    "**Nota metodológica.** El diferencial es una aproximación, no una medición exacta ni un pronóstico: puede incluir primas "
+    "por riesgo de inflación y por liquidez; las series del Banco Central representan bonos de un tramo de plazos, que no son "
+    "necesariamente del mismo emisor ni tienen la misma duración o cupones; y la UF se reajusta con rezago respecto del IPC. "
+    "La base no incluye el BCU a 20 años: esa serie no devolvió datos recientes cuando se consultó al Banco Central."
+)
+
+
 def usa_tasa_nominal(ticker: str) -> bool:
     """True si la sensibilidad del ETF contra la tasa nominal del Tesoro tiene sentido económico (todos menos TIP)."""
     return ETFS_RENTA_FIJA[ticker]["grupo"] not in GRUPOS_SIN_TASA_NOMINAL
@@ -742,8 +757,9 @@ def _paso_banco_central(macro: pd.DataFrame) -> None:
 
     st.subheader("La curva de bonos del Banco Central de Chile")
     st.markdown(
-        "El BCP paga en pesos y el BCU en UF (tasa real, sobre la inflación). La diferencia entre los dos, al mismo plazo, es la "
-        "**inflación que el mercado tiene puesta en precio**."
+        "El BCP paga una tasa **nominal** en pesos y el BCU una tasa **real** sobre un capital que se reajusta con la UF. Su "
+        "diferencia al mismo plazo sirve como **referencia aproximada de la compensación por inflación** incorporada en las tasas "
+        "de mercado; no equivale a la inflación esperada."
     )
     ultimos_chile = {(grupo, plazo): _ultimo(macro, nombre) for grupo, plazos in CURVA_CHILE.items() for plazo, nombre in plazos.items()}
     if not any(ultimos_chile.values()):
@@ -765,7 +781,8 @@ def _paso_banco_central(macro: pd.DataFrame) -> None:
                 filas.append({"Bono": grupo, "Plazo": f"{plazo} años", "Tasa (%)": _fmt(dato[0]) if dato else "—", "Al": _fecha(dato[1]) if dato else "—"})
         _tabla(pd.DataFrame(filas), numericas=("Tasa (%)",))
 
-        st.markdown("**Inflación implícita (BCP − BCU del mismo plazo)**")
+        st.markdown("**Diferencial BCP − BCU del mismo plazo** · aproximación a la compensación por inflación incorporada en las "
+                    "tasas de mercado")
         c1, c2 = st.columns(2)
         implicitas = {}
         for col, plazo in ((c1, 5), (c2, 10)):
@@ -773,18 +790,19 @@ def _paso_banco_central(macro: pd.DataFrame) -> None:
             comun = _ultimo_comun(nominal, real)
             implicitas[plazo] = (nominal - real).dropna()
             with col:
-                st.metric(f"A {plazo} años", f"{_fmt(comun[0] - comun[1])} pp" if comun else "—")
-                st.caption(f"Al {_fecha(comun[2])}" if comun else "Sin datos")
+                st.metric(f"Diferencial BCP − BCU a {plazo} años", f"{_fmt(comun[0] - comun[1])} pp" if comun else "—",
+                          help=AYUDA_DIFERENCIAL_BCP_BCU)
+                st.caption(f"Al {_fecha(comun[2])}, última fecha con dato en ambas series" if comun else "Sin datos")
         fig3 = _figura(320)
         for color, (plazo, serie) in zip((AZUL, ROJO), implicitas.items()):
             serie = _cortar_en_huecos(_recortar_ventana(serie, dias))
-            fig3.add_trace(go.Scatter(x=serie.index, y=serie.values, mode="lines", name=f"A {plazo} años", line=dict(color=color)))
-        fig3.update_layout(yaxis_title="Puntos porcentuales")
+            fig3.add_trace(go.Scatter(
+                x=serie.index, y=serie.values, mode="lines", name=f"BCP − BCU a {plazo} años", line=dict(color=color),
+                hovertemplate=f"BCP − BCU a {plazo} años: %{{y:.2f}} pp<extra></extra>",
+            ))
+        fig3.update_layout(yaxis_title="Diferencial (pp)")
         _grafico(fig3)
-        st.caption(
-            "Incluye también una prima por riesgo y por liquidez: **no es un pronóstico oficial** de nadie. La base no incluye el BCU a 20 años: "
-            "esa serie no devolvió datos recientes cuando se consultó al Banco Central."
-        )
+        st.caption(NOTA_DIFERENCIAL_BCP_BCU)
     st.caption(
         "Fuentes: Banco Central de Chile (TPM, PDBC, Swap Cámara, BCP y BCU) y FRED (Fed funds). El dashboard **no tiene** los montos de "
         "las operaciones de mercado abierto ni de las licitaciones del Banco Central: esa parte solo se explica aquí."
