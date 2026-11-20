@@ -496,8 +496,8 @@ def test_las_cifras_de_chile_del_resumen_son_las_calculadas():
     assert ib.pct(7.20) in frase and ib.pct(8.40) in frase and ib.pct(1.20) in frase
 
 
-@defecto("I-6", "el recuadro de la UF trae cifras escritas a mano («2,6%» y «6,0%») que no salen de los datos")
 def test_el_recuadro_de_la_uf_usa_las_tasas_de_los_datos_y_no_cifras_fijas():
+    # Fue xfail en I-0 (asignado a I-6); corregido en I-6: el recuadro usa BCP y BCU de su fecha, o ninguna cifra.
     y, precios = _mundo_lineal(92, {"SHY": 1.9, "IEF": 6.5})
     texto = _texto_pdf(inf.generar(_macro(lambda p: y, extras=EXTRAS_CHILE), precios, MES))
     _requisito(ib.pct(8.40) in texto, "el PDF debería traer el BCP de los datos")
