@@ -20,6 +20,7 @@ arriba (ver el comentario de glosario.TOOLTIP_CSS).
 from __future__ import annotations
 
 import html
+import re
 from typing import Callable
 
 import pandas as pd
@@ -30,6 +31,19 @@ from glosario import TOOLTIP_CSS, tooltip_html
 CMAP_DIVERGENTE = LinearSegmentedColormap.from_list("rojo_verde", ["#d03b3b", "#f0efec", "#0ca30c"])
 CMAP_SECUENCIAL = LinearSegmentedColormap.from_list("azul_secuencial", ["#fcfcfb", "#2a78d6"])
 COLUMNA_ATRASADO = "_atrasado_bool"
+
+# I-7b: un texto que, ya formateado, es un cero con signo («+0.00%», «-0.00», «-0%», «+0.00 pp»). Todo el texto debe ser
+# eso: signo, ceros (con o sin decimales) y, a lo más, un sufijo sin dígitos (la unidad).
+_CERO_CON_SIGNO = re.compile(r"[+\-](0(?:\.0+)?[^\d.,]*)")
+
+
+def sin_signo_en_cero(texto: str) -> str:
+    """El mismo texto sin el signo si lo que se ve es un cero («-0.00%» → «0.00%»); cualquier otro, intacto.
+
+    Es solo presentación: el valor de la celda (y su color) no cambia. Un signo sobre algo que se lee como cero no informa
+    nada y sugiere una dirección que la cifra mostrada no tiene."""
+    coincidencia = _CERO_CON_SIGNO.fullmatch(texto)
+    return coincidencia.group(1) if coincidencia else texto
 
 
 def color_de_gradiente(cmap, valor, minimo, maximo) -> tuple[str, str] | None:
@@ -57,7 +71,8 @@ def tabla_con_tooltips(
 ) -> str:
     """HTML de la tabla. `datos` tiene una fila por instrumento (el índice es el nombre que se ve) y puede
     traer la columna `_atrasado_bool`. `formatos` mapea columna -> plantilla («{:+.2f}%») o una función
-    valor -> texto; un valor vacío se muestra como «—». Las columnas que no están en ninguna de las dos listas
+    valor -> texto; un valor vacío se muestra como «—». Con una plantilla, lo que se lee como cero va sin signo
+    («0.00%», no «+0.00%» ni «-0.00%»; ver sin_signo_en_cero). Las columnas que no están en ninguna de las dos listas
     de colores se muestran sin pintar. `construir_tooltip(nombre, fila)` devuelve el HTML del tooltip de esa fila.
     `relleno_horizontal` (px) es el espacio a cada lado del texto de una celda: con tablas de más de ~10
     columnas, achicarlo es lo que decide si la tabla cabe en pantalla o se corta a la derecha."""
@@ -92,7 +107,8 @@ def tabla_con_tooltips(
                     fondo = f"background-color:{color[0]}; color:{color[1]};"
             if columna in formatos and pd.notna(valor):
                 formato = formatos[columna]
-                texto = formato(valor) if callable(formato) else formato.format(valor)
+                # La regla del cero solo se aplica a las plantillas («{:+.2f}%»): una función propia decide su texto.
+                texto = formato(valor) if callable(formato) else sin_signo_en_cero(formato.format(valor))
             elif pd.isna(valor):
                 texto = "—"
             else:
