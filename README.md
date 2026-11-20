@@ -25,11 +25,15 @@ El dashboard tiene 9 pestañas:
    verificado con datos reales antes de usarlo), marcado en rojo si la curva
    está invertida (spread negativo), con una nota breve y cautelosa sobre su
    asociación histórica con recesiones en EEUU — sin afirmar que sea una
-   predicción garantizada. Justo debajo, la **inflación breakeven** (tasa
-   nominal del bono BCP a 10 años menos tasa real del bono BCU a 10 años,
-   ambos del BCCh y del mismo plazo): es la inflación que el mercado tiene
-   implícita en los precios de ambos bonos, no un pronóstico oficial de
-   nadie — nota metodológica visible en la propia pestaña. A continuación,
+   predicción garantizada. Justo debajo, el **diferencial BCP − BCU a 10
+   años** (tasa nominal del BCP menos tasa real del BCU, en puntos
+   porcentuales): una aproximación a la compensación por inflación
+   incorporada en las tasas de mercado, no una medición directa de la
+   inflación esperada (puede incluir primas por riesgo de inflación y por
+   liquidez, los bonos pueden diferir en emisor, duración y cupones, y la UF
+   se reajusta con rezago). Su cambio se muestra sin color y con la fecha
+   común anterior con que se compara — nota metodológica visible en la propia
+   pestaña y en el PDF del Brief (`diferencial_bcp_bcu.py`). A continuación,
    el **calendario económico de los
    próximos 7 días** (`calendario_economico.py`): RPM del Banco Central,
    FOMC de la Fed, publicaciones de IPC (INE) e IMACEC (BCCh), y reuniones
@@ -58,8 +62,10 @@ El dashboard tiene 9 pestañas:
    noticias más abajo).
 2. **Indicadores macro** — selector para explorar cualquiera de las series del
    BCCh (ver lista completa más abajo) con su gráfico histórico y último valor.
-   Incluye la **inflación breakeven** (tasa BCP nominal a 10 años − tasa BCU
-   real a 10 años) como una serie calculada más del selector, y también los
+   Incluye el **diferencial BCP − BCU a 10 años (pp)** (tasa BCP nominal a 10
+   años − tasa BCU real a 10 años; aproximación a la compensación por
+   inflación, no la inflación esperada) como una serie calculada más del
+   selector, y también los
    **indicadores de "Importante" del Brief Premercado que vienen de precios
    de acciones** (S&P 500, Dow Jones, Petróleo WTI, IPSA vía ECH) — así todos
    los indicadores de esa sección quedan explorables acá, no solo los que ya
@@ -226,7 +232,7 @@ el ticker de un ETF, aparece una explicación en palabras de cada indicador con 
 3. **Riesgo de mercado:** duración medida frente a la teórica, y el gráfico de dispersión que la sostiene.
 4. **Riesgo de crédito:** spread corporativo real (BAA10Y) y crédito contra Tesoro en los precios de los ETFs.
 5. **Banco Central y tasas:** TPM de Chile y de EEUU, PDBC, swap, la curva chilena (BCP 2/5/10 y BCU 5/10/30)
-   y la inflación implícita por plazo.
+   y el diferencial BCP − BCU por plazo (pp; aproximación a la compensación por inflación).
 6. **Curva y estrategias:** curva del Tesoro, roll-down y carteras bullet / barbell / escalera armadas con ETFs reales.
 7. **Emitir un bono afuera:** los pasos de una colocación internacional y las referencias reales de tasa.
 
@@ -252,8 +258,8 @@ en el momento con lo último que hay en la base, así que nunca queda desactuali
   cuánto del movimiento explica la duración de cada instrumento y cuánto no) y **qué error evitar**, nombrando la
   confusión típica. Esa tercera parte es la que lo vuelve didáctico y es la que casi ningún informe trae.
 - **Secciones:** resumen con las conclusiones adelante; qué pasó; por qué (atribución contra la curva del Tesoro, con
-  recuadro sobre por qué la duración se mide y no se calcula); el riesgo de crédito; Chile (BCP, BCU, inflación
-  implícita y el diferencial con la Fed); qué pasaría si las tasas se mueven; y qué NO dice el informe.
+  recuadro sobre por qué la duración se mide y no se calcula); el riesgo de crédito; Chile (BCP, BCU, el diferencial
+  BCP − BCU como aproximación a la compensación por inflación y el diferencial con la Fed); qué pasaría si las tasas se mueven; y qué NO dice el informe.
 - **Períodos:** último mes, últimos 3 meses o último año.
 - **Lo que el informe se prohíbe:** recomendaciones de compra o venta (no conoce el horizonte ni el perfil de quien lo
   lee), proyecciones, y causas macroeconómicas que no se puedan medir con estos datos. Lo declara en su última sección.
@@ -388,7 +394,8 @@ hora de la última actualización de cada fuente de datos.
   junto al UST10Y para calcular el CRP (spread plazo contra plazo)
 - Bono BCCh en UF (BCU) a 10 años, tasa de mercado secundario — tasa
   **real** (indexada a UF), usada junto al BCP nominal del mismo plazo para
-  calcular la **inflación breakeven** (BCP − BCU). Serie encontrada vía
+  calcular el **diferencial BCP − BCU** (aproximación a la compensación por
+  inflación, no la inflación esperada). Serie encontrada vía
   `SearchSeries` del catálogo del BCCh (código `F022.BUF.TIS.AN10.UF.Z.D`),
   con datos recientes y limpios verificados antes de usarla — mismo patrón
   ya usado para el cobre, el swap cámara y el BCP.

@@ -211,6 +211,8 @@ ARCHIVOS_SIN_CONEXION_VERIFICADOS = {
     "test_models_get_engine.py": "crea motores con create_engine, que no conecta hasta la primera consulta",
     "test_renta_fija_diferencial_bcp_bcu.py": "AppTest.from_function sobre una función de la pantalla con datos "
                                               "sintéticos; no abre app/dashboard.py ni la base (I-6b-1)",
+    "test_diferencial_bcp_bcu_dashboard.py": "carga solo las definiciones de app/dashboard.py (sin su pantalla) y "
+                                             "reemplaza las lecturas de la base por datos sintéticos (I-6b-2)",
 }
 
 

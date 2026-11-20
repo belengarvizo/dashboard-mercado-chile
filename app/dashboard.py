@@ -60,6 +60,7 @@ from catalogo_derivados import SUBYACENTES as SUBYACENTES_DERIVADOS
 from constants import TICKERS_COMMODITIES, TICKER_PETROLEO_WTI
 from catalogo_fx import PARES_FX
 from defensa_topdown import verificar_prediccion as _verificar_prediccion
+import diferencial_bcp_bcu as dif_bcp_bcu
 from market_data import (
     calcular_resumen_mercado,
     calcular_cambio_reciente,
@@ -361,14 +362,17 @@ def calcular_spread_2s10s(df_macro: pd.DataFrame) -> dict | None:
 
 NOMBRE_BCP_10Y = "Bono BCCh en pesos (BCP) a 10 años - tasa mercado secundario"
 NOMBRE_BCU_10Y = "Bono BCCh en UF (BCU) a 10 años - tasa mercado secundario"
-NOMBRE_BREAKEVEN = "Inflación breakeven (BCP 10Y − BCU 10Y, implícita)"
+# Nombre (y etiqueta visible en el selector de Indicadores macro) de la serie calculada; I-6b-2: antes «Inflación
+# breakeven (...)». No se guarda en ninguna parte: se arma en cada carga.
+NOMBRE_BREAKEVEN = dif_bcp_bcu.NOMBRE_SERIE
 
 
 def calcular_serie_inflacion_breakeven(df_macro: pd.DataFrame) -> pd.Series:
-    """Inflación breakeven = tasa BCP nominal a 10 años − tasa BCU real a 10
-    años (mismo emisor y plazo, distinta indexación). Es la inflación que el
-    mercado tiene implícita en los precios de ambos bonos — no un pronóstico
-    oficial de nadie. Serie indexada por fecha, alineada automáticamente
+    """Diferencial BCP − BCU a 10 años, en puntos porcentuales: tasa BCP nominal
+    a 10 años − tasa BCU real a 10 años (I-6b-2: el nombre de la función se
+    conserva). Es una aproximación a la compensación por inflación incorporada
+    en las tasas de mercado, no la inflación esperada (ver
+    diferencial_bcp_bcu.py). Serie indexada por fecha, alineada automáticamente
     (pandas) entre ambas series de origen; se descartan fechas donde falta
     una de las dos."""
     bcp = df_macro[df_macro["nombre"] == NOMBRE_BCP_10Y].sort_values("fecha").set_index("fecha")["valor"]
@@ -2655,13 +2659,9 @@ def generar_pdf_brief_premercado() -> bytes:
             ))
 
         breakeven = calcular_serie_inflacion_breakeven(df_macro)
-        if len(breakeven) >= 2:
-            valor_actual = float(breakeven.iloc[-1])
-            fecha_breakeven = pd.Timestamp(breakeven.index[-1]).strftime("%Y-%m-%d")
-            story.append(Paragraph(
-                f"<b>Breakeven inflation (BCP 10Y − BCU 10Y):</b> {valor_actual:.2f} pp as of {fecha_breakeven}.",
-                estilo_bullet,
-            ))
+        parrafo_diferencial = dif_bcp_bcu.parrafo_brief(breakeven)   # I-6b-2: diferencial en pp, con su lectura
+        if parrafo_diferencial:
+            story.append(Paragraph(parrafo_diferencial, estilo_bullet))
     except Exception as e:
         story.append(Paragraph(f"Could not load key indicators: {e}", estilo_bullet))
 
@@ -3008,25 +3008,8 @@ if _seccion == "Brief Premercado":
             )
 
         breakeven = calcular_serie_inflacion_breakeven(df_macro)
-        if len(breakeven) >= 2:
-            valor_actual = float(breakeven.iloc[-1])
-            cambio_pp = valor_actual - float(breakeven.iloc[-2])
-            fecha_breakeven = pd.Timestamp(breakeven.index[-1]).strftime("%Y-%m-%d")
-            breakeven_sin_cambio = round(cambio_pp, 2) == 0
-            if breakeven_sin_cambio:
-                # Sin argumento delta: sin flecha ni color (ver Key indicators).
-                st.metric("Breakeven inflation (BCP 10Y − BCU 10Y)", f"{valor_actual:.2f} pp")
-            else:
-                st.metric(
-                    "Breakeven inflation (BCP 10Y − BCU 10Y)",
-                    f"{valor_actual:.2f} pp", f"{cambio_pp:+.2f} pp",
-                )
-            st.caption(
-                f"as of {fecha_breakeven}{' · no change' if breakeven_sin_cambio else ''}. "
-                "This is the inflation the market has priced into both bonds (nominal BCP "
-                "rate minus real BCU rate, same issuer and tenor) — not an official "
-                "forecast from anyone."
-            )
+        # I-6b-2: diferencial en pp, cambio sin color y con su fecha de comparación (ver diferencial_bcp_bcu.py).
+        dif_bcp_bcu.mostrar_en_resumen(breakeven)
 
     except Exception as e:
         st.error(f"Could not load the international summary: {e}")
@@ -3227,9 +3210,9 @@ if _seccion == "Indicadores macro":
     try:
         df_macro = cargar_series_macro()
 
-        # La inflación breakeven no es una serie propia del BCCh: se calcula
-        # (BCP - BCU) y se agrega como una serie más al selector, igual que
-        # las que sí vienen directas de la base de datos.
+        # El diferencial BCP − BCU a 10 años no es una serie propia del BCCh: se
+        # calcula (BCP - BCU) y se agrega como una serie más al selector, igual
+        # que las que sí vienen directas de la base de datos.
         breakeven = calcular_serie_inflacion_breakeven(df_macro)
         if not breakeven.empty:
             df_breakeven = pd.DataFrame({
@@ -3283,6 +3266,8 @@ if _seccion == "Indicadores macro":
 
         fig = px.line(df_filtrado, x="fecha", y="valor", title=serie_elegida)
         st.plotly_chart(fig, use_container_width=True)
+        if serie_elegida == NOMBRE_BREAKEVEN:
+            st.caption(dif_bcp_bcu.DESCRIPCION_SERIE)
 
         col1, col2 = st.columns(2)
         with col1:
@@ -7640,7 +7625,7 @@ def render_defensa_topdown():
                         if _pregunta["capa"] == "MACRO":
                             _aviso = (
                                 "El dashboard no tiene expectativas de inflación de EE.UU./Eurozona "
-                                "(ECFC). La inflación breakeven que sí calcula es de Chile (BCP−BCU), "
+                                "(ECFC). El diferencial BCP − BCU que sí calcula es de Chile, "
                                 "otro mercado — no la uses acá. Ve a Bloomberg ECFC e IMAP."
                             )
                         elif _pregunta["capa"] == "TÉCNICO":

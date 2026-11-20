@@ -91,11 +91,12 @@ SERIES_A_DESCARGAR = {
     "F022.PDBC.TIN.D014.NO.Z.D": {"nombre": "Tasa libre de riesgo CLP (PDBC 14 días)", "frecuencia": "diaria"},
     "F022.BCLP.TIS.AN10.NO.Z.D": {"nombre": "Bono BCCh en pesos (BCP) a 10 años - tasa mercado secundario", "frecuencia": "diaria"},
     # Tasa real (bonos en UF, indexados a inflación): BCP - BCU al mismo plazo
-    # es la inflación breakeven implícita en el mercado (ver
-    # calcular_inflacion_breakeven en app/dashboard.py).
+    # es el diferencial que se usa como aproximación a la compensación por
+    # inflación, no la inflación esperada (ver calcular_serie_inflacion_breakeven
+    # en app/dashboard.py y diferencial_bcp_bcu.py).
     "F022.BUF.TIS.AN10.UF.Z.D": {"nombre": "Bono BCCh en UF (BCU) a 10 años - tasa mercado secundario", "frecuencia": "diaria"},
     # Resto de la curva chilena en pesos y en UF, para la sección "Renta Fija"
-    # (curva real y la inflación implícita por plazo). Los códigos salen del
+    # (curva real y el diferencial BCP − BCU por plazo). Los códigos salen del
     # mismo catálogo del BCCh que el BCP/BCU a 10 años y se probaron contra la
     # API antes de agregarlos. Quedó fuera el BCU a 20 años (AN20): la API lo
     # devuelve sin observaciones. Son series que transan poco, así que pueden
