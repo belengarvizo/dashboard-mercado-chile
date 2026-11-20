@@ -92,8 +92,8 @@ def test_volatilidad_y_caida_traen_su_numero_y_su_nivel():
 
 def test_la_lectura_del_beta_cambia_segun_su_nivel():
     assert "0.69" in g.explicacion_beta(0.69) and "junto con la bolsa" in g.explicacion_beta(0.69)
-    assert "casi no depende" in g.explicacion_beta(0.0)
-    assert "al revés de la bolsa" in g.explicacion_beta(-0.48)
+    assert "baja o cercana a cero" in g.explicacion_beta(0.0)                         # H4: sin «casi no depende»
+    assert "dirección contraria a la bolsa" in g.explicacion_beta(-0.48) and "no lo garantiza" in g.explicacion_beta(-0.48)
 
 
 def test_la_correlacion_cambia_de_lectura_segun_su_nivel():

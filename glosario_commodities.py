@@ -9,6 +9,8 @@ Las funciones devuelven HTML corto (<b>, <br>); glosario.tooltip_html los pone d
 el texto lo dice en vez de inventar.
 """
 from catalogo_commodities import COMMODITIES, nombre_de
+from formato_numerico import cifra
+from glosario_renta_fija import lectura_de_beta
 
 
 def explicacion_instrumento(ticker: str) -> str:
@@ -23,9 +25,9 @@ def explicacion_retorno(cambio_1m: float | None, ytd: float | None) -> str:
         return "Retorno reciente no disponible todavía."
     partes = []
     if cambio_1m is not None:
-        partes.append(f"en el último mes {cambio_1m:+.1f}%")
+        partes.append(f"en el último mes {cifra(cambio_1m, 1, True, False)}%")
     if ytd is not None:
-        partes.append(f"en lo que va del año {ytd:+.1f}%")
+        partes.append(f"en lo que va del año {cifra(ytd, 1, True, False)}%")
     return (
         f"<b>Retorno:</b> {' y '.join(partes)}.<br>"
         "Es el precio del contrato de futuro más cercano a vencer (el que se usa como referencia del mercado real). "
@@ -65,12 +67,12 @@ def explicacion_beta(beta: float | None) -> str:
     if beta > 0.3:
         lectura = "se mueve en parte junto con la bolsa: cuando el mercado está optimista, también sube"
     elif beta > -0.1:
-        lectura = "casi no depende de lo que haga la bolsa de EEUU"
+        lectura = "tiene una sensibilidad baja o cercana a cero a la bolsa de EEUU"
     else:
-        lectura = "tiende a moverse al revés de la bolsa, lo que lo vuelve útil para diversificar"
+        lectura = "tiende a moverse en dirección contraria a la bolsa; eso puede ayudar a diversificar, pero no lo garantiza"
     return (
-        f"<b>Beta vs S&amp;P 500 = {beta:.2f}</b><br>"
-        f"Si el S&amp;P 500 sube o baja 1%, este commodity tiende a moverse {beta:+.2f}%: {lectura}. "
+        f"<b>Beta vs S&amp;P 500 = {cifra(beta, 2, miles=False)}</b><br>"
+        f"{lectura_de_beta(beta, 'este commodity')} Este commodity {lectura}. "
         "Casi todos los commodities tienen un beta bajo: sus precios responden más a oferta y demanda física que al humor de la bolsa."
     )
 

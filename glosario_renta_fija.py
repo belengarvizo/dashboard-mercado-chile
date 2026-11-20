@@ -10,6 +10,7 @@ Las funciones devuelven HTML corto (<b>, <br>); glosario.tooltip_html los pone d
 tooltip. Si falta el dato, el texto lo dice en vez de inventar.
 """
 from catalogo_renta_fija import ETFS_RENTA_FIJA, nombre_de
+from formato_numerico import cifra
 
 
 def explicacion_instrumento(ticker: str) -> str:
@@ -24,9 +25,9 @@ def explicacion_retorno(cambio_1m: float | None, ytd: float | None) -> str:
         return "Retorno reciente no disponible todavía."
     partes = []
     if cambio_1m is not None:
-        partes.append(f"en el último mes {cambio_1m:+.1f}%")
+        partes.append(f"en el último mes {cifra(cambio_1m, 1, True, False)}%")
     if ytd is not None:
-        partes.append(f"en lo que va del año {ytd:+.1f}%")
+        partes.append(f"en lo que va del año {cifra(ytd, 1, True, False)}%")
     return (
         f"<b>Retorno:</b> {' y '.join(partes)}.<br>"
         "Incluye lo que el fondo repartió (los intereses de sus bonos): un ETF de bonos entrega buena parte de su "
@@ -97,14 +98,31 @@ def explicacion_beta(beta: float | None) -> str:
     elif beta > 0.05:
         lectura = "se mueve muy poco con la bolsa"
     elif beta >= -0.05:
-        lectura = "prácticamente no depende de lo que haga la bolsa"
+        lectura = "tiene una sensibilidad estimada a la bolsa cercana a cero"
     else:
-        lectura = "tiende a moverse al revés de la bolsa"
+        lectura = "tiende a moverse en dirección contraria a la bolsa"
     return (
-        f"<b>Beta vs S&amp;P 500 = {beta:.2f}</b><br>"
-        f"Si el S&amp;P 500 sube o baja 1%, este ETF tiende a moverse {beta:+.2f}%: {lectura}. "
-        "Mientras más baja, más sirve para diversificar una cartera de acciones."
+        f"<b>Beta vs S&amp;P 500 = {cifra(beta, 2, miles=False)}</b><br>"
+        f"{lectura_de_beta(beta, 'este ETF')} Este ETF {lectura}. "
+        "Una beta baja o negativa puede ayudar a diversificar una cartera de acciones, pero no lo garantiza: también importan la "
+        "correlación, las volatilidades, el peso en la cartera y el período analizado."
     )
+
+
+def lectura_de_beta(beta: float, sujeto: str) -> str:
+    """H4: beta es una sensibilidad histórica estimada con una relación lineal (sin unidades): un rendimiento del índice
+    1 pp mayor se asocia con un rendimiento β pp mayor del activo (menor si β es negativa). Si a dos decimales es 0.00,
+    se dice que es cercana a cero, sin sugerir bajo riesgo ni independencia. Misma frase en glosario_renta_fija,
+    glosario_renta_variable y glosario_commodities. Solo texto: no cambia la beta ni sus tramos."""
+    magnitud = cifra(abs(beta), 2, miles=False)
+    base = "Beta es una sensibilidad histórica estimada con una relación lineal; no tiene unidades."
+    if magnitud == "0.00":
+        return (f"{base} Aquí es cercana a cero: el rendimiento de {sujeto} casi no se asoció linealmente con el del S&amp;P 500, "
+                "lo que no implica bajo riesgo ni independencia. No garantiza movimientos futuros.")
+    mismo, contrario = ("mayor", "menor") if beta > 0 else ("menor", "mayor")
+    return (f"{base} Según esa relación, un rendimiento del S&amp;P 500 1 punto porcentual (pp) mayor se asocia con un rendimiento "
+            f"de {sujeto} unos {magnitud} pp {mismo}; uno 1 pp menor, con un rendimiento unos {magnitud} pp {contrario}. "
+            "No garantiza movimientos futuros.")
 
 
 def explicacion_sharpe(sharpe: float | None, tasa_libre_de_riesgo: float | None) -> str:

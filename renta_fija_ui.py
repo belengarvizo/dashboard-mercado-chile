@@ -46,6 +46,7 @@ import estructura_tasas as et
 import glosario_renta_fija as gl
 import renta_fija as rf
 from catalogo_renta_fija import ETFS_RENTA_FIJA, nombre_de
+from formato_numerico import cifra
 from tabla_tooltips import tabla_con_tooltips
 
 PASOS = [
@@ -237,8 +238,9 @@ def _precios_en_columnas(df_precios: pd.DataFrame) -> pd.DataFrame:
 
 
 def _fmt(valor: float, decimales: int = 2) -> str:
-    """Número con el mismo formato que las tablas de acciones: coma de miles y punto decimal."""
-    return f"{valor:,.{decimales}f}"
+    """Número con el mismo formato que las tablas de acciones: coma de miles y punto decimal. Lo que se lee como cero va
+    sin signo («0.00», no «-0.00»; H2, ver formato_numerico)."""
+    return cifra(valor, decimales)
 
 
 def _pct(decimal: float, decimales: int = 2) -> str:
@@ -503,8 +505,8 @@ def _bonos_comprados_a_la_par(pivote: pd.DataFrame, fecha_hoy, curva_hoy: pd.Ser
             filas.append({
                 "Comprado hace": f"{etiqueta.removeprefix('hace ')} ({_fecha(fecha_compra)})", "Bono a": f"{plazo} años",
                 "Tasa compra": _pct(tasa_compra), "Tasa hoy": _pct(tasa_hoy), "Precio hoy": _fmt(r["precio_hoy"]),
-                "Cupones": _fmt(r["cupones"]), "Retorno bono": f"{r['retorno_total'] * 100:+.2f}%",
-                "ETF": ticker, "Retorno ETF": f"{(p1 / p0 - 1) * 100:+.2f}%" if p0 and p1 else "—",
+                "Cupones": _fmt(r["cupones"]), "Retorno bono": f"{cifra(r['retorno_total'] * 100, 2, True, False)}%",
+                "ETF": ticker, "Retorno ETF": f"{cifra((p1 / p0 - 1) * 100, 2, True, False)}%" if p0 and p1 else "—",
             })
     return pd.DataFrame(filas)
 
@@ -915,7 +917,7 @@ def _paso_curva(macro: pd.DataFrame, precios: pd.DataFrame) -> None:
         filas.append({
             "Estrategia": nombre, "Composición": " · ".join(f"{t} {p * 100:.0f}%" for t, p in pesos.items()),
             "Sensibilidad empírica (años)": _fmt(sum(p * d[t] for t, p in pesos.items())),
-            "Retorno total (%)": f"{e['retorno_total']:+.2f}", "Volatilidad (%)": _fmt(e["volatilidad"]),
+            "Retorno total (%)": cifra(e["retorno_total"], 2, True, False), "Volatilidad (%)": _fmt(e["volatilidad"]),
             "Caída máxima (%)": _fmt(e["caida_maxima"]),
         })
     fig.update_layout(yaxis_title="Retorno total, base 100")

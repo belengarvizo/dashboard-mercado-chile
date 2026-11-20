@@ -116,7 +116,9 @@ def test_retorno_volatilidad_caida_beta_y_sharpe_traen_su_numero():
     assert "baja" in g.explicacion_volatilidad(1.4) and "moderada" in g.explicacion_volatilidad(5.0)
     assert "12.5%" in g.explicacion_caida_maxima(-12.47)
     assert "0.22" in g.explicacion_beta(0.22) and "en parte junto con la bolsa" in g.explicacion_beta(0.22)
-    assert "al revés" in g.explicacion_beta(-0.3) and "prácticamente no depende" in g.explicacion_beta(0.0)
+    # H4: una beta negativa es dirección contraria; una cercana a cero no se presenta como independencia.
+    assert "dirección contraria" in g.explicacion_beta(-0.3) and "cercana a cero" in g.explicacion_beta(0.0)
+    assert "no depende" not in g.explicacion_beta(0.0) and "Mientras más baja, más sirve" not in g.explicacion_beta(0.0)
     s = g.explicacion_sharpe(-0.4, 3.88)
     assert "-0.40" in s and "3.88%" in s and "mala" in s
     assert "buena" in g.explicacion_sharpe(1.5, 3.88) and "moderada" in g.explicacion_sharpe(0.3, 3.88)

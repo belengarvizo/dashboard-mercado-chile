@@ -10,6 +10,7 @@ Las funciones devuelven HTML corto (<b>, <br>); glosario.tooltip_html los pone d
 texto lo dice en vez de inventar.
 """
 from catalogo_fx import MONEDAS_CARRY, PARES_FX
+from formato_numerico import cifra
 
 
 def explicacion_par(ticker: str) -> str:
@@ -25,9 +26,9 @@ def explicacion_movimiento(ticker: str, cambio_1m: float | None, ytd: float | No
         return "Movimiento reciente no disponible todavía."
     partes = []
     if cambio_1m is not None:
-        partes.append(f"en el último mes {cambio_1m:+.1f}%")
+        partes.append(f"en el último mes {cifra(cambio_1m, 1, True, False)}%")
     if ytd is not None:
-        partes.append(f"en lo que va del año {ytd:+.1f}%")
+        partes.append(f"en lo que va del año {cifra(ytd, 1, True, False)}%")
     texto = f"<b>Movimiento:</b> {' y '.join(partes)}."
     if cambio_1m is not None and datos:
         if cambio_1m > 0.05:
@@ -134,8 +135,9 @@ def explicacion_spot_y_total(nombre: str, spot: float | None, carry: float | Non
     else:
         pelea = " El tipo de cambio se movió en sentido contrario al diferencial, pero el carry pesó más."
     return (
-        f"<b>Resultado del último año = {total:+.1f}%</b><br>"
-        f"De ese total, {spot:+.1f}% fue lo que se movió {nombre} frente al dólar y {carry:+.1f}% fue el carry (el diferencial de tasas)."
+        f"<b>Resultado del último año = {cifra(total, 1, True, False)}%</b><br>"
+        f"De ese total, {cifra(spot, 1, True, False)}% fue lo que se movió {nombre} frente al dólar y {cifra(carry, 1, True, False)}% "
+        "fue el carry (el diferencial de tasas)."
         f"{pelea}"
     )
 
@@ -150,7 +152,7 @@ def explicacion_riesgo_carry(volatilidad_spot: float | None, caida_maxima: float
     if carry_sobre_riesgo is not None:
         # I-6d: relación descriptiva, sin umbrales ni juicios («paga razonablemente», «se cobra poco»).
         texto += (
-            f"<br><b>Carry sobre riesgo = {carry_sobre_riesgo:.2f}</b>: diferencial de tasas de referencia dividido por la "
+            f"<br><b>Carry sobre riesgo = {cifra(carry_sobre_riesgo, 2, miles=False)}</b>: diferencial de tasas de referencia dividido por la "
             "volatilidad anualizada del tipo de cambio. Es descriptivo: por sí solo no es una rentabilidad ajustada por riesgo "
             "obtenida ni una recomendación de inversión."
         )
@@ -167,12 +169,12 @@ def explicacion_estrategia(nombre: str, lado_hoy: str | None, estadisticas: dict
     elif lado_hoy == "corta":
         texto += "Hoy la estrategia está corta en esta moneda: su tasa es menor que la de EEUU, así que se financia en ella y compra dólares.<br>"
     texto += (
-        f"En el período ({estadisticas['dias']} ruedas) ganó {estadisticas['anualizado']:+.1f}% al año con una volatilidad de "
+        f"En el período ({estadisticas['dias']} ruedas) ganó {cifra(estadisticas['anualizado'], 1, True, False)}% al año con una volatilidad de "
         f"{estadisticas['volatilidad']:.1f}%. Su peor caída desde un máximo fue de {abs(estadisticas['caida_maxima']):.1f}%."
     )
     if estadisticas.get("peor_mes") is not None and estadisticas.get("fecha_peor_mes") is not None:
         texto += (
-            f"<br><b>Peor mes:</b> {estadisticas['peor_mes']:+.1f}% (21 ruedas terminadas el {estadisticas['fecha_peor_mes']:%d-%m-%Y}). "
+            f"<br><b>Peor mes:</b> {cifra(estadisticas['peor_mes'], 1, True, False)}% (21 ruedas terminadas el {estadisticas['fecha_peor_mes']:%d-%m-%Y}). "
             f"En {estadisticas['meses_ganadores']:.0f}% de los meses calendario ganó."
         )
     return texto

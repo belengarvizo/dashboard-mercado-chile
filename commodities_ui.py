@@ -39,6 +39,7 @@ import glosario_commodities as gl
 import renta_fija_ui as rfui
 import renta_variable as rv
 from catalogo_commodities import COMMODITIES, GRUPOS_EN_ORDEN, nombre_de, tickers_del_grupo
+from formato_numerico import cifra
 from tabla_tooltips import tabla_con_tooltips
 
 PASOS = ["1. El mercado", "2. Chile y el cobre"]
@@ -229,7 +230,7 @@ def _paso_cobre(macro: pd.DataFrame, precios: pd.DataFrame) -> None:
     c1.caption(f"Al {rfui._fecha(ultima)}")
     c2.metric("Cobre, futuro COMEX (HG=F)", f"{rfui._fmt(conjunto['comex'].loc[ultima], 2)} USD/lb")
     c2.caption(f"Al {rfui._fecha(ultima)}")
-    c3.metric("Diferencia entre las dos fuentes", f"{diferencia:+.2f}%")
+    c3.metric("Diferencia entre las dos fuentes", f"{cifra(diferencia, 2, True, False)}%")
     c3.caption("COMEX menos Banco Central, sobre el mismo día")
 
     ventana = st.radio("Período", list(VENTANAS_COBRE), horizontal=True, index=1, key="cm_ventana_cobre")
@@ -242,7 +243,7 @@ def _paso_cobre(macro: pd.DataFrame, precios: pd.DataFrame) -> None:
 
     diferencias = (tramo["comex"] / tramo["bcch"] - 1) * 100
     st.caption(
-        f"En el período elegido, la diferencia entre las dos fuentes promedió {diferencias.mean():+.2f}% y llegó a un máximo de "
+        f"En el período elegido, la diferencia entre las dos fuentes promedió {cifra(diferencias.mean(), 2, True, False)}% y llegó a un máximo de "
         f"{diferencias.abs().max():.2f}%, el {rfui._fecha(diferencias.abs().idxmax())}. Lo normal es una diferencia pequeña y estable: "
         "miden el mismo metal, pero el Banco Central usa su propio procedimiento de referencia y el futuro COMEX refleja el precio "
         "exacto de ese contrato en la bolsa de EEUU."

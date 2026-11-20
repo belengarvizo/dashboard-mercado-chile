@@ -34,6 +34,7 @@ import matplotlib
 matplotlib.use("Agg", force=False)  # sin ventanas: el PDF se arma en el servidor
 import matplotlib.pyplot as plt
 import pandas as pd
+from formato_numerico import cifra
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import letter
 from reportlab.lib.styles import ParagraphStyle
@@ -257,9 +258,7 @@ def num(valor, decimales: int = 2, con_signo: bool = False) -> str:
     valor que se calcula y se guarda no se toca."""
     if valor is None or pd.isna(valor):
         return "—"
-    if float(f"{abs(valor):.{decimales}f}") == 0:
-        return f"{0.0:,.{decimales}f}"
-    return f"{valor:{'+' if con_signo else ''},.{decimales}f}"
+    return cifra(valor, decimales, con_signo)   # H2: la regla vive en formato_numerico (una sola implementación)
 
 
 def pct(valor, decimales: int = 2, con_signo: bool = False) -> str:

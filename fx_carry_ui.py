@@ -41,6 +41,7 @@ from catalogo_fx import (
     MONEDAS_CARRY, MONEDAS_SIN_TASA, NOMBRE_COBRE, NOMBRE_TASA_CHILE, NOMBRE_TASA_EEUU, NOMBRE_TIPO_DE_CAMBIO_OBSERVADO,
     PARES_FX, TICKER_DXY, TICKER_REFERENCIA, etiqueta_corta, nombre_de,
 )
+from formato_numerico import cifra
 from tabla_tooltips import tabla_con_tooltips
 
 PASOS = [
@@ -403,7 +404,7 @@ def _paso_estrategia(macro: pd.DataFrame, precios: pd.DataFrame) -> None:
     cartera = estadisticas.get(ROTULO_CARTERA)
     if cartera and cartera.get("peor_mes") is not None:
         st.markdown(
-            f"El peor mes de la **cartera** fue **{cartera['peor_mes']:+.1f}%** (21 ruedas terminadas el {rfui._fecha(cartera['fecha_peor_mes'])}), "
+            f"El peor mes de la **cartera** fue **{cifra(cartera['peor_mes'], 1, True, False)}%** (21 ruedas terminadas el {rfui._fecha(cartera['fecha_peor_mes'])}), "
             f"y su peor caída desde un máximo fue de **{abs(cartera['caida_maxima']):.1f}%**."
         )
 
@@ -518,7 +519,7 @@ def _paso_chile(macro: pd.DataFrame, precios: pd.DataFrame) -> None:
             diferencia = (yahoo.loc[ultima] / dolar.loc[ultima] - 1) * 100
             st.caption(
                 f"Comprobación de datos: el último día en común ({rfui._fecha(ultima)}), el USD/CLP de Yahoo ({yahoo.loc[ultima]:,.2f}) y el dólar "
-                f"observado del Banco Central ({dolar.loc[ultima]:,.2f}) difieren {diferencia:+.2f}%. No son iguales porque son datos distintos: "
+                f"observado del Banco Central ({dolar.loc[ultima]:,.2f}) difieren {cifra(diferencia, 2, True, False)}%. No son iguales porque son datos distintos: "
                 "el observado es un promedio del día en Chile y el de Yahoo trae su propia convención de fecha (ver el aviso del paso 1)."
             )
 

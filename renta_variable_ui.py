@@ -42,6 +42,7 @@ import renta_fija_ui as rfui
 import renta_variable as rv
 from catalogo_etfs_acciones import ETFS_ACCIONES, MERCADOS_EEUU, PAISES_Y_REGIONES, SECTORES_EEUU, nombre_de
 from catalogo_renta_fija import ETFS_RENTA_FIJA
+from formato_numerico import cifra
 from tabla_tooltips import tabla_con_tooltips
 
 PASOS = [
@@ -157,7 +158,8 @@ def _mejor_y_peor(resumen: pd.DataFrame, columna: str, etiqueta: str) -> str | N
     if len(datos) < 2:
         return None
     return (
-        f"{etiqueta}: el mejor fue **{datos.idxmax()}** ({datos.max():+.1f}%) y el peor **{datos.idxmin()}** ({datos.min():+.1f}%)."
+        f"{etiqueta}: el mejor fue **{datos.idxmax()}** ({cifra(datos.max(), 1, True, False)}%) y el peor **{datos.idxmin()}** "
+        f"({cifra(datos.min(), 1, True, False)}%)."
     )
 
 
@@ -255,7 +257,7 @@ def _paso_paises(precios: pd.DataFrame, tasa_libre: float | None) -> None:
     if "ECH" in resumen.index:
         chile = resumen.loc["ECH"]
         st.markdown(
-            f"**Chile (ECH)**, el ETF que este dashboard usa como proxy del IPSA: retorno de 1 año {chile['Retorno 1 año (%)']:+.1f}%, "
+            f"**Chile (ECH)**, el ETF que este dashboard usa como proxy del IPSA: retorno de 1 año {cifra(chile['Retorno 1 año (%)'], 1, True, False)}%, "
             f"beta {chile['Beta vs S&P 500']:.2f} y correlación {chile['Correlación vs S&P 500']:.2f} contra el S&P 500."
             if pd.notna(chile["Retorno 1 año (%)"]) and pd.notna(chile["Beta vs S&P 500"]) and pd.notna(chile["Correlación vs S&P 500"])
             else "**Chile (ECH)**: todavía no hay historia suficiente para medir su beta."
@@ -440,7 +442,8 @@ def _paso_indice(precios: pd.DataFrame) -> None:
         pd.DataFrame(
             [
                 (
-                    etf, nombre, f"{c['retorno_etf']:+.2f}%", f"{c['retorno_indice']:+.2f}%", f"{c['diferencia']:+.2f}",
+                    etf, nombre, f"{cifra(c['retorno_etf'], 2, True, False)}%", f"{cifra(c['retorno_indice'], 2, True, False)}%",
+                    cifra(c["diferencia"], 2, True, False),
                     f"{c['correlacion']:.4f}", f"{c['error_de_seguimiento']:.2f}%",
                     f"{rfui._fecha(c['desde'])} a {rfui._fecha(c['hasta'])}",
                 )

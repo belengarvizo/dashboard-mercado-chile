@@ -101,7 +101,9 @@ def test_la_lectura_del_beta_cambia_segun_su_nivel_y_siempre_dice_el_numero():
     assert "1.78" in g.explicacion_beta(1.78) and "amplifica" in g.explicacion_beta(1.78)
     assert "se mueve casi igual" in g.explicacion_beta(1.0)
     assert "amortigua" in g.explicacion_beta(0.7)
-    assert "casi no depende" in g.explicacion_beta(0.11) and "casi no depende" in g.explicacion_beta(-0.42)
+    # H4: bajo 0.5 se distingue el signo (antes una beta negativa decía «casi no depende de la bolsa»).
+    assert "sensibilidad baja" in g.explicacion_beta(0.11) and "dirección contraria" in g.explicacion_beta(-0.42)
+    assert "cercana a cero" in g.explicacion_beta(0.003) and "no depende" not in g.explicacion_beta(-0.42)
     assert "-0.42" in g.explicacion_beta(-0.42)
     # los límites: 0.9 y 1.1 ya son «casi igual», 0.5 ya amortigua
     assert "se mueve casi igual" in g.explicacion_beta(0.9) and "se mueve casi igual" in g.explicacion_beta(1.1)

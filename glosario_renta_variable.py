@@ -10,6 +10,8 @@ Las funciones devuelven HTML corto (<b>, <br>); glosario.tooltip_html los pone d
 falta el dato, el texto lo dice en vez de inventar.
 """
 from catalogo_etfs_acciones import ETFS_ACCIONES, nombre_de
+from formato_numerico import cifra
+from glosario_renta_fija import lectura_de_beta
 
 
 def explicacion_instrumento(ticker: str) -> str:
@@ -24,9 +26,9 @@ def explicacion_retorno(cambio_1m: float | None, ytd: float | None) -> str:
         return "Retorno reciente no disponible todavía."
     partes = []
     if cambio_1m is not None:
-        partes.append(f"en el último mes {cambio_1m:+.1f}%")
+        partes.append(f"en el último mes {cifra(cambio_1m, 1, True, False)}%")
     if ytd is not None:
-        partes.append(f"en lo que va del año {ytd:+.1f}%")
+        partes.append(f"en lo que va del año {cifra(ytd, 1, True, False)}%")
     return (
         f"<b>Retorno:</b> {' y '.join(partes)}.<br>"
         "Incluye los dividendos que el fondo repartió: el precio de esta tabla ya los suma."
@@ -68,11 +70,16 @@ def explicacion_beta(beta: float | None) -> str:
         lectura = "se mueve casi igual que la bolsa"
     elif beta >= 0.5:
         lectura = "amortigua los movimientos de la bolsa: sube y cae menos que ella"
+    # H4: bajo 0.5 se distingue el signo (los tramos no cambian): una beta negativa no es «ausencia de relación».
+    elif cifra(beta, 2, miles=False) == "0.00":
+        lectura = "tiene una sensibilidad estimada a la bolsa de EEUU cercana a cero"
+    elif beta < 0:
+        lectura = "tiende a moverse en dirección contraria a la bolsa de EEUU"
     else:
-        lectura = "casi no depende de lo que haga la bolsa de EEUU"
+        lectura = "tiene una sensibilidad baja a la bolsa de EEUU"
     return (
-        f"<b>Beta vs S&amp;P 500 = {beta:.2f}</b><br>"
-        f"Si el S&amp;P 500 sube o baja 1%, este ETF tiende a moverse {beta:.2f}%: {lectura}. "
+        f"<b>Beta vs S&amp;P 500 = {cifra(beta, 2, miles=False)}</b><br>"
+        f"{lectura_de_beta(beta, 'este ETF')} Este ETF {lectura}. "
         "Se mide con SPY, el ETF del S&amp;P 500, en el último año."
     )
 
@@ -106,9 +113,9 @@ def explicacion_relativo(diferencia_pp: float | None, retorno_1a: float | None) 
         lectura = f"rindió {diferencia_pp:.1f} puntos porcentuales MÁS que el S&amp;P 500"
     else:
         lectura = f"rindió {abs(diferencia_pp):.1f} puntos porcentuales MENOS que el S&amp;P 500"
-    propio = f" ({retorno_1a:+.1f}% propio)" if retorno_1a is not None else ""
+    propio = f" ({cifra(retorno_1a, 1, True, False)}% propio)" if retorno_1a is not None else ""
     return (
-        f"<b>Contra el S&amp;P 500 = {diferencia_pp:+.1f} pp</b><br>"
+        f"<b>Contra el S&amp;P 500 = {cifra(diferencia_pp, 1, True, False)} pp</b><br>"
         f"En el último año este ETF {lectura}{propio}. Es solo un año: no basta para decir que un sector o un "
         "país \"es mejor\"; los líderes cambian de un año a otro."
     )

@@ -1500,7 +1500,7 @@ def generar(macro: pd.DataFrame, precios: pd.DataFrame, nombre_periodo: str, fec
         piezas.append(ib.parrafo(
             f"La **TPM** está en {ib.pct(chile['tpm'])} (al {ib.fecha(chile['fecha_tpm'])}) y la tasa efectiva de fondos federales de "
             f"EEUU, en {ib.pct(chile['fed'])} (al {ib.fecha(chile['fecha_fed'])}): un diferencial de {ib.num(chile['diferencial'], 2, True)} "
-            "puntos entre las tasas de corto plazo de ambos países. Es una referencia, no una ganancia asegurada: quien se financia en "
+            "puntos porcentuales (pp) entre las tasas de corto plazo de ambos países. Es una referencia, no una ganancia asegurada: quien se financia en "
             "dólares para invertir en pesos opera a tasas de mercado, no a las de política, y asume el tipo de cambio, que puede "
             "compensar o superar ese diferencial."
         ))
