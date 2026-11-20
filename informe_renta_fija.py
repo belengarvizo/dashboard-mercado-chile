@@ -346,42 +346,68 @@ def _curva(macro: pd.DataFrame, ventana: dict) -> dict | None:
 
 
 def inflacion_implicita_fisher(nominal_pct: float | None, real_pct: float | None) -> float | None:
-    """Inflación que iguala una tasa nominal y una real del mismo plazo, con la relación EXACTA de Fisher:
-    (1 + i) = (1 + r) × (1 + π)  ⇒  π = (1 + i) / (1 + r) − 1. Entradas y salida en % anual; el cálculo se hace en
-    decimales. La resta simple i − r es su aproximación lineal (I-6)."""
+    """Inflación que iguala una tasa nominal y una real según la identidad de Fisher, (1 + i) = (1 + r) × (1 + π)
+    ⇒ π = (1 + i) / (1 + r) − 1. Entradas y salida en % anual; el cálculo se hace en decimales. La resta i − r es su
+    aproximación lineal (I-6).
+
+    La identidad es exacta como álgebra, y solo si las dos tasas son efectivas y comparables (misma capitalización,
+    mismo horizonte). I-6c: el PDF ya no imprime este número, porque la documentación pública revisada no confirma que
+    las series BCP y BCU del Banco Central cumplan esa condición; la función se conserva para `datos["chile"]`."""
     if nominal_pct is None or real_pct is None or pd.isna(nominal_pct) or pd.isna(real_pct) or real_pct <= -100:
         return None
     return ((1 + nominal_pct / 100.0) / (1 + real_pct / 100.0) - 1) * 100.0
 
 
+def _pp(valor: float) -> str:
+    """Diferencia entre dos tasas, en puntos porcentuales («3.35 pp»): no es una tasa, así que no lleva «%»."""
+    return f"{ib.num(valor, 2)} pp"
+
+
+# I-6c: las limitaciones del diferencial BCP − BCU, dichas igual en el resumen, la sección 4 y el recuadro de la UF.
+LIMITES_DEL_DIFERENCIAL = (
+    "puede incluir primas por riesgo de inflación y por liquidez; las series de 10 años del Banco Central representan bonos "
+    "de un tramo de plazos, que no son necesariamente del mismo emisor (la serie en UF incluye bonos de la Tesorería) y "
+    "pueden tener distinta duración, cupones y características; y la UF se reajusta con rezago respecto del IPC"
+)
+
+
 def _parrafos_uf(chile: dict) -> list[str]:
-    """Recuadro «comparar una tasa en UF con una en pesos» (I-6). Con datos, usa las tasas BCP y BCU de su fecha; sin
-    datos, no muestra cifras: nunca ejemplos fijos que puedan leerse como tasas actuales."""
+    """Recuadro «comparar una tasa en UF con una en pesos» (I-6, I-6c). Con datos, usa las tasas BCP y BCU de su fecha;
+    sin datos, no muestra cifras: nunca ejemplos fijos que puedan leerse como tasas actuales.
+
+    I-6c: el diferencial no se presenta como el umbral exacto de inflación que haría rendir más al BCU, y se distingue
+    el rendimiento al vencimiento de la rentabilidad realizada si se vende antes."""
     con_datos = chile.get("bcp10") is not None and chile.get("bcu10") is not None
-    primero = (
-        f"Al {ib.fecha(chile['fecha_curva_chile'])}, el BCU a 10 años rinde {ib.pct(chile['bcu10'])} y el BCP a 10 años, "
-        f"{ib.pct(chile['bcp10'])}. Eso no significa que el BCU rinda menos."
-        if con_datos else "Un BCU puede tener una tasa menor que un BCP del mismo plazo sin rendir menos."
-    )
-    implicita = (f" (al {ib.fecha(chile['fecha_curva_chile'])}, {ib.pct(chile['inflacion_implicita_exacta'])})"
-                 if con_datos and chile.get("inflacion_implicita_exacta") is not None else "")
+    if con_datos:
+        primero = (f"Al {ib.fecha(chile['fecha_curva_chile'])}, la serie del BCU a 10 años marca {ib.pct(chile['bcu10'])} y la "
+                   f"del BCP a 10 años, {ib.pct(chile['bcp10'])}.")
+        if chile["bcu10"] < chile["bcp10"]:
+            primero += " Eso no significa que el BCU rinda menos."
+    else:
+        primero = "Un BCU puede tener una tasa menor que un BCP del mismo plazo sin rendir menos."
+    diferencial = (f" (al {ib.fecha(chile['fecha_curva_chile'])}, {_pp(chile['inflacion_implicita'])})"
+                   if con_datos and chile.get("inflacion_implicita") is not None else "")
     return [
         primero + " El BCU paga su tasa **sobre un capital que se reajusta con la UF**: es una tasa **real**. La del BCP es "
-        "**nominal** e incluye la compensación por inflación.",
-        "Compararlas directamente lleva a concluir que el instrumento en UF es peor, cuando miden cosas distintas. Para compararlas hay "
-        "que llevarlas a la misma unidad. Mantenido hasta el vencimiento, el BCU rinde en pesos aproximadamente (1 + tasa real) × "
-        "(1 + inflación) − 1, con la inflación que efectivamente ocurra en ese plazo (vía la UF); si se vende antes, el resultado "
-        "depende además de su precio de mercado. Así, manteniendo ambos hasta el vencimiento, si la inflación resulta mayor que la "
-        f"implícita{implicita}, el BCU habrá rendido más que el BCP; si resulta menor, menos.",
+        "**nominal** e incluye una compensación por inflación.",
+        "Compararlas directamente lleva a concluir que el instrumento en UF es peor, cuando miden cosas distintas. Mantenido hasta "
+        "el vencimiento, lo que rinde en pesos un bono en UF depende de la inflación que efectivamente ocurra en ese plazo, que la "
+        "UF recoge con rezago; lo de un bono en pesos queda fijado en pesos. Ese es el **rendimiento al vencimiento**; si se vende "
+        "antes, la **rentabilidad realizada** depende además del precio de mercado.",
+        f"Por eso el diferencial entre ambas tasas{diferencial} es solo una referencia aproximada de la inflación a partir de la cual "
+        "el BCU tendería a rendir más que el BCP, **no un umbral exacto**: ese umbral exigiría bonos comparables (mismos plazos, "
+        "flujos y convención de tasas) y un horizonte concreto, y el diferencial incluye además primas por riesgo de inflación y "
+        "por liquidez.",
     ]
 
 
 def _chile(macro: pd.DataFrame) -> dict:
-    """Tasas chilenas de hoy y la inflación implícita a 10 años (BCP y BCU en la misma fecha, ambas en % anual).
+    """Tasas chilenas de hoy y el diferencial BCP − BCU a 10 años (BCP y BCU en la misma fecha, ambas en % anual).
 
-    `inflacion_implicita` es la resta simple BCP − BCU (la aproximación de Fisher, la misma que muestra el dashboard);
-    `inflacion_implicita_exacta`, la relación exacta. Ninguna de las dos es la inflación esperada: incluyen primas por
-    riesgo de inflación y por liquidez, y la UF sigue a la inflación con rezago."""
+    `inflacion_implicita` es el diferencial BCP − BCU, en puntos porcentuales: la cifra que el PDF presenta como
+    aproximación a la compensación por inflación (I-6c; el nombre de la clave se conserva). `inflacion_implicita_exacta`
+    es el resultado de la identidad de Fisher sobre esas dos tasas; se conserva en los datos, pero el PDF no lo imprime
+    (ver inflacion_implicita_fisher). Ninguno de los dos es la inflación esperada."""
     bcp = rfui._serie(macro, rfui.NOMBRE_BCP10).dropna()
     bcu = rfui._serie(macro, rfui.NOMBRE_BCU10).dropna()
     tpm = rfui._ultimo(macro, rfui.NOMBRE_TPM_CHILE)
@@ -1079,11 +1105,11 @@ def _afirmaciones(datos: dict) -> list[Afirmacion]:
     if chile["inflacion_implicita"] is not None:
         afirmaciones.append(Afirmacion(
             "chile", NIVEL_HALLAZGO,
-            f"**En Chile, la inflación implícita a diez años es de {ib.pct(chile['inflacion_implicita_exacta'])}.** Es la inflación "
-            f"que iguala lo que rinden el bono en pesos ({ib.pct(chile['bcp10'])}, tasa nominal) y el bono en UF "
-            f"({ib.pct(chile['bcu10'])}, tasa real) al {ib.fecha(chile['fecha_curva_chile'])}, con la relación de Fisher; la resta "
-            f"simple de ambas tasas, {ib.pct(chile['inflacion_implicita'])}, es una aproximación. No es una medición directa de la "
-            "inflación esperada: incluye además primas por riesgo de inflación y por liquidez.",
+            f"**En Chile, el diferencial BCP − BCU a 10 años es de {_pp(chile['inflacion_implicita'])}** "
+            f"({ib.pct(chile['bcp10'])} nominal en pesos menos {ib.pct(chile['bcu10'])} real en UF, al "
+            f"{ib.fecha(chile['fecha_curva_chile'])}): una aproximación a la compensación por inflación incorporada en las tasas de "
+            "mercado. No equivale a la inflación esperada ni es una medición exacta: puede incluir primas por riesgo de inflación y "
+            "por liquidez, diferencias de emisor y de duración entre los bonos, y el rezago de la UF.",
         ))
     return afirmaciones
 
@@ -1455,11 +1481,20 @@ def generar(macro: pd.DataFrame, precios: pd.DataFrame, nombre_periodo: str, fec
         piezas.append(ib.parrafo(
             "El Banco Central de Chile emite bonos en **pesos** (BCP), cuya tasa es **nominal**, y en **UF** (BCU), cuya tasa es **real**: "
             "se paga sobre un capital que se reajusta con la inflación a través de la UF. "
-            f"Al {ib.fecha(chile['fecha_curva_chile'])}, el BCP a 10 años rinde {ib.pct(chile['bcp10'])} y el BCU a 10 años, "
-            f"{ib.pct(chile['bcu10'])}. La inflación que haría rendir lo mismo a ambos, la **inflación implícita** o de equilibrio, es de "
-            f"{ib.pct(chile['inflacion_implicita_exacta'])} con la relación exacta de Fisher, (1 + i) = (1 + r) × (1 + π), con las tasas en "
-            f"decimales; la resta simple, {ib.pct(chile['inflacion_implicita'])}, es una aproximación. No es la inflación esperada: "
-            "incluye primas por riesgo de inflación y por liquidez, y la UF sigue a la inflación con rezago."
+            f"Al {ib.fecha(chile['fecha_curva_chile'])}, la serie del BCP a 10 años marca {ib.pct(chile['bcp10'])} y la del BCU a 10 "
+            f"años, {ib.pct(chile['bcu10'])}: un **diferencial de {_pp(chile['inflacion_implicita'])}**. Esa diferencia entre el "
+            "rendimiento nominal en pesos y el real en UF se usa como **aproximación a la compensación por inflación** incorporada en "
+            "las tasas de mercado. No es la inflación esperada, ni una predicción, ni una medición exacta: "
+            f"{LIMITES_DEL_DIFERENCIAL}."
+        ))
+        piezas.append(ib.parrafo(
+            "**La relación de Fisher.** Si una tasa nominal i y una real r son tasas efectivas comparables (mismo horizonte, "
+            "misma capitalización), la inflación π que las iguala cumple la identidad (1 + i) = (1 + r) × (1 + π), y el "
+            "diferencial i − r es su aproximación lineal. La identidad es exacta como relación algebraica, pero aplicarla a "
+            "estas dos series no entregaría una medición exacta de la inflación: exige que ambas tasas usen la misma "
+            "convención de capitalización, lo que la documentación pública revisada no permite confirmar, y no corrige "
+            "ninguna de las diferencias anteriores entre los bonos. Por eso este informe usa el diferencial y no calcula "
+            "una inflación con esa fórmula."
         ))
     if chile["diferencial"] is not None:
         piezas.append(ib.parrafo(

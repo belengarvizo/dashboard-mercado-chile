@@ -493,7 +493,8 @@ def test_las_cifras_de_chile_del_resumen_son_las_calculadas():
     assert chile["inflacion_implicita"] == pytest.approx(8.40 - 1.20)
     assert chile["diferencial"] == pytest.approx(4.50 - 3.88)
     frase = _frase(inf._resumen(datos), "En Chile")
-    assert ib.pct(7.20) in frase and ib.pct(8.40) in frase and ib.pct(1.20) in frase
+    # I-6c: la diferencia de dos tasas va en puntos porcentuales («7.20 pp»), no como tasa («7.20%»).
+    assert "7.20 pp" in frase and ib.pct(7.20) not in frase and ib.pct(8.40) in frase and ib.pct(1.20) in frase
 
 
 def test_el_recuadro_de_la_uf_usa_las_tasas_de_los_datos_y_no_cifras_fijas():
