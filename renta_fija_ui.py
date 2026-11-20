@@ -88,7 +88,7 @@ def nombre_treasury(plazo: str) -> str:
 
 SERIES_TASAS = {
     "TPM de Chile": NOMBRE_TPM_CHILE,
-    "Tasa de política de EEUU (Fed funds)": NOMBRE_TPM_EEUU,
+    "Tasa efectiva de fondos federales (EE. UU.)": NOMBRE_TPM_EEUU,   # I-6d: rótulo visible; la clave de la serie no cambia
     "PDBC a 14 días (BCCh)": NOMBRE_PDBC14,
     "Swap Promedio Cámara a 90 días": NOMBRE_SWAP90,
 }
@@ -147,6 +147,17 @@ NOTA_DIFERENCIAL_BCP_BCU = (
     "por riesgo de inflación y por liquidez; las series del Banco Central representan bonos de un tramo de plazos, que no son "
     "necesariamente del mismo emisor ni tienen la misma duración o cupones; y la UF se reajusta con rezago respecto del IPC. "
     "La base no incluye el BCU a 20 años: esa serie no devolvió datos recientes cuando se consultó al Banco Central."
+)
+
+
+# I-6d: el diferencial TPM − tasa efectiva de fondos federales es una referencia de condiciones monetarias, no la
+# rentabilidad de un carry trade (coherente con el PDF de renta fija). Solo texto: la resta no cambia.
+NOTA_DIFERENCIAL_TPM_FED = (
+    "Las dos fechas pueden diferir de uno a unos pocos días. Es una **referencia de las condiciones monetarias** de ambos "
+    "países, no una rentabilidad: un *carry trade* invierte y se financia a tasas de mercado (no a las de política), paga "
+    "costos de transacción y de financiamiento y, sin cobertura, su resultado depende sobre todo del tipo de cambio. Con "
+    "cobertura (*forward*), los puntos forward tienden a compensar el diferencial entre instrumentos comparables. La sección "
+    "«FX y Carry Trade» muestra resultados con datos reales."
 )
 
 
@@ -727,10 +738,10 @@ def _paso_banco_central(macro: pd.DataFrame) -> None:
         with col:
             st.metric(etiqueta, f"{_fmt(dato[0])}%" if dato else "—")
             st.caption(f"Al {_fecha(dato[1])}" if dato else "Sin datos")
-    chile, eeuu = ultimos["TPM de Chile"], ultimos["Tasa de política de EEUU (Fed funds)"]
+    chile, eeuu = ultimos["TPM de Chile"], ultimos["Tasa efectiva de fondos federales (EE. UU.)"]
     if chile and eeuu:
-        st.metric("Diferencial de política monetaria (Chile − EEUU)", f"{_fmt(chile[0] - eeuu[0])} pp")
-        st.caption("Las dos fechas pueden diferir de uno a unos pocos días. Este diferencial es la base del *carry trade* de divisas.")
+        st.metric("Diferencial TPM Chile − fondos federales (pp)", f"{_fmt(chile[0] - eeuu[0])} pp")
+        st.caption(NOTA_DIFERENCIAL_TPM_FED)
 
     ventana = st.radio("Período", list(VENTANAS), horizontal=True, index=1, key="rf_ventana_tasas")
     dias = VENTANAS[ventana]
@@ -804,7 +815,7 @@ def _paso_banco_central(macro: pd.DataFrame) -> None:
         _grafico(fig3)
         st.caption(NOTA_DIFERENCIAL_BCP_BCU)
     st.caption(
-        "Fuentes: Banco Central de Chile (TPM, PDBC, Swap Cámara, BCP y BCU) y FRED (Fed funds). El dashboard **no tiene** los montos de "
+        "Fuentes: Banco Central de Chile (TPM, PDBC, Swap Cámara, BCP y BCU) y FRED (tasa efectiva de fondos federales). El dashboard **no tiene** los montos de "
         "las operaciones de mercado abierto ni de las licitaciones del Banco Central: esa parte solo se explica aquí."
     )
 

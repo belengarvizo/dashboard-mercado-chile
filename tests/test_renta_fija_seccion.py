@@ -255,8 +255,8 @@ def test_el_banco_central_muestra_las_cuatro_tasas_el_diferencial_y_la_curva_chi
     for etiqueta in ui.SERIES_TASAS:
         assert _metrica(at, etiqueta).value != "—", f"{etiqueta}: no llegó el dato real"
     chile = _numero(_metrica(at, "TPM de Chile").value)
-    eeuu = _numero(_metrica(at, "Tasa de política de EEUU (Fed funds)").value)
-    diferencial = _numero(_metrica(at, "Diferencial de política monetaria (Chile − EEUU)").value)
+    eeuu = _numero(_metrica(at, "Tasa efectiva de fondos federales (EE. UU.)").value)          # I-6d: rótulos
+    diferencial = _numero(_metrica(at, "Diferencial TPM Chile − fondos federales (pp)").value)
     assert diferencial == pytest.approx(chile - eeuu, abs=0.011)
 
     curva = _tabla(at, "Tasa (%)")

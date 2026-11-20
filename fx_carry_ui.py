@@ -9,7 +9,7 @@ PARA QUÉ EXISTE
 
 DE DÓNDE SALEN LOS DATOS (todos reales; ninguno es de ejemplo)
     - 13 pares de divisas y el índice dólar (tabla precios_acciones, bajados por scripts/actualizar_acciones.py), con 5 años.
-    - Tasas de corto plazo: TPM de Chile y Fed funds (BCCh y FRED, ya en la base) y, para el carry, las de la zona euro,
+    - Tasas de corto plazo: TPM de Chile y tasa efectiva de fondos federales (BCCh y FRED, ya en la base) y, para el carry, las de la zona euro,
       Reino Unido, Japón, México y Brasil (tabla series_macro, scripts/actualizar_bcch.py).
     - Dólar observado y precio del cobre del Banco Central de Chile, para el paso de Chile.
     - SIN DATOS: forwards y swaps de divisas (por eso no se calcula una cobertura), tasas al día de Canadá, Suiza,
@@ -295,10 +295,13 @@ def _grafico_de_compensacion(resumen: pd.DataFrame) -> None:
 
 def _paso_carry(macro: pd.DataFrame, precios: pd.DataFrame) -> None:
     st.markdown(
-        "Cada país fija una **tasa de interés** distinta. El **carry trade** aprovecha la diferencia: se pide prestada una moneda "
-        "de tasa baja y se coloca el dinero en una de tasa alta; se gana el **diferencial** mientras el tipo de cambio no se mueva "
-        "en contra. Abajo, cada fila es la posición «**comprar esa moneda financiándose en dólares**»: el resultado del año es el "
-        "**spot** (cuánto se movió la moneda frente al dólar) más el **carry** (el diferencial de tasas)."
+        "Cada país tiene su propia **tasa de interés**. El **carry trade** busca aprovechar la diferencia: se pide prestada una moneda "
+        "de tasa baja y se coloca el dinero en una de tasa alta. En teoría se obtiene el **diferencial** mientras el tipo de cambio no "
+        "se mueva en contra; en la práctica cuentan las tasas a las que realmente se puede invertir y financiarse (no las de "
+        "referencia que se muestran aquí), los costos y, sobre todo, el tipo de cambio. Cubrirse con un *forward* no deja el "
+        "diferencial gratis: bajo la paridad cubierta de tasas, entre instrumentos comparables, los puntos forward lo compensan. "
+        "Abajo, cada fila es la posición «**comprar esa moneda financiándose en dólares**» calculada con las tasas de referencia: el "
+        "resultado del año es el **spot** (cuánto se movió la moneda frente al dólar) más el **carry** (el diferencial de tasas)."
     )
     st.subheader("Carry de cada moneda contra el dólar (datos reales)")
     resumen = _resumen_del_carry(macro, precios, pd.Timestamp.now().normalize())
@@ -308,12 +311,12 @@ def _paso_carry(macro: pd.DataFrame, precios: pd.DataFrame) -> None:
     st.markdown(_tabla_de_carry_html(resumen, macro), unsafe_allow_html=True)
     tasa_usd = resumen["tasa_usd"].dropna()
     st.caption(
-        f"Datos al {rfui._fecha(resumen['hasta'].max())}. La tasa de EEUU es la Fed funds"
+        f"Datos al {rfui._fecha(resumen['hasta'].max())}. La tasa de EEUU es la tasa efectiva de fondos federales"
         + (f" ({tasa_usd.iloc[0]:.2f}%)" if len(tasa_usd) else "")
         + ". **Difer.** = tasa local − tasa de EEUU, en puntos porcentuales; **Spot / Carry / Total 1A** = resultado de comprar la moneda "
         "financiándose en dólares durante el último año; **Carry/Vol** = diferencial dividido por la volatilidad del tipo de cambio. "
-        "Un diferencial **negativo** significa que el carry va al revés: "
-        "lo gana quien compra dólares y se financia en esa moneda (el caso clásico del yen)."
+        "Un diferencial **negativo** significa que las tasas de referencia favorecen al dólar: la posición inversa (comprar dólares "
+        "financiándose en esa moneda, el caso clásico del yen) cobraría ese diferencial, con los mismos riesgos y sin garantía de ganancia."
     )
     st.caption(
         "Las tasas de Japón, México y Brasil son tasas interbancarias de corto plazo de la OCDE, **mensuales**, y llegan con cerca de un mes "
@@ -439,7 +442,8 @@ def _paso_chile(macro: pd.DataFrame, precios: pd.DataFrame) -> None:
     st.markdown(
         "La explicación habitual es que el peso chileno se mueve con las **materias primas**: cerca de la mitad de lo que Chile exporta es "
         "cobre, y cuando el cobre sube entran más dólares al país y el peso tiende a fortalecerse, es decir, **USD/CLP baja**. A eso se "
-        "suman las **tasas**: la diferencia entre la TPM y la tasa de la Fed cambia lo atractivo que es tener pesos. Abajo está lo "
+        "suman las **tasas**: la diferencia entre la TPM y la tasa efectiva de fondos federales cambia lo atractivo que es tener "
+        "pesos. Abajo está lo "
         "que muestran los datos del Banco Central, y cuánta de esa relación se ve de verdad."
     )
     if dolar.empty or cobre.empty:
@@ -483,24 +487,27 @@ def _paso_chile(macro: pd.DataFrame, precios: pd.DataFrame) -> None:
 
     st.subheader("Dólar y diferencial de tasas")
     if tpm.empty or fed.empty:
-        rfui._sin_datos("la TPM o la tasa de la Fed")
+        rfui._sin_datos("la TPM o la tasa efectiva de fondos federales")
     else:
         fechas = dolar.index
         diferencial = fx.tasa_en_cada_fecha(tpm, fechas, 10) - fx.tasa_en_cada_fecha(fed, fechas, 10)
         tramo_dolar = rfui._recortar_ventana(dolar, dias)
         tramo_dif = rfui._recortar_ventana(diferencial.dropna(), dias)
         fig = rfui._figura(380)
-        fig.add_trace(go.Scatter(x=tramo_dif.index, y=tramo_dif.values, mode="lines", name="TPM de Chile − tasa de la Fed (puntos, eje izquierdo)", line=dict(color=rfui.VERDE)))
+        fig.add_trace(go.Scatter(x=tramo_dif.index, y=tramo_dif.values, mode="lines", name="TPM de Chile − tasa efectiva de fondos federales (pp, eje izquierdo)", line=dict(color=rfui.VERDE)))
         fig.add_trace(go.Scatter(x=tramo_dolar.index, y=tramo_dolar.values, mode="lines", name="Dólar observado (eje derecho)", yaxis="y2", line=dict(color=rfui.AZUL)))
         fig.update_layout(
             yaxis=dict(title="Diferencial (pp)"), yaxis2=dict(title="Pesos por dólar", overlaying="y", side="right", showgrid=False),
         )
         rfui._grafico(fig)
         if len(diferencial.dropna()):
+            actual = diferencial.dropna().iloc[-1]
+            posicion = ("igual a" if round(actual, 2) == 0 else
+                        f"{abs(actual):.2f} puntos porcentuales {'sobre' if actual > 0 else 'bajo'}")
             st.caption(
-                f"Hoy la TPM de Chile ({tpm.iloc[-1]:.2f}%) está {abs(diferencial.dropna().iloc[-1]):.2f} puntos "
-                f"{'sobre' if diferencial.dropna().iloc[-1] >= 0 else 'bajo'} la tasa de la Fed ({fed.iloc[-1]:.2f}%). Esa diferencia es lo que "
-                "gana, antes del tipo de cambio, quien compra pesos financiándose en dólares."
+                f"Hoy la TPM de Chile ({tpm.iloc[-1]:.2f}%) está {posicion} la tasa efectiva de fondos federales ({fed.iloc[-1]:.2f}%). "
+                "Es un diferencial entre tasas de referencia, no una ganancia: quien compra pesos financiándose en dólares opera a tasas "
+                "de mercado, paga costos y asume el tipo de cambio, que puede compensar o superar ese diferencial."
             )
 
     if "USDCLP=X" in precios and len(dolar):

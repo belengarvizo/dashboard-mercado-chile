@@ -147,11 +147,16 @@ def test_la_moneda_dice_que_tasa_usa_su_valor_y_la_fecha_del_dato():
     assert "No hay una tasa vigente" in g.explicacion_moneda("BRL", None, None)
 
 
-def test_el_diferencial_positivo_dice_cuanto_se_gana_y_el_negativo_dice_que_el_carry_va_al_reves():
+def test_el_diferencial_se_explica_como_diferencia_entre_tasas_de_referencia_y_no_como_ganancia():
+    # I-6d: antes decía «gana 10.06 puntos» / «lo gana quien compra dólares»: el diferencial no es una ganancia realizable.
     pos = g.explicacion_diferencial("el real", 13.94, 3.88, 10.06)
-    assert "+10.06 puntos" in pos and "13.94%" in pos and "3.88%" in pos and "gana 10.06 puntos" in pos
+    assert "+10.06 pp al año" in pos and "13.94%" in pos and "3.88%" in pos and "a favor del real" in pos
+    assert "No es una ganancia realizable" in pos
     neg = g.explicacion_diferencial("el yen", 1.04, 3.88, -2.84)
-    assert "-2.84 puntos" in neg and "pierde 2.84 puntos" in neg and "al revés" in neg and "se financia en el yen" in neg
+    assert "-2.84 pp al año" in neg and "a favor del dólar" in neg and "No hace rentable por sí solo la operación inversa" in neg
+    for texto in (pos, neg):
+        assert " gana " not in texto and " pierde " not in texto
+        assert "tasas efectivas" in texto and "costos" in texto and "tipo de cambio" in texto
     assert "no disponible" in g.explicacion_diferencial("el yen", None, 3.88, None)
 
 
@@ -165,10 +170,13 @@ def test_el_spot_el_carry_y_el_total_se_explican_segun_quien_pesa_mas():
     assert "no disponible" in g.explicacion_spot_y_total("el real", None, None, None)
 
 
-def test_el_riesgo_del_carry_trae_la_volatilidad_la_caida_y_la_lectura_del_carry_sobre_riesgo():
+def test_el_riesgo_del_carry_trae_la_volatilidad_la_caida_y_el_carry_sobre_riesgo_sin_juicios():
+    # I-6d: sin el umbral 0.5 ni «paga razonablemente» / «se cobra poco»: es una relación descriptiva.
     t = g.explicacion_riesgo_carry(14.2, -7.7, 0.71)
-    assert "14.2%" in t and "7.7%" in t and "0.71" in t and "razonablemente" in t
-    assert "poco por el riesgo" in g.explicacion_riesgo_carry(10.0, -5.0, 0.1)
+    assert "14.2%" in t and "7.7%" in t and "0.71" in t and "Es descriptivo" in t
+    for valor in (0.1, 0.71, -0.6):
+        texto = g.explicacion_riesgo_carry(10.0, -5.0, valor)
+        assert "razonablemente" not in texto and "poco por el riesgo" not in texto
     assert "Carry sobre riesgo" not in g.explicacion_riesgo_carry(10.0, -5.0, None)
     assert "no disponible" in g.explicacion_riesgo_carry(None, None, None)
 

@@ -213,6 +213,8 @@ ARCHIVOS_SIN_CONEXION_VERIFICADOS = {
                                               "sintéticos; no abre app/dashboard.py ni la base (I-6b-1)",
     "test_diferencial_bcp_bcu_dashboard.py": "carga solo las definiciones de app/dashboard.py (sin su pantalla) y "
                                              "reemplaza las lecturas de la base por datos sintéticos (I-6b-2)",
+    "test_carry_trade_textos.py": "AppTest.from_function sobre funciones de pantalla de Renta Fija y FX con datos "
+                                  "sintéticos; no abre app/dashboard.py ni la base (I-6d)",
 }
 
 

@@ -107,17 +107,21 @@ def explicacion_moneda(codigo: str, tasa: float | None, fecha: str | None) -> st
 def explicacion_diferencial(nombre: str, tasa_moneda: float | None, tasa_usd: float | None, diferencial: float | None) -> str:
     if diferencial is None or tasa_moneda is None or tasa_usd is None:
         return "Diferencial de tasas no disponible todavía."
-    if diferencial >= 0:
-        lectura = (
-            f"Quien compra {nombre} con dólares prestados cobra {tasa_moneda:.2f}% y paga {tasa_usd:.2f}%: gana {diferencial:.2f} puntos al año "
-            "por mantener la posición, siempre que el tipo de cambio no se mueva en contra."
-        )
+    # I-6d: el diferencial entre tasas de referencia no se presenta como una ganancia realizable (ni al revés si es negativo).
+    # Breve: la explicación completa (tasas accesibles, cobertura con forwards) está en la introducción del paso.
+    tasas = f"Tasas de referencia: {tasa_moneda:.2f}% para {nombre} y {tasa_usd:.2f}% para el dólar"
+    a_favor_de = f"del {nombre[3:]}" if nombre.startswith("el ") else f"de {nombre}"
+    depende = "el resultado depende de las tasas efectivas, los costos y el tipo de cambio."
+    if round(diferencial, 2) == 0:
+        cifra = "0.00"
+        lectura = f"{tasas}; prácticamente no hay diferencial."
+    elif diferencial > 0:
+        cifra = f"{diferencial:+.2f}"
+        lectura = f"{tasas}; a favor {a_favor_de}. No es una ganancia realizable: {depende}"
     else:
-        lectura = (
-            f"Quien compra {nombre} con dólares prestados cobra {tasa_moneda:.2f}% y paga {tasa_usd:.2f}%: pierde {abs(diferencial):.2f} puntos al año. "
-            f"El carry está al revés: lo gana quien compra dólares y se financia en {nombre}."
-        )
-    return f"<b>Diferencial de tasas = {diferencial:+.2f} puntos</b><br>{lectura}"
+        cifra = f"{diferencial:+.2f}"
+        lectura = f"{tasas}; a favor del dólar. No hace rentable por sí solo la operación inversa: {depende}"
+    return f"<b>Diferencial de tasas = {cifra} pp al año</b><br>{lectura}"
 
 
 def explicacion_spot_y_total(nombre: str, spot: float | None, carry: float | None, total: float | None) -> str:
@@ -144,10 +148,11 @@ def explicacion_riesgo_carry(volatilidad_spot: float | None, caida_maxima: float
         f"La peor caída de la posición desde un máximo previo fue de {abs(caida_maxima):.1f}%."
     )
     if carry_sobre_riesgo is not None:
-        lectura = "se cobra poco por el riesgo que se corre" if abs(carry_sobre_riesgo) < 0.5 else "el diferencial paga razonablemente el riesgo cambiario"
+        # I-6d: relación descriptiva, sin umbrales ni juicios («paga razonablemente», «se cobra poco»).
         texto += (
-            f"<br><b>Carry sobre riesgo = {carry_sobre_riesgo:.2f}</b>: el diferencial de tasas dividido por la volatilidad del tipo de cambio; "
-            f"{lectura}."
+            f"<br><b>Carry sobre riesgo = {carry_sobre_riesgo:.2f}</b>: diferencial de tasas de referencia dividido por la "
+            "volatilidad anualizada del tipo de cambio. Es descriptivo: por sí solo no es una rentabilidad ajustada por riesgo "
+            "obtenida ni una recomendación de inversión."
         )
     return texto
 
