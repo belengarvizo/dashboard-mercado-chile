@@ -464,7 +464,7 @@ def _grafico_atribucion(etfs: pd.DataFrame):
         posiciones = range(len(datos))
         ancho = 0.38
         ax.bar([p - ancho / 2 for p in posiciones], datos["Explicado por la duración (%)"], ancho,
-               color=ib.NAVY, label="Explicado por la duración")
+               color=ib.NAVY, label="Anticipado por la sensibilidad")
         ax.bar([p + ancho / 2 for p in posiciones], datos["Retorno del período (%)"], ancho,
                color=ib.GOLD, label="Retorno real")
         ax.axhline(0, color=ib.RULE, linewidth=0.8)
@@ -1075,8 +1075,9 @@ def _nota_metodologica(datos: dict) -> str:
         f"{ib.num(u['pb_tasa'], 0)} pb y, además, una cuarta parte de su variabilidad habitual para un período de este largo (en esta "
         f"ventana, {ib.num(umbral_10, 1)} pb para la tasa a 10 años); por debajo se informa como prácticamente sin cambio. Un retorno se "
         "considera consistente con la sensibilidad estimada a tasas cuando ambos son materiales, tienen el mismo signo, su diferencia no "
-        f"supera la mitad del retorno observado (con un piso de {ib.num(u['pp_retorno'], 2)} pp) y la sensibilidad es precisa (R² de al "
-        f"menos {ib.num(u['r2_minimo'], 1)} y error estándar de hasta {ib.num(u['error_relativo_maximo'] * 100, 0)}% de la estimación). "
+        f"supera la mitad del retorno observado (con un piso de {ib.num(u['pp_retorno'], 2)} pp), el ajuste de la relación diaria es suficiente (R² de al "
+        f"menos {ib.num(u['r2_minimo'], 1)}) y la pendiente es precisa (error estándar de hasta "
+        f"{ib.num(u['error_relativo_maximo'] * 100, 0)}% de la estimación). "
         "El R² describe la relación diaria del último año: no mide qué parte del retorno del período explican las tasas ni establece "
         "causalidad. Dos fondos solo se comparan por plazo si ambos son bonos nominales del Tesoro. En los fondos del Tesoro se descuenta "
         "un devengo aproximado (tasa de referencia al inicio × días / 365), que no es el rendimiento del fondo; en los demás no se estima "
@@ -1090,7 +1091,7 @@ def _tabla_desempeno(etfs: pd.DataFrame) -> pd.DataFrame:
         "ETF": etfs.index,
         "Qué contiene": [ETFS_RENTA_FIJA[t]["grupo"] for t in etfs.index],
         "Retorno del período": [ib.pct(v, 2, True) for v in etfs["Retorno del período (%)"]],
-        "Duración medida": [ib.num(v, 2) for v in etfs["Duración medida (años)"]],
+        "Sensibilidad empírica (años)": [ib.num(v, 2) for v in etfs["Duración medida (años)"]],
         "Volatilidad (1 año)": [ib.pct(v) for v in etfs["Volatilidad (%)"]],
         "Peor caída (1 año)": [ib.pct(v) for v in etfs["Caída máxima 1 año (%)"]],
     })
@@ -1120,7 +1121,7 @@ def _tabla_atribucion(etfs: pd.DataFrame) -> pd.DataFrame:
         "ETF": datos.index,
         "Tasa de ref.": [NO_ESTIMADO if s else f"{int(p)} años" for p, s in zip(datos["Plazo de referencia"], sin_tasa)],
         "Cambio de la tasa": celda(datos["Cambio de la tasa (pp)"], lambda v: f"{ib.num(v, 2, True)} pp"),
-        "Duración": celda(datos["Duración medida (años)"], lambda v: ib.num(v, 2)),
+        "Sensibilidad empírica (años)": celda(datos["Duración medida (años)"], lambda v: ib.num(v, 2)),
         "Explicado": celda(datos["Explicado por la duración (%)"], lambda v: ib.pct(v, 2, True)),
         "Real": [ib.pct(v, 2, True) for v in datos["Retorno del período (%)"]],
         "Resto": celda(datos["Resto (%)"], lambda v: ib.pct(v, 2, True)),
@@ -1133,7 +1134,7 @@ def _tabla_atribucion(etfs: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(tabla)
 
 
-_PESO_COLUMNA_ATRIBUCION = {"ETF": 0.8, "Tasa de ref.": 0.95, "Cambio de la tasa": 1.05, "Duración": 1.0, "Explicado": 1.15,
+_PESO_COLUMNA_ATRIBUCION = {"ETF": 0.8, "Tasa de ref.": 0.95, "Cambio de la tasa": 1.05, "Sensibilidad empírica (años)": 1.3, "Explicado": 1.15,
                             "Real": 0.95, "Resto": 0.95, "Devengo aprox.": 1.05, "No explicado": 1.15, "R²": 0.7}
 
 
@@ -1169,8 +1170,10 @@ def _nota_cuadro_2(etfs: pd.DataFrame, fechas: dict) -> str:
         partes.append("En TIP solo se informa el retorno: su precio responde a la tasa real del Tesoro y al reajuste de su capital "
                       "por inflación, y la base solo tiene tasas nominales, así que no se estiman su sensibilidad, lo explicado, el "
                       "resto ni el devengo (n. e.: no estimado).")
-    partes.append("**R²** indica qué parte del movimiento diario del precio explican las tasas: bajo el 0,5 la sensibilidad de ese "
-                  "instrumento es poco confiable.")
+    partes.append("La sensibilidad empírica es la pendiente de una regresión del retorno diario contra el cambio diario de la tasa "
+                  "de referencia en el último año: describe cómo se movieron juntos, no es la duración efectiva del fondo. **R²** mide "
+                  "qué tan bien se ajusta esa relación lineal en esa muestra; no mide la precisión de la sensibilidad ni prueba que "
+                  "las tasas hayan movido el precio.")
     if fechas.get("inicio") is not None:
         partes.append(f"Retorno, cambio de tasa y devengo se miden entre las mismas dos fechas ({ib.fecha(fechas['inicio'])} y "
                       f"{ib.fecha(fechas['fin'])}).")
@@ -1179,7 +1182,7 @@ def _nota_cuadro_2(etfs: pd.DataFrame, fechas: dict) -> str:
 
 def _tabla_sensibilidad(etfs: pd.DataFrame) -> pd.DataFrame:
     datos = etfs.dropna(subset=["Duración medida (años)"])
-    tabla = {"ETF": datos.index, "Duración": [ib.num(v, 2) for v in datos["Duración medida (años)"]]}
+    tabla = {"ETF": datos.index, "Sensibilidad empírica (años)": [ib.num(v, 2) for v in datos["Duración medida (años)"]]}
     for cambio in CAMBIOS_DE_SENSIBILIDAD:
         tabla[f"{cambio:+.1f} pp"] = [ib.pct(-d * cambio, 1, True) for d in datos["Duración medida (años)"]]
     tabla["Margen"] = [f"±{ib.num(2 * e, 2)}" if pd.notna(e) else "—" for e in datos["Error de la duración"]]
@@ -1335,13 +1338,18 @@ def generar(macro: pd.DataFrame, precios: pd.DataFrame, nombre_periodo: str, fec
     # I-3: ya no se usa _frase_del_resto, que leía el resto de TODOS los fondos como cupón devengado. En los fondos del
     # Tesoro ese devengo se muestra aproximado en el Cuadro 2; en los demás, el resto mezcla factores que no se separan.
     piezas.append(ib.recuadro_concepto(
-        "Recuadro 1. Por qué la duración se mide y no se calcula",
+        "Recuadro 1. Sensibilidad empírica y duración efectiva: no son lo mismo",
         [
-            "La duración de un bono suelto sale de una fórmula: es el promedio de sus pagos, ponderado por cuánto vale hoy cada uno. "
-            "Pero un ETF es una canasta que cambia de composición, con bonos de distintos plazos y cupones, así que esa fórmula no aplica directamente.",
-            "Acá la duración se **mide**: se compara, día a día durante un año, cuánto se movió el precio del ETF con cuánto se movió la tasa "
-            "del Tesoro de su plazo. La pendiente de esa relación es la duración, y viene con un margen de error y con un R² que dice cuán "
-            "confiable es. Un número medido con datos reales es preferible a uno sacado de una ficha que puede estar desactualizada.",
+            "La **duración efectiva** de un bono o de una cartera se obtiene valorando sus flujos: cuánto cambiaría su precio si la curva de "
+            "rendimientos se desplazara. Para un ETF requiere conocer los bonos que tiene, y este informe no cuenta con esos datos.",
+            "Lo que aquí se usa es una **sensibilidad empírica**: la pendiente de una regresión entre el retorno diario del ETF y el cambio "
+            "diario de la tasa del Tesoro de un plazo de referencia, durante el último año. Describe cómo se movieron juntos el precio y esa "
+            "tasa en el pasado. Puede parecerse a la duración efectiva en un fondo del Tesoro cuya cartera esté bien representada por esa "
+            "tasa, y alejarse cuando hay riesgo de crédito (el spread puede moverse en sentido contrario a la tasa), cuando el plazo de "
+            "referencia no corresponde al de los bonos o cuando precios y tasas no se registran a la misma hora.",
+            "Viene con un **margen** (dos errores estándar), que indica la imprecisión estadística de la pendiente en esa muestra, y con un "
+            "**R²**, que mide qué tan bien se ajusta la relación lineal en ese año. Ninguno de los dos dice si la sensibilidad coincide con "
+            "la duración efectiva, ni si las tasas fueron la razón de los movimientos.",
         ],
     ))
     # Solo fondos del Tesoro nominal: así «mismo emisor y mismo riesgo de impago» es cierto para los dos que se comparan.
@@ -1394,7 +1402,7 @@ def generar(macro: pd.DataFrame, precios: pd.DataFrame, nombre_periodo: str, fec
             "**crédito**, que la sensibilidad a tasas no mide."
         )
         piezas.append(ib.recuadro_error(
-            "Error frecuente: medir un bono de empresa solo por su duración",
+            "Error frecuente: medir un bono de empresa solo por su sensibilidad a tasas",
             [
                 f"En el último año, la relación diaria con la tasa del Tesoro de su plazo describe cerca de un {ib.num(r2_ief * 100, 0)}% "
                 f"de la variación de IEF (R² {ib.num(r2_ief, 2)}) y un {ib.num(r2_hyg * 100, 0)}% de la de HYG (R² {ib.num(r2_hyg, 2)}). "
@@ -1431,14 +1439,16 @@ def generar(macro: pd.DataFrame, precios: pd.DataFrame, nombre_periodo: str, fec
     # ---- 5. Sensibilidad
     piezas += ib.titulo_seccion("5. Qué pasaría si las tasas se mueven")
     piezas.append(ib.parrafo(
-        "Con la duración medida se puede estimar el efecto de un movimiento de tasas. **No es una proyección**: no dice qué van a hacer las "
-        "tasas, solo qué pasaría con el precio si se movieran esa cantidad."
+        "Con la sensibilidad empírica se puede aproximar el efecto de un movimiento de tasas. **No es una proyección**: no dice qué van a "
+        "hacer las tasas, solo qué pasaría con el precio si se movieran esa cantidad y la relación del último año se mantuviera."
     ))
     piezas.append(ib.tabla(_tabla_sensibilidad(etfs)))
     piezas.append(ib.nota(
         "Cuadro 3. Cambio estimado del precio ante movimientos paralelos de la tasa de referencia de cada ETF, calculado como "
-        "−duración × cambio. «Margen» son dos errores estándar de la duración medida: el rango dentro del cual es razonable que esté el "
-        "valor verdadero. La estimación ignora la convexidad, así que para movimientos grandes subestima las alzas de precio y sobreestima las caídas."
+        "−sensibilidad empírica × cambio. «Margen» son dos errores estándar de la pendiente estimada: una medida aproximada de su "
+        "imprecisión estadística en la muestra, calculada bajo los supuestos de mínimos cuadrados ordinarios (errores independientes y "
+        "de varianza constante), que no recoge los errores de especificación (tasa de referencia, crédito, horarios de los datos). "
+        "La estimación ignora la convexidad, así que para movimientos grandes subestima las alzas de precio y sobreestima las caídas."
         + (" TIP no se incluye: su precio responde a la tasa real del Tesoro, que la base no tiene, y una sensibilidad medida contra la "
            "tasa nominal no anticipa su reacción." if any(not rfui.usa_tasa_nominal(t) for t in etfs.index if t in ETFS_RENTA_FIJA) else "")
     ))
@@ -1454,7 +1464,7 @@ def generar(macro: pd.DataFrame, precios: pd.DataFrame, nombre_periodo: str, fec
         "condicionales, no pronósticos."
     ))
     piezas.append(ib.parrafo(
-        "**No hay causas macroeconómicas.** El informe explica el movimiento de los precios por su mecánica (duración, spread, tasas), no por "
+        "**No hay causas macroeconómicas.** El informe explica el movimiento de los precios por su mecánica (sensibilidad a tasas, spread), no por "
         "qué hizo la Reserva Federal o qué pasó en la economía: eso no se puede medir con estos datos y afirmarlo sería inventar."
     ))
     piezas.append(ib.parrafo(
@@ -1463,7 +1473,7 @@ def generar(macro: pd.DataFrame, precios: pd.DataFrame, nombre_periodo: str, fec
     ))
     piezas.append(ib.nota(_nota_metodologica(datos)))
     piezas.append(ib.nota(
-        "La duración se mide con el último año de retornos diarios y se aplica a este período como aproximación de primer orden. "
+        "La sensibilidad empírica se estima con el último año de retornos diarios y se aplica a este período como aproximación de primer orden. "
         "Este documento se genera automáticamente desde la base de datos del dashboard y no constituye asesoría de inversión."
     ))
 

@@ -33,6 +33,8 @@ import renta_fija_ui as rfui  # noqa: E402
 FECHAS = pd.bdate_range("2025-01-06", periods=420)
 N = len(FECHAS)
 NOMINALES = {"SHY": 1.9, "IEF": 6.5, "LQD": 7.3}
+# Encabezado visible de la sensibilidad en la tabla del dashboard (I-5a lo renombró; se lee del módulo).
+SENSIB = rfui.ENCABEZADOS["Duración medida (años)"]
 COLUMNAS_NOMINALES = ["Cambio de la tasa (pp)", "Duración medida (años)", "Explicado por la duración (%)", "Resto (%)",
                       "Devengo aproximado (%)", "No explicado (%)", "R² con la tasa"]
 
@@ -110,7 +112,8 @@ def test_en_el_cuadro_2_tip_aparece_con_su_retorno_y_n_e_en_todo_lo_demas():
         if columna != "Real":
             assert tip[columna] == inf.NO_ESTIMADO, columna
     for ticker in NOMINALES:                                  # los demás conservan sus cifras
-        assert tabla.loc[ticker, "Duración"] != inf.NO_ESTIMADO and tabla.loc[ticker, "Explicado"] != inf.NO_ESTIMADO
+        assert (tabla.loc[ticker, "Sensibilidad empírica (años)"] != inf.NO_ESTIMADO
+                and tabla.loc[ticker, "Explicado"] != inf.NO_ESTIMADO)
 
 
 def test_tip_no_esta_en_el_cuadro_3_y_las_notas_lo_explican_sin_contradicciones():
@@ -176,11 +179,11 @@ def _tabla_leida(resumen):
 
 
 def _verificar_tabla(tabla, resumen):
-    assert tabla.loc["TIP", "Duración"] == "n. e." and tabla.loc["TIP", "R²"] == "n. e."
+    assert tabla.loc["TIP", SENSIB] == "n. e." and tabla.loc["TIP", "R²"] == "n. e."
     for columna in ("1A %", "Vol. %", "Caída máx. %", "Beta", "Sharpe", "1M %"):
         assert tabla.loc["TIP", columna] not in ("n. e.", "—"), columna
     for ticker in NOMINALES:
-        assert tabla.loc[ticker, "Duración"] == f"{resumen.loc[ticker, 'Duración medida (años)']:.2f}", ticker
+        assert tabla.loc[ticker, SENSIB] == f"{resumen.loc[ticker, 'Duración medida (años)']:.2f}", ticker
         assert tabla.loc[ticker, "R²"] == f"{resumen.loc[ticker, 'R² con la tasa']:.2f}", ticker
 
 
@@ -224,16 +227,16 @@ def test_el_n_e_nunca_pisa_un_numero_ni_marca_a_otro_etf_sin_dato():
     resumen.loc["TIP", "Duración medida (años)"] = 4.5
     resumen.loc["SHY", "Duración medida (años)"] = np.nan
     tabla = _tabla_leida(resumen)
-    assert tabla.loc["TIP", "Duración"] == "4.50" and tabla.loc["TIP", "R²"] == "n. e."
-    assert tabla.loc["SHY", "Duración"] == "—"
+    assert tabla.loc["TIP", SENSIB] == "4.50" and tabla.loc["TIP", "R²"] == "n. e."
+    assert tabla.loc["SHY", SENSIB] == "—"
 
 
 def test_el_tooltip_de_tip_explica_por_que_no_hay_duracion_y_los_demas_conservan_el_suyo():
     _, _, macro, precios = _mundo()
     resumen = rfui._resumen_de_etfs(precios, macro, FECHAS[-1])
     html = rfui._tabla_de_etfs_html(resumen, 4.0)
-    assert "Duración y R²: n. e. (no estimado)" in html and "tasa real" in html
-    assert html.count("Duración medida =") == len(NOMINALES)
+    assert "Sensibilidad empírica y R²: n. e. (no estimado)" in html and "tasa real" in html
+    assert html.count("Sensibilidad empírica =") == len(NOMINALES)
 
 
 def test_la_tabla_de_duracion_medida_deja_a_tip_en_n_e_incluida_la_duracion_teorica_nominal():
@@ -241,10 +244,10 @@ def test_la_tabla_de_duracion_medida_deja_a_tip_en_n_e_incluida_la_duracion_teor
     resumen = rfui._resumen_de_etfs(precios, macro, FECHAS[-1])
     actual = rfui._curva_actual(macro)
     filas = {f["ETF"]: f for f in rfui._filas_de_duracion(resumen, actual[2] if actual else None)}
-    for columna in ("Ref. Tesoro", "Duración medida", "Margen (±2 err.)", "R²", "Duración teórica"):
+    for columna in ("Ref. Tesoro", "Sensibilidad empírica (años)", "Margen (±2 err.)", "R²", "Duración teórica"):
         assert filas["TIP"][columna] == rfui.NO_ESTIMADO, columna
     for ticker in NOMINALES:
-        assert filas[ticker]["Duración medida"] != rfui.NO_ESTIMADO and filas[ticker]["Ref. Tesoro"].endswith("años")
+        assert filas[ticker]["Sensibilidad empírica (años)"] != rfui.NO_ESTIMADO and filas[ticker]["Ref. Tesoro"].endswith("años")
 
 
 def test_solo_tip_queda_fuera_de_la_tasa_nominal():

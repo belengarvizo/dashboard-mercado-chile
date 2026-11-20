@@ -35,27 +35,31 @@ def explicacion_retorno(cambio_1m: float | None, ytd: float | None) -> str:
 
 
 def explicacion_duracion_medida(duracion: float | None, error: float | None, r2: float | None, plazo_referencia: int | None) -> str:
+    """Tooltip de la sensibilidad empírica (I-5a: se conserva el nombre de la función por compatibilidad). La cifra es la
+    pendiente de una regresión de retornos diarios contra cambios diarios de una tasa: no es la duración efectiva."""
     if duracion is None:
-        return "Duración medida no disponible todavía: falta historia de precios y tasas."
+        return "Sensibilidad empírica no disponible todavía: falta historia de precios y tasas."
     texto = (
-        f"<b>Duración medida = {duracion:.1f} años</b>"
-        + (f" (±{2 * error:.1f})" if error is not None else "")
+        f"<b>Sensibilidad empírica = {duracion:.1f} años</b>"
+        + (f" (±{2 * error:.1f}, dos errores estándar)" if error is not None else "")
         + "<br>"
     )
     referencia = f" a {plazo_referencia} años" if plazo_referencia else ""
     texto += (
-        f"En el último año, cada vez que la tasa del Tesoro{referencia} subió 1 punto porcentual, el precio de este "
-        f"ETF cayó cerca de {duracion:.1f}%. Es la sensibilidad a las tasas, medida con datos reales y no con la "
-        "ficha del fondo."
+        f"En el último año, cuando la tasa del Tesoro{referencia} subió 1 punto porcentual, el precio de este ETF tendió a "
+        f"caer cerca de {duracion:.1f}%. Es una estimación con datos históricos, no la duración efectiva del fondo: se le "
+        "puede parecer en fondos del Tesoro, pero difiere si la tasa de referencia no representa su cartera, si hay riesgo "
+        "de crédito o si precios y tasas no se registran a la misma hora."
     )
     if r2 is not None:
         if r2 >= 0.8:
-            lectura = "casi todo lo que se mueve su precio lo explican las tasas"
+            lectura = "la relación lineal diaria con esa tasa se ajustó muy bien en el último año"
         elif r2 >= 0.5:
-            lectura = "las tasas explican buena parte de su movimiento, pero también pesa el riesgo de crédito"
+            lectura = "la relación lineal diaria con esa tasa se ajustó de forma moderada: otros factores también movieron el precio"
         else:
-            lectura = "lo mueve más el riesgo de crédito y el ánimo del mercado que las tasas, así que esta duración es poco confiable"
-        texto += f"<br><b>R² = {r2:.2f}:</b> {lectura}."
+            lectura = ("la relación lineal diaria con esa tasa se ajustó poco: el precio respondió también a factores que la "
+                       "regresión no incluye (por ejemplo, spreads de crédito o ruido), sin que se pueda saber cuánto pesa cada uno")
+        texto += f"<br><b>R² = {r2:.2f}:</b> {lectura}. El R² mide ajuste dentro de la muestra, no precisión ni causalidad."
     return texto
 
 

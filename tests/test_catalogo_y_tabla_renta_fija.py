@@ -83,13 +83,22 @@ def test_la_duracion_medida_dice_el_numero_el_margen_y_el_plazo_de_referencia():
     assert "6.5" in t or "6.6" in t
     assert "±0.2" in t  # dos errores estándar
     assert "7 años" in t
-    assert "R² = 0.95" in t and "casi todo" in t
+    # I-5a: se presenta como sensibilidad empírica, no como la duración del fondo.
+    assert "Sensibilidad empírica" in t and "no la duración efectiva del fondo" in t
+    assert "R² = 0.95" in t and "se ajustó muy bien" in t
 
 
 def test_el_r2_cambia_la_lectura_segun_su_nivel():
-    assert "casi todo" in g.explicacion_duracion_medida(6.0, 0.1, 0.9, 7)
-    assert "riesgo de crédito" in g.explicacion_duracion_medida(3.1, 0.25, 0.65, 5) and "poco confiable" not in g.explicacion_duracion_medida(3.1, 0.25, 0.65, 5)
-    assert "poco confiable" in g.explicacion_duracion_medida(3.1, 0.25, 0.38, 5)
+    """Hasta I-5a la lectura del R² era causal y de confiabilidad («casi todo lo explican las tasas», «manda el riesgo de
+    crédito», «poco confiable»). Se conserva que la lectura cambie con el nivel, como ajuste de la relación lineal; nunca
+    como confiabilidad ni con una causa única."""
+    alto, medio, bajo = (g.explicacion_duracion_medida(d, e, r2, p) for d, e, r2, p in
+                         ((6.0, 0.1, 0.9, 7), (3.1, 0.25, 0.65, 5), (3.1, 0.25, 0.38, 5)))
+    assert "se ajustó muy bien" in alto and "de forma moderada" in medio and "se ajustó poco" in bajo
+    for texto in (alto, medio, bajo):
+        assert "confiable" not in texto and "lo explican las tasas" not in texto and "manda" not in texto
+        assert "no precisión ni causalidad" in texto
+    assert "sin que se pueda saber cuánto pesa cada uno" in bajo
 
 
 def test_las_explicaciones_sin_dato_lo_dicen_en_vez_de_inventar():

@@ -451,8 +451,8 @@ def test_la_regresion_mide_la_sensibilidad_a_la_tasa_de_referencia_y_no_la_durac
     assert medida < 6.0  # lejos de la duración efectiva (8)
 
 
-@defecto("I-5", "el Recuadro 1 afirma que la pendiente de la regresión ES la duración")
 def test_el_informe_no_afirma_que_la_pendiente_sea_la_duracion():
+    # Fue xfail en I-0 (asignado a I-5); corregido en I-5a (lenguaje). Los errores HAC quedan para I-5b.
     """En el escenario anterior la pendiente es 4 y la duración efectiva 8: la frase general es falsa. Lo defendible es
     «sensibilidad empírica frente a la tasa de X años», que coincide con la duración solo bajo supuestos."""
     macro, precios = _escenario_spread()

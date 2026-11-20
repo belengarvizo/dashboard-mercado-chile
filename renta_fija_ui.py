@@ -116,10 +116,10 @@ COLUMNAS_TABLA = [
 # Encabezados cortos para que la tabla quepa en pantalla (los nombres largos viven en el tooltip y en la leyenda de abajo).
 ENCABEZADOS = {
     "Retorno 1 año (%)": "1A %", "Volatilidad (%)": "Vol. %", "Caída máxima 1 año (%)": "Caída máx. %",
-    "Duración medida (años)": "Duración", "R² con la tasa": "R²", "Beta vs S&P 500": "Beta",
+    "Duración medida (años)": "Sensib. empírica", "R² con la tasa": "R²", "Beta vs S&P 500": "Beta",
 }
 COLUMNAS_DE_VARIACION = ["1D %", "1W %", "1M %", "YTD %"]
-COLUMNAS_SECUENCIALES = ["Vol. %", "Duración", "R²", "Beta", "Sharpe"]
+COLUMNAS_SECUENCIALES = ["Vol. %", "Sensib. empírica", "R²", "Beta", "Sharpe"]
 
 # I-4a: grupos cuyo precio NO responde a la tasa nominal del Tesoro. TIP (bonos ligados a la inflación) responde a la
 # tasa real y al reajuste del capital por el IPC; la base solo tiene la curva nominal, así que su sensibilidad contra
@@ -129,7 +129,7 @@ GRUPOS_SIN_TASA_NOMINAL = {"Inflación"}
 COLUMNAS_DE_SENSIBILIDAD_NOMINAL = ["Duración medida (años)", "Error de la duración", "R² con la tasa"]
 NO_ESTIMADO = "n. e."
 NOTA_SIN_TASA_REAL = (
-    "En **TIP** no se estiman duración ni R² (n. e.: no estimado): su precio responde a la tasa **real** del Tesoro y al "
+    "En **TIP** no se estiman sensibilidad empírica ni R² (n. e.: no estimado): su precio responde a la tasa **real** del Tesoro y al "
     "reajuste de su capital por inflación, y la base solo tiene tasas nominales. Medirlo contra la tasa nominal mezclaría "
     "la inflación esperada con la tasa real."
 )
@@ -303,7 +303,7 @@ def _tabla_de_etfs_html(resumen: pd.DataFrame, tasa_libre: float | None) -> str:
         duracion = (gl.explicacion_duracion_medida(
             _valor(completa, "Duración medida (años)"), _valor(completa, "Error de la duración"),
             _valor(completa, "R² con la tasa"), int(completa["Plazo de referencia"]),
-        ) if usa_tasa_nominal(ticker) else "<b>Duración y R²: n. e. (no estimado)</b><br>" + NOTA_SIN_TASA_REAL.replace("**", ""))
+        ) if usa_tasa_nominal(ticker) else "<b>Sensibilidad empírica y R²: n. e. (no estimado)</b><br>" + NOTA_SIN_TASA_REAL.replace("**", ""))
         return "<hr>".join([
             gl.explicacion_instrumento(ticker),
             gl.explicacion_retorno(_valor(completa, "1M %"), _valor(completa, "YTD %")),
@@ -317,7 +317,7 @@ def _tabla_de_etfs_html(resumen: pd.DataFrame, tasa_libre: float | None) -> str:
     formatos = {c: "{:+.2f}%" for c in COLUMNAS_DE_VARIACION}
     formatos.update({
         "1A %": "{:+.2f}%", "Vol. %": "{:.2f}%", "Caída máx. %": "{:.2f}%",
-        "Duración": "{:.2f}", "R²": "{:.2f}", "Beta": "{:.2f}", "Sharpe": "{:.2f}",
+        "Sensib. empírica": "{:.2f}", "R²": "{:.2f}", "Beta": "{:.2f}", "Sharpe": "{:.2f}",
     })
     vista = resumen[COLUMNAS_TABLA + ["_atrasado_bool"]].rename(columns=ENCABEZADOS)
     html = tabla_con_tooltips(vista, COLUMNAS_DE_VARIACION, COLUMNAS_SECUENCIALES, formatos, tooltip, "ETF")
@@ -384,7 +384,7 @@ def _paso_mercado(macro: pd.DataFrame, precios: pd.DataFrame) -> None:
         st.markdown(_tabla_de_etfs_html(resumen, tasa_libre[0] if tasa_libre else None), unsafe_allow_html=True)
         st.caption(
             f"Datos al {_fecha(resumen['ultima_fecha'].max())}. **1A** = retorno del último año · **Vol.** = volatilidad · "
-            "**Caída máx.** = peor caída del último año · **Duración** = duración medida, en años · **Beta** = contra el S&P 500."
+            "**Caída máx.** = peor caída del último año · **Sensib. empírica** = sensibilidad empírica a tasas, en años · **Beta** = contra el S&P 500."
         )
         st.caption(
             "Un ETF de bonos es una canasta de bonos que se compra como una acción. Los precios vienen **ajustados por "
@@ -392,8 +392,10 @@ def _paso_mercado(macro: pd.DataFrame, precios: pd.DataFrame) -> None:
             "**Volatilidad, caída máxima, Sharpe y beta** usan el último año de retornos diarios (a diferencia de las tablas "
             "de acciones, que miden la volatilidad en 21 días: la de un bono es más estable y un año la mide mejor). "
             "**Sharpe** = (retorno del año − tasa de política de EEUU) / volatilidad. **Beta** se mide contra el S&P 500. "
-            "**Duración medida** = cuánto cayó el precio por cada punto que subió la tasa del Tesoro de referencia (la regresión "
-            "diaria del último año); **R²** dice cuánto de su movimiento explican las tasas. "
+            "**Sensibilidad empírica** = pendiente de la regresión diaria del último año entre el retorno del ETF y el cambio de la "
+            "tasa del Tesoro de referencia: cuánto tendió a caer el precio por cada punto que subió esa tasa. "
+            "No es la duración efectiva del fondo. **R²** = qué tan bien se ajusta esa relación lineal en el año (no su precisión "
+            "ni una causa). "
             "Pasa el mouse sobre el ticker de cada ETF para ver una explicación en simple de cada indicador, con los números de esa fila."
         )
         if any(not usa_tasa_nominal(t) for t in resumen.index):
@@ -544,14 +546,14 @@ def _filas_de_duracion(resumen: pd.DataFrame, curva_actual) -> list[dict]:
     for ticker, r in resumen.iterrows():
         plazo = int(r["Plazo de referencia"])
         if not usa_tasa_nominal(ticker):
-            filas.append({"ETF": ticker, "Grupo": r["Grupo"], "Ref. Tesoro": NO_ESTIMADO, "Duración medida": NO_ESTIMADO,
+            filas.append({"ETF": ticker, "Grupo": r["Grupo"], "Ref. Tesoro": NO_ESTIMADO, "Sensibilidad empírica (años)": NO_ESTIMADO,
                           "Margen (±2 err.)": NO_ESTIMADO, "R²": NO_ESTIMADO, "Duración teórica": NO_ESTIMADO})
             continue
         teorica = rf.bono_a_la_par(curva_actual, plazo)["modificada"] if curva_actual is not None else None
         medida, error = r["Duración medida (años)"], r["Error de la duración"]
         filas.append({
             "ETF": ticker, "Grupo": r["Grupo"], "Ref. Tesoro": f"{plazo} años",
-            "Duración medida": _fmt(medida) if pd.notna(medida) else "—",
+            "Sensibilidad empírica (años)": _fmt(medida) if pd.notna(medida) else "—",
             "Margen (±2 err.)": f"±{_fmt(2 * error)}" if pd.notna(error) else "—",
             "R²": _fmt(r["R² con la tasa"]) if pd.notna(r["R² con la tasa"]) else "—",
             "Duración teórica": _fmt(teorica) if teorica is not None else "—",
@@ -562,9 +564,9 @@ def _filas_de_duracion(resumen: pd.DataFrame, curva_actual) -> list[dict]:
 def _paso_riesgo_mercado(macro: pd.DataFrame, precios: pd.DataFrame) -> None:
     st.markdown(
         "Si las tasas suben, el precio de un bono ya emitido **baja**: nadie paga lo mismo por un cupón de 5% si "
-        "puede comprar uno nuevo que paga 6%. La **duración** mide cuánto: es la sensibilidad del precio a la tasa. "
-        "Aquí no se calcula con una fórmula: se **mide** con datos reales, viendo cuánto se movió de verdad el precio de cada ETF "
-        "cuando se movió la tasa del Tesoro."
+        "puede comprar uno nuevo que paga 6%. La **duración** mide cuánto, en teoría, a partir de los flujos de cada bono. Aquí no "
+        "tenemos los bonos de cada fondo, así que se **estima una sensibilidad empírica**: cuánto se movió de verdad el precio de cada "
+        "ETF cuando se movió la tasa del Tesoro. Puede parecerse a la duración en fondos del Tesoro, pero no es lo mismo."
     )
     resumen = _resumen_de_etfs(precios, macro, pd.Timestamp.now().normalize()) if len(precios) else None
     if resumen is None:
@@ -575,10 +577,12 @@ def _paso_riesgo_mercado(macro: pd.DataFrame, precios: pd.DataFrame) -> None:
     filas = _filas_de_duracion(resumen, actual[2] if actual else None)
     _tabla(pd.DataFrame(filas), numericas=[c for c in filas[0] if c not in ("ETF", "Grupo", "Ref. Tesoro")], mostrar_todo=True)
     st.caption(
-        "Lectura: una duración medida de 6.5 significa que, en el último año, el precio cayó cerca de 6.5% por cada punto porcentual que subió la "
-        "tasa. «Duración teórica» es la de un bono del Tesoro a la par con el plazo de «Ref. Tesoro» (la tasa contra la que se mide): la diferencia con la medida se debe a que "
-        "el ETF mezcla bonos de distintos plazos y cupones. Con un **R² bajo** (los bonos de empresas y de alto rendimiento), la tasa explica poco del "
-        "movimiento: manda el riesgo de crédito y la duración medida es poco confiable."
+        "Lectura: una sensibilidad empírica de 6.5 significa que, en el último año, el precio tendió a caer cerca de 6.5% por cada punto "
+        "porcentual que subió la tasa. «Duración teórica» es la duración modificada de un bono del Tesoro a la par con el plazo de «Ref. "
+        "Tesoro»: sirve de referencia. La diferencia con la sensibilidad empírica puede venir de la composición del fondo, del riesgo de "
+        "crédito, de la tasa de referencia elegida o de que precios y tasas no se registran a la misma hora; con estos datos no se puede "
+        "separar cuánto aporta cada factor. Un **R² bajo** indica que la relación lineal diaria con esa tasa se ajustó poco: el precio "
+        "respondió también a factores que la regresión no incluye (spreads de crédito, ruido u otros), sin que se pueda saber cuál pesó más."
     )
     if any(not usa_tasa_nominal(t) for t in resumen.index):
         st.caption(NOTA_SIN_TASA_REAL + " Por eso TIP tampoco aparece en el gráfico de abajo.")
@@ -586,7 +590,7 @@ def _paso_riesgo_mercado(macro: pd.DataFrame, precios: pd.DataFrame) -> None:
     disponibles = [t for t in resumen.index if usa_tasa_nominal(t)]
     if not disponibles:
         return
-    ticker = st.selectbox("ETF para ver la medición", disponibles, index=min(2, len(disponibles) - 1), key="rf_etf_duracion",
+    ticker = st.selectbox("ETF para ver la estimación", disponibles, index=min(2, len(disponibles) - 1), key="rf_etf_duracion",
                           format_func=_etiqueta_de_etf)
     datos = ETFS_RENTA_FIJA[ticker]
     pares = rf.pares_para_duracion(precios[ticker], _rendimiento_del_tesoro(macro, datos["plazo_referencia"]))
@@ -599,14 +603,16 @@ def _paso_riesgo_mercado(macro: pd.DataFrame, precios: pd.DataFrame) -> None:
     fig.add_trace(go.Scatter(x=x, y=pares["retorno"] * 100, mode="markers", name="Cada día del último año",
                              marker=dict(color=AZUL, size=6, opacity=0.6)))
     recta = np.array([x.min(), x.max()])
-    fig.add_trace(go.Scatter(x=recta, y=-medida["duracion"] * recta, mode="lines", name=f"Duración medida {_fmt(medida['duracion'], 1)}",
+    fig.add_trace(go.Scatter(x=recta, y=-medida["duracion"] * recta, mode="lines", name=f"Sensibilidad empírica {_fmt(medida['duracion'], 1)}",
                              line=dict(color=ROJO, width=3)))
     fig.update_layout(xaxis_title=f"Cambio diario de la tasa del Tesoro a {datos['plazo_referencia']} años (puntos porcentuales)",
                       yaxis_title="Retorno diario de " + ticker + " (%)", hovermode="closest")
     _grafico(fig)
     st.caption(
-        f"Cada punto es un día. La pendiente de la recta roja es la duración: {_fmt(medida['duracion'], 1)} años (±{_fmt(2 * medida['error_estandar'], 1)}), "
-        f"con un R² de {_fmt(medida['r2'])} sobre {medida['n']} días. Mientras más alineados estén los puntos, más confiable la medición."
+        f"Cada punto es un día. La pendiente de la recta roja es la sensibilidad empírica: {_fmt(medida['duracion'], 1)} años "
+        f"(±{_fmt(2 * medida['error_estandar'], 1)}, dos errores estándar calculados bajo los supuestos de mínimos cuadrados, que no "
+        f"recogen errores de especificación), con un R² de {_fmt(medida['r2'])} sobre {medida['n']} días. "
+        "El R² mide qué tan cerca de la recta quedan los puntos en este año; no dice si esta sensibilidad es la duración efectiva del fondo."
     )
 
 
@@ -851,19 +857,19 @@ def _paso_curva(macro: pd.DataFrame, precios: pd.DataFrame) -> None:
     st.subheader("Estrategias con ETFs reales: bullet, barbell y escalera")
     st.markdown(
         "- **Bullet:** todo en un solo plazo (IEF, Tesoro de 7 a 10 años).\n"
-        "- **Barbell:** en los extremos (SHY, 1 a 3 años, y TLT, 20 años o más), con pesos elegidos para que tenga **la misma duración medida** que el bullet.\n"
+        "- **Barbell:** en los extremos (SHY, 1 a 3 años, y TLT, 20 años o más), con pesos elegidos para que tenga **la misma sensibilidad empírica** que el bullet.\n"
         "- **Escalera (ladder):** partes iguales en SHY, IEI, IEF y TLT."
     )
     resumen = _resumen_de_etfs(precios, macro, pd.Timestamp.now().normalize()) if len(precios) else None
     necesarios = {"SHY", "IEI", "IEF", "TLT"}
     if resumen is None or not necesarios <= set(resumen.index) or resumen.loc[list(necesarios), "Duración medida (años)"].isna().any():
-        _sin_datos("los ETFs del Tesoro (SHY, IEI, IEF y TLT) o su duración medida")
+        _sin_datos("los ETFs del Tesoro (SHY, IEI, IEF y TLT) o su sensibilidad empírica")
         return
     d = resumen["Duración medida (años)"]
     try:
         peso_corto, peso_largo = rf.pesos_para_igualar_duracion(d["SHY"], d["TLT"], d["IEF"])
     except ValueError:
-        _sin_datos("duraciones medidas coherentes para armar el barbell")
+        _sin_datos("sensibilidades empíricas coherentes para armar el barbell")
         return
     carteras = {
         "Bullet": {"IEF": 1.0},
@@ -879,16 +885,16 @@ def _paso_curva(macro: pd.DataFrame, precios: pd.DataFrame) -> None:
         fig.add_trace(go.Scatter(x=r.index, y=(1 + r).cumprod() * 100, mode="lines", name=nombre))
         filas.append({
             "Estrategia": nombre, "Composición": " · ".join(f"{t} {p * 100:.0f}%" for t, p in pesos.items()),
-            "Duración medida": _fmt(sum(p * d[t] for t, p in pesos.items())),
+            "Sensibilidad empírica (años)": _fmt(sum(p * d[t] for t, p in pesos.items())),
             "Retorno total (%)": f"{e['retorno_total']:+.2f}", "Volatilidad (%)": _fmt(e["volatilidad"]),
             "Caída máxima (%)": _fmt(e["caida_maxima"]),
         })
     fig.update_layout(yaxis_title="Retorno total, base 100")
     _grafico(fig)
-    _tabla(pd.DataFrame(filas), numericas=("Duración medida", "Retorno total (%)", "Volatilidad (%)", "Caída máxima (%)"))
+    _tabla(pd.DataFrame(filas), numericas=("Sensibilidad empírica (años)", "Retorno total (%)", "Volatilidad (%)", "Caída máxima (%)"))
     st.caption(
         "Carteras reales armadas con los ETFs de la tabla, con pesos constantes (se rebalancean cada día) e incluyendo lo que cada fondo repartió. "
-        "La duración de cada una es el promedio de las duraciones **medidas**. A igual duración, el barbell debería rendir distinto al bullet cuando la "
+        "La sensibilidad de cada una es el promedio ponderado de las sensibilidades **empíricas**. A igual sensibilidad, el barbell debería rendir distinto al bullet cuando la "
         "curva se tuerce o se mueve en forma desigual: compara las filas y el gráfico en el período elegido. Es lo que pasó, no una promesa de lo que pasará."
     )
 
@@ -958,8 +964,8 @@ def _descarga_del_informe(macro: pd.DataFrame, precios: pd.DataFrame) -> None:
 
     with st.expander("Descargar el informe en PDF"):
         st.caption(
-            "Cinco páginas que explican qué pasó con los bonos en el período, **por qué** pasó (cuánto del movimiento explica la "
-            "duración y cuánto no) y qué lectura equivocada conviene evitar. Se arma en el momento con lo último que hay en la base."
+            "Cinco páginas que explican qué pasó con los bonos en el período, **por qué** pasó (qué parte del movimiento es "
+            "compatible con la sensibilidad a tasas y qué parte no) y qué lectura equivocada conviene evitar. Se arma en el momento con lo último que hay en la base."
         )
         periodo = st.selectbox("Período que cubre el informe", list(informe.PERIODOS), key="rf_periodo_informe")
         if st.button("Preparar informe", key="rf_preparar_informe"):
