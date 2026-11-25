@@ -11,7 +11,7 @@ DE DÓNDE SALEN LOS DATOS (todos reales; ninguno es de ejemplo)
     - 9 futuros de commodities (tabla precios_acciones, bajados por scripts/actualizar_acciones.py; lista en
       constants.TICKERS_COMMODITIES): petróleo WTI, gas natural, oro, plata, cobre, maíz, trigo, soya y café. Son
       el contrato más cercano a vencer (front month) de cada uno, la referencia estándar de precio en el mundo real.
-    - SPY (ETF del S&P 500) para medir beta y correlación, y la tasa de política de EEUU para el Sharpe.
+    - SPY (ETF del S&P 500) para medir beta y correlación, y la tasa efectiva de fondos federales de EE. UU. para el Sharpe.
     - El precio del cobre que publica el Banco Central de Chile (tabla series_macro), para comparar dos fuentes
       independientes del mismo commodity.
     - SIN DATOS: la curva completa de vencimientos de cada futuro (Yahoo solo entrega el contrato más cercano), así
@@ -153,8 +153,8 @@ def _paso_mercado(precios: pd.DataFrame, tasa_libre: float | None) -> None:
         st.caption(
             "Los precios vienen del contrato de futuro más cercano a vencer; no incluyen dividendos (no los hay) ni el costo de "
             "rolar el contrato mes a mes. **Volatilidad, caída máxima, beta, correlación y Sharpe** usan el último año de retornos "
-            "diarios. **Beta** y **Correlación** se miden contra SPY, el ETF del S&P 500. **Sharpe** = (retorno del año − tasa de "
-            "política de EEUU) / volatilidad. Pasa el mouse sobre el ticker de cada fila para ver una explicación en simple de cada "
+            "diarios. **Beta** y **Correlación** se miden contra SPY, el ETF del S&P 500. **Sharpe** = (retorno del año − tasa "
+            "efectiva de fondos federales de EE. UU., como referencia aproximada de tasa libre de riesgo) / volatilidad. Pasa el mouse sobre el ticker de cada fila para ver una explicación en simple de cada "
             "indicador, con los números de esa fila."
         )
 

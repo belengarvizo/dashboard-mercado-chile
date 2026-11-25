@@ -58,7 +58,7 @@ from commodities_ui import render_commodities
 from derivados_ui import render_derivados
 from catalogo_derivados import SUBYACENTES as SUBYACENTES_DERIVADOS
 from constants import TICKERS_COMMODITIES, TICKER_PETROLEO_WTI
-from catalogo_fx import PARES_FX
+from catalogo_fx import NOMBRE_TASA_EEUU, PARES_FX
 from defensa_topdown import verificar_prediccion as _verificar_prediccion
 import diferencial_bcp_bcu as dif_bcp_bcu
 from market_data import (
@@ -365,6 +365,10 @@ NOMBRE_BCU_10Y = "Bono BCCh en UF (BCU) a 10 años - tasa mercado secundario"
 # Nombre (y etiqueta visible en el selector de Indicadores macro) de la serie calculada; I-6b-2: antes «Inflación
 # breakeven (...)». No se guarda en ninguna parte: se arma en cada carga.
 NOMBRE_BREAKEVEN = dif_bcp_bcu.NOMBRE_SERIE
+
+# H1: nombre visible en el selector de Indicadores macro para series cuya clave en la base es engañosa. Solo
+# presentación: la opción, la selección y el filtrado siguen usando la clave original (format_func del selector).
+ALIAS_SERIES_MACRO = {NOMBRE_TASA_EEUU: "Tasa efectiva de fondos federales de EE. UU."}
 
 
 def calcular_serie_inflacion_breakeven(df_macro: pd.DataFrame) -> pd.Series:
@@ -2417,7 +2421,7 @@ ETIQUETA_EN_POR_ES = {
     "Cobre": "Copper",
     "Petróleo WTI": "WTI Oil",
     "Bono UST 10 años": "UST 10Y Bond",
-    "TPM EEUU": "US Fed Funds Rate",
+    "TPM EEUU": "US Effective Federal Funds Rate",   # H1: la serie es la tasa efectiva (DFF)
     "IPSA (proxy ECH)": "IPSA (ECH proxy)",
     "USD/CLP": "USD/CLP exchange rate",
     "UF": "UF (inflation-indexed unit)",
@@ -3260,11 +3264,12 @@ if _seccion == "Indicadores macro":
             df_macro = pd.concat([df_macro, *series_accion], ignore_index=True)
 
         series_disponibles = df_macro["nombre"].unique()
-        serie_elegida = st.selectbox("Elige un indicador", series_disponibles)
+        serie_elegida = st.selectbox("Elige un indicador", series_disponibles,
+                                     format_func=lambda nombre: ALIAS_SERIES_MACRO.get(nombre, nombre))
 
         df_filtrado = df_macro[df_macro["nombre"] == serie_elegida]
 
-        fig = px.line(df_filtrado, x="fecha", y="valor", title=serie_elegida)
+        fig = px.line(df_filtrado, x="fecha", y="valor", title=ALIAS_SERIES_MACRO.get(serie_elegida, serie_elegida))
         st.plotly_chart(fig, use_container_width=True)
         if serie_elegida == NOMBRE_BREAKEVEN:
             st.caption(dif_bcp_bcu.DESCRIPCION_SERIE)

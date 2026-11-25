@@ -13,7 +13,7 @@ DE DÓNDE SALEN LOS DATOS (todos reales; ninguno es de ejemplo)
       ajustados por distribuciones, así que los retornos incluyen los dividendos que el fondo repartió.
     - Los índices ^GSPC (S&P 500) y ^DJI (Dow Jones), que son de precio puro (sin dividendos), y los ETFs de
       bonos de la sección Renta Fija, para comparar acciones con bonos.
-    - La tasa de política de EEUU (tabla series_macro) como tasa libre de riesgo del Sharpe.
+    - La tasa efectiva de fondos federales de EE. UU. (tabla series_macro) como referencia de tasa libre de riesgo del Sharpe.
     - SIN DATOS: la composición de cada fondo, su valor liquidativo (y por lo tanto si cotiza con prima o
       descuento) y los dividendos por separado. Esas partes se explican y la pantalla dice que no hay datos.
 
@@ -206,7 +206,8 @@ def _paso_mercado(precios: pd.DataFrame, tasa_libre: float | None) -> None:
             "Un ETF de acciones es una canasta de acciones que se compra como una sola. Los precios vienen **ajustados por "
             "distribuciones**, así que 1D / 1W / 1M / YTD son retornos totales: incluyen los dividendos que el fondo repartió. "
             "**Volatilidad, caída máxima, Sharpe, beta y correlación** usan el último año de retornos diarios. **Sharpe** = "
-            "(retorno del año − tasa de política de EEUU) / volatilidad. **Beta** y **correlación** se miden contra SPY, el ETF "
+            "(retorno del año − tasa efectiva de fondos federales de EE. UU., como referencia aproximada de tasa libre de riesgo) / "
+            "volatilidad. **Beta** y **correlación** se miden contra SPY, el ETF "
             "del S&P 500 (por eso SPY tiene beta 1 y correlación 1). Pasa el mouse sobre el ticker de cada ETF para ver una "
             "explicación en simple de cada indicador, con los números de esa fila."
         )
@@ -485,8 +486,8 @@ def _paso_indice(precios: pd.DataFrame) -> None:
 def render_renta_variable(df_macro: pd.DataFrame, df_precios: pd.DataFrame) -> None:
     st.header("Renta variable y ETFs: mercados, sectores y países")
     st.info(
-        "Todos los datos de esta sección son **reales**: ETFs de acciones de EEUU y del mundo (Yahoo Finance) y la tasa de "
-        "política de EEUU (FRED) para el Sharpe. Donde la base no tiene un dato, la pantalla lo dice."
+        "Todos los datos de esta sección son **reales**: ETFs de acciones de EEUU y del mundo (Yahoo Finance) y la tasa "
+        "efectiva de fondos federales de EE. UU. (FRED) como referencia para el Sharpe. Donde la base no tiene un dato, la pantalla lo dice."
     )
     macro = rfui._recortar(df_macro)
     precios = rfui._precios_en_columnas(df_precios)

@@ -66,7 +66,7 @@ def test_renta_fija_rotula_la_tasa_efectiva_y_conserva_el_diferencial():
     at = AppTest.from_function(_app_renta_fija, args=(_macro_renta_fija(4.75, 3.90, FECHAS[-3]),), default_timeout=60)
     at.run()
     assert not at.exception, at.exception
-    assert _metrica(at, "Tasa efectiva de fondos federales (EE. UU.)").value == "3.90%"
+    assert _metrica(at, "Tasa efectiva de fondos federales de EE. UU.").value == "3.90%"   # H1: rótulo
     assert _metrica(at, "Diferencial TPM Chile − fondos federales (pp)").value == f"{4.75 - 3.90:,.2f} pp"
     etiquetas = [m.label for m in at.metric]
     assert "Tasa de política de EEUU (Fed funds)" not in etiquetas

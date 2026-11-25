@@ -103,7 +103,9 @@ def explicacion_sharpe(sharpe: float | None, tasa_libre_de_riesgo: float | None)
         lectura = "moderada: ganó algo más de lo que arriesgó"
     else:
         lectura = "mala: no compensó el riesgo, rindió menos que la tasa libre de riesgo"
-    base = f" (la tasa de política de EEUU, {tasa_libre_de_riesgo:.2f}%)" if tasa_libre_de_riesgo is not None else ""
+    # H1: la tasa efectiva de fondos federales de EE. UU. es una referencia aproximada de tasa libre de riesgo, no una universal.
+    base = (f" (la tasa efectiva de fondos federales de EE. UU., {tasa_libre_de_riesgo:.2f}%, usada como referencia aproximada)"
+            if tasa_libre_de_riesgo is not None else "")
     return (
         f"<b>Sharpe = {sharpe:.2f}</b><br>"
         f"Retorno extra del último año sobre la tasa libre de riesgo{base}, por cada unidad de volatilidad. Aquí la relación es {lectura}."

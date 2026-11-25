@@ -215,6 +215,8 @@ ARCHIVOS_SIN_CONEXION_VERIFICADOS = {
                                              "reemplaza las lecturas de la base por datos sintéticos (I-6b-2)",
     "test_carry_trade_textos.py": "AppTest.from_function sobre funciones de pantalla de Renta Fija y FX con datos "
                                   "sintéticos; no abre app/dashboard.py ni la base (I-6d)",
+    "test_tasa_efectiva_fed.py": "AppTest sobre una función de Renta Fija y sobre el bloque del selector recortado de "
+                                 "app/dashboard.py, con datos sintéticos; no abre la base (H1)",
 }
 
 

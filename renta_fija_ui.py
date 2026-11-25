@@ -89,7 +89,7 @@ def nombre_treasury(plazo: str) -> str:
 
 SERIES_TASAS = {
     "TPM de Chile": NOMBRE_TPM_CHILE,
-    "Tasa efectiva de fondos federales (EE. UU.)": NOMBRE_TPM_EEUU,   # I-6d: rótulo visible; la clave de la serie no cambia
+    "Tasa efectiva de fondos federales de EE. UU.": NOMBRE_TPM_EEUU,   # I-6d/H1: rótulo visible; la clave de la serie no cambia
     "PDBC a 14 días (BCCh)": NOMBRE_PDBC14,
     "Swap Promedio Cámara a 90 días": NOMBRE_SWAP90,
 }
@@ -150,6 +150,14 @@ NOTA_DIFERENCIAL_BCP_BCU = (
     "La base no incluye el BCU a 20 años: esa serie no devolvió datos recientes cuando se consultó al Banco Central."
 )
 
+
+# H1: la serie es la tasa EFECTIVA (DFF de FRED), no el rango objetivo que fija la Reserva Federal. Se aclara una sola vez,
+# en la ayuda de su métrica (paso «Banco Central»), sin repetirlo en cada pantalla.
+AYUDA_TASA_EFECTIVA_FED = (
+    "Tasa de interés promedio de los préstamos a un día entre bancos en EE. UU., observada en el mercado (serie DFF de FRED). "
+    "El comité de la Reserva Federal (FOMC) no fija esta tasa sino un rango objetivo para ella; la tasa efectiva suele quedar "
+    "dentro de ese rango, pero no es el rango. La base solo tiene la tasa efectiva."
+)
 
 # I-6d: el diferencial TPM − tasa efectiva de fondos federales es una referencia de condiciones monetarias, no la
 # rentabilidad de un carry trade (coherente con el PDF de renta fija). Solo texto: la resta no cambia.
@@ -419,7 +427,8 @@ def _paso_mercado(macro: pd.DataFrame, precios: pd.DataFrame) -> None:
             "distribuciones**, así que 1D / 1W / 1M / YTD son retornos totales: incluyen los cupones que el fondo repartió. "
             "**Volatilidad, caída máxima, Sharpe y beta** usan el último año de retornos diarios (a diferencia de las tablas "
             "de acciones, que miden la volatilidad en 21 días: la de un bono es más estable y un año la mide mejor). "
-            "**Sharpe** = (retorno del año − tasa de política de EEUU) / volatilidad. **Beta** se mide contra el S&P 500. "
+            "**Sharpe** = (retorno del año − tasa efectiva de fondos federales de EE. UU., como referencia aproximada de tasa libre de "
+            "riesgo) / volatilidad. **Beta** se mide contra el S&P 500. "
             "**Sensibilidad empírica** = pendiente de la regresión diaria del último año entre el retorno del ETF y el cambio de la "
             "tasa del Tesoro de referencia: cuánto tendió a caer el precio por cada punto que subió esa tasa. "
             "No es la duración efectiva del fondo. **R²** = qué tan bien se ajusta esa relación lineal en el año (no su precisión "
@@ -738,9 +747,10 @@ def _paso_banco_central(macro: pd.DataFrame) -> None:
     columnas = st.columns(len(ultimos))
     for col, (etiqueta, dato) in zip(columnas, ultimos.items()):
         with col:
-            st.metric(etiqueta, f"{_fmt(dato[0])}%" if dato else "—")
+            st.metric(etiqueta, f"{_fmt(dato[0])}%" if dato else "—",
+                      help=AYUDA_TASA_EFECTIVA_FED if SERIES_TASAS[etiqueta] == NOMBRE_TPM_EEUU else None)
             st.caption(f"Al {_fecha(dato[1])}" if dato else "Sin datos")
-    chile, eeuu = ultimos["TPM de Chile"], ultimos["Tasa efectiva de fondos federales (EE. UU.)"]
+    chile, eeuu = ultimos["TPM de Chile"], ultimos["Tasa efectiva de fondos federales de EE. UU."]
     if chile and eeuu:
         st.metric("Diferencial TPM Chile − fondos federales (pp)", f"{_fmt(chile[0] - eeuu[0])} pp")
         st.caption(NOTA_DIFERENCIAL_TPM_FED)
