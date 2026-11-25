@@ -11,7 +11,8 @@ DE DÓNDE SALEN LOS DATOS (todos reales; ninguno es de ejemplo)
     - 9 futuros de commodities (tabla precios_acciones, bajados por scripts/actualizar_acciones.py; lista en
       constants.TICKERS_COMMODITIES): petróleo WTI, gas natural, oro, plata, cobre, maíz, trigo, soya y café. Son
       el contrato más cercano a vencer (front month) de cada uno, la referencia estándar de precio en el mundo real.
-    - SPY (ETF del S&P 500) para medir beta y correlación, y la tasa efectiva de fondos federales de EE. UU. para el Sharpe.
+    - SPY (ETF del S&P 500) para medir beta y correlación. (H1-b1: el Sharpe se retiró de esta sección; ver
+      ADVERTENCIA_SERIES_CONTINUAS.)
     - El precio del cobre que publica el Banco Central de Chile (tabla series_macro), para comparar dos fuentes
       independientes del mismo commodity.
     - SIN DATOS: la curva completa de vencimientos de cada futuro (Yahoo solo entrega el contrato más cercano), así
@@ -57,14 +58,23 @@ VENTANA_ARANCEL_COBRE_2025 = (pd.Timestamp("2025-06-01"), pd.Timestamp("2025-08-
 
 COLUMNAS_TABLA = [
     "1D %", "1W %", "1M %", "YTD %", "Retorno 1 año (%)", "Volatilidad (%)", "Caída máxima 1 año (%)",
-    "Beta vs S&P 500", "Correlación vs S&P 500", "Sharpe",
+    "Beta vs S&P 500", "Correlación vs S&P 500",
 ]
 ENCABEZADOS = {
     "Retorno 1 año (%)": "1A %", "Volatilidad (%)": "Vol. %", "Caída máxima 1 año (%)": "Caída máx. %",
     "Beta vs S&P 500": "Beta", "Correlación vs S&P 500": "Correl.",
 }
 COLUMNAS_DE_VARIACION = ["1D %", "1W %", "1M %", "YTD %"]
-COLUMNAS_SECUENCIALES = ["Vol. %", "Beta", "Correl.", "Sharpe"]
+COLUMNAS_SECUENCIALES = ["Vol. %", "Beta", "Correl."]
+
+# H1-b1: las cotizaciones de Yahoo («=F») son series continuas del futuro más cercano a vencer, empalmadas al cambiar
+# de contrato. Ese empalme puede mover los retornos sin que ninguna posición haya ganado o perdido ese salto, así que
+# el Sharpe no describe una inversión y se retiró. Las demás métricas se conservan, con esta advertencia.
+ADVERTENCIA_SERIES_CONTINUAS = (
+    "Las cotizaciones corresponden a series continuas de futuros próximos a vencer. Los cambios de contrato pueden "
+    "generar discontinuidades que no representan directamente ganancias o pérdidas de una estrategia de inversión. Por "
+    "ello, los retornos y las métricas de riesgo calculados sobre estas series deben interpretarse con cautela."
+)
 
 
 # ---------------------------------------------------------------------------
@@ -103,12 +113,11 @@ def _tabla_html(resumen: pd.DataFrame, tasa_libre: float | None) -> str:
             gl.explicacion_caida_maxima(_valor(completa, "Caída máxima 1 año (%)")),
             gl.explicacion_beta(_valor(completa, "Beta vs S&P 500")),
             gl.explicacion_correlacion(_valor(completa, "Correlación vs S&P 500")),
-            gl.explicacion_sharpe(_valor(completa, "Sharpe"), tasa_libre),
         ])
 
     formatos = {c: "{:+.2f}%" for c in COLUMNAS_DE_VARIACION}
     formatos.update({
-        "1A %": "{:+.2f}%", "Vol. %": "{:.2f}%", "Caída máx. %": "{:.2f}%", "Beta": "{:.2f}", "Correl.": "{:.2f}", "Sharpe": "{:.2f}",
+        "1A %": "{:+.2f}%", "Vol. %": "{:.2f}%", "Caída máx. %": "{:.2f}%", "Beta": "{:.2f}", "Correl.": "{:.2f}",
     })
     vista = resumen[COLUMNAS_TABLA + ["_atrasado_bool"]].rename(columns=ENCABEZADOS)
     return tabla_con_tooltips(vista, COLUMNAS_DE_VARIACION, COLUMNAS_SECUENCIALES, formatos, tooltip, "Ticker")
@@ -152,11 +161,12 @@ def _paso_mercado(precios: pd.DataFrame, tasa_libre: float | None) -> None:
     if resumenes:
         st.caption(
             "Los precios vienen del contrato de futuro más cercano a vencer; no incluyen dividendos (no los hay) ni el costo de "
-            "rolar el contrato mes a mes. **Volatilidad, caída máxima, beta, correlación y Sharpe** usan el último año de retornos "
-            "diarios. **Beta** y **Correlación** se miden contra SPY, el ETF del S&P 500. **Sharpe** = (retorno del año − tasa "
-            "efectiva de fondos federales de EE. UU., como referencia aproximada de tasa libre de riesgo) / volatilidad. Pasa el mouse sobre el ticker de cada fila para ver una explicación en simple de cada "
+            "rolar el contrato mes a mes. **Volatilidad, caída máxima, beta y correlación** usan el último año de retornos "
+            "diarios. **Beta** y **Correlación** se miden contra SPY, el ETF del S&P 500. Pasa el mouse sobre el ticker de cada "
+            "fila para ver una explicación en simple de cada "
             "indicador, con los números de esa fila."
         )
+        st.caption(ADVERTENCIA_SERIES_CONTINUAS)
 
     st.subheader("Comparar en el tiempo")
     disponibles = [t for t in COMMODITIES if t in precios]

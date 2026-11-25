@@ -217,6 +217,8 @@ ARCHIVOS_SIN_CONEXION_VERIFICADOS = {
                                   "sintéticos; no abre app/dashboard.py ni la base (I-6d)",
     "test_tasa_efectiva_fed.py": "AppTest sobre una función de Renta Fija y sobre el bloque del selector recortado de "
                                  "app/dashboard.py, con datos sintéticos; no abre la base (H1)",
+    "test_commodities_sin_sharpe.py": "AppTest.from_function sobre render_commodities con datos sintéticos; no abre "
+                                      "app/dashboard.py ni la base (H1-b1)",
 }
 
 

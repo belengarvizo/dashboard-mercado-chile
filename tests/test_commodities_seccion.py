@@ -125,15 +125,16 @@ def test_los_tres_grupos_traen_todos_sus_commodities_con_su_tooltip_completo():
         for ticker in tickers_del_grupo(grupo):
             fila = _fila(html, ticker)
             assert ui.COMMODITIES[ticker]["nombre"] in fila, f"{ticker}: el tooltip no trae el nombre completo"
-            for texto in ("Retorno:", "Volatilidad", "Caída máxima", "Beta vs S&amp;P 500", "Correlación con el S&amp;P 500", "Sharpe"):
+            for texto in ("Retorno:", "Volatilidad", "Caída máxima", "Beta vs S&amp;P 500", "Correlación con el S&amp;P 500"):
                 assert texto in fila, f"{ticker}: al tooltip le falta «{texto}»"
             assert "no disponible" not in fila, f"{ticker}: hay un indicador sin datos reales"
+            assert "Sharpe" not in fila, f"{ticker}: H1-b1 retiró el Sharpe de Commodities"
 
 
 def test_las_tablas_caben_en_pantalla_con_encabezados_cortos():
     for tabla in _html(_abrir(ui.PASOS[0])).split("<table")[1:]:
         encabezados = _encabezados("<table" + tabla.split("</tr>")[0] + "</tr>")
-        assert encabezados[0] == "Ticker" and {"Beta", "Correl.", "Sharpe"} <= set(encabezados)
+        assert encabezados[0] == "Ticker" and {"Beta", "Correl."} <= set(encabezados) and "Sharpe" not in encabezados   # H1-b1
         assert len(encabezados) <= 11, encabezados
         assert max(len(e) for e in encabezados) <= 12, [e for e in encabezados if len(e) > 12]
 
