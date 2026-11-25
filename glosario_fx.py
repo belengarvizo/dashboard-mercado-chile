@@ -10,6 +10,7 @@ Las funciones devuelven HTML corto (<b>, <br>); glosario.tooltip_html los pone d
 texto lo dice en vez de inventar.
 """
 from catalogo_fx import MONEDAS_CARRY, PARES_FX
+import formato_numerico
 from formato_numerico import cifra
 
 
@@ -105,12 +106,26 @@ def explicacion_moneda(codigo: str, tasa: float | None, fecha: str | None) -> st
     )
 
 
-def explicacion_diferencial(nombre: str, tasa_moneda: float | None, tasa_usd: float | None, diferencial: float | None) -> str:
+def _dato_del(fecha: str | None, referencia: str | None) -> str:
+    """« (dato del …)» solo si la observación es de otro día que la fecha de referencia."""
+    return f" (dato del {fecha})" if fecha and fecha != referencia else ""
+
+
+def explicacion_diferencial(nombre: str, tasa_moneda: float | None, tasa_usd: float | None, diferencial: float | None,
+                            fecha_referencia: str | None = None, fecha_moneda: str | None = None, fecha_usd: str | None = None) -> str:
     if diferencial is None or tasa_moneda is None or tasa_usd is None:
         return "Diferencial de tasas no disponible todavía."
     # I-6d: el diferencial entre tasas de referencia no se presenta como una ganancia realizable (ni al revés si es negativo).
     # Breve: la explicación completa (tasas accesibles, cobertura con forwards) está en la introducción del paso.
-    tasas = f"Tasas de referencia: {tasa_moneda:.2f}% para {nombre} y {tasa_usd:.2f}% para el dólar"
+    # H3-06: las dos tasas son las del diferencial, vigentes en la fecha de referencia; si una observación es de otro día, se dice.
+    vigentes = f" vigentes al {fecha_referencia}" if fecha_referencia else ""
+    tasas = (f"Tasas de referencia{vigentes}: {tasa_moneda:.2f}% para {nombre}{_dato_del(fecha_moneda, fecha_referencia)} "
+             f"y {tasa_usd:.2f}% para el dólar{_dato_del(fecha_usd, fecha_referencia)}")
+    # Las tasas se muestran redondeadas: si su resta no da exactamente el diferencial mostrado, se aclara.
+    resta_visible = float(f"{tasa_moneda:.2f}") - float(f"{tasa_usd:.2f}")
+    redondeo = (" (la resta de las tasas redondeadas difiere en 0.01 por redondeo)"
+                if formato_numerico.cifra(resta_visible, 2) != formato_numerico.cifra(diferencial, 2) else "")
+    tasas += redondeo
     a_favor_de = f"del {nombre[3:]}" if nombre.startswith("el ") else f"de {nombre}"
     depende = "el resultado depende de las tasas efectivas, los costos y el tipo de cambio."
     if round(diferencial, 2) == 0:

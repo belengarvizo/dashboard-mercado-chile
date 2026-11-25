@@ -43,6 +43,7 @@ import plotly.graph_objects as go
 import streamlit as st
 
 import estructura_tasas as et
+import fx_carry as fx  # H3-07: mismo criterio de tasa vigente que la sección FX
 import glosario_renta_fija as gl
 import renta_fija as rf
 from catalogo_renta_fija import ETFS_RENTA_FIJA, nombre_de
@@ -95,7 +96,7 @@ SERIES_TASAS = {
 }
 
 NOMBRES_USADOS = {
-    NOMBRE_UST10, NOMBRE_BAA10Y, *SERIES_TASAS.values(),
+    NOMBRE_BAA10Y, *SERIES_TASAS.values(),   # H3-11: el UST10Y de Yahoo ya no se muestra en esta sección
     *(n for grupo in CURVA_CHILE.values() for n in grupo.values()),
     *(nombre_treasury(plazo) for plazo in et.PLAZOS_ANIOS),
 }
@@ -162,7 +163,7 @@ AYUDA_TASA_EFECTIVA_FED = (
 # I-6d: el diferencial TPM − tasa efectiva de fondos federales es una referencia de condiciones monetarias, no la
 # rentabilidad de un carry trade (coherente con el PDF de renta fija). Solo texto: la resta no cambia.
 NOTA_DIFERENCIAL_TPM_FED = (
-    "Las dos fechas pueden diferir de uno a unos pocos días. Es una **referencia de las condiciones monetarias** de ambos "
+    "Es una **referencia de las condiciones monetarias** de ambos "
     "países, no una rentabilidad: un *carry trade* invierte y se financia a tasas de mercado (no a las de política), paga "
     "costos de transacción y de financiamiento y, sin cobertura, su resultado depende sobre todo del tipo de cambio. Con "
     "cobertura (*forward*), los puntos forward tienden a compensar el diferencial entre instrumentos comparables. La sección "
@@ -469,10 +470,12 @@ def _paso_mercado(macro: pd.DataFrame, precios: pd.DataFrame) -> None:
     ))
 
     st.subheader("Tasas a 10 años hoy")
-    ust, bcp, bcu = _ultimo(macro, NOMBRE_UST10), _ultimo(macro, NOMBRE_BCP10), _ultimo(macro, NOMBRE_BCU10)
+    # H3-11: el Tesoro a 10 años es el DGS10 del H.15, la misma serie de la curva de esta sección (no el ^TNX de Yahoo).
+    ust = _ultimo(macro, nombre_treasury("10 años"))
+    bcp, bcu = _ultimo(macro, NOMBRE_BCP10), _ultimo(macro, NOMBRE_BCU10)
     c1, c2, c3 = st.columns(3)
     for col, dato, etiqueta, fuente in (
-        (c1, ust, "Tesoro de EEUU a 10 años", "Yahoo Finance"),
+        (c1, ust, "Tesoro de EEUU a 10 años", "Reserva Federal (H.15, vía FRED)"),
         (c2, bcp, "BCP a 10 años (pesos)", "Banco Central de Chile"),
         (c3, bcu, "BCU a 10 años (UF, tasa real)", "Banco Central de Chile"),
     ):
@@ -731,6 +734,54 @@ def _ultimo_comun(a: pd.Series, b: pd.Series):
     return (float(juntas.iloc[-1, 0]), float(juntas.iloc[-1, 1]), juntas.index[-1]) if len(juntas) else None
 
 
+def atraso_habil(fecha, hoy) -> int | None:
+    """Días hábiles entre la fecha de un dato y `hoy` (la fecha de consulta o de corte), o None si falta alguna."""
+    if fecha is None or hoy is None:
+        return None
+    return int(np.busday_count(pd.Timestamp(fecha).date(), pd.Timestamp(hoy).date()))
+
+
+def texto_diferencial_tpm_fed(dif: dict, hoy=None) -> str:
+    """H3-07: de qué fecha es el diferencial TPM − fondos federales y de qué día es cada tasa. Lo usan la pantalla y el PDF.
+
+    Dos controles distintos: `dif["vigente"]` mira la distancia ENTRE las dos observaciones (fx_carry.diferencial_vigente);
+    `hoy` (fecha de consulta en la pantalla, fecha de corte en el PDF) mira la antigüedad de la fecha de referencia: si
+    supera DIAS_HABILES_DE_ATRASO, el diferencial se presenta como histórico, no como el actual. La fecha es la del dato
+    (fecha económica), no una fecha de publicación confirmada."""
+    def dato(fecha):
+        return "" if fecha == dif["fecha_referencia"] else f" (dato del {_fecha(fecha)})"
+    if not dif["vigente"]:
+        return (f"No hay una fecha reciente con las dos tasas: la TPM llega hasta el {_fecha(dif['ultima_a'])} y la tasa efectiva "
+                f"de fondos federales hasta el {_fecha(dif['ultima_b'])}. No se calcula el diferencial con datos de fechas tan distintas.")
+    return (f"Al {_fecha(dif['fecha_referencia'])}: TPM {_fmt(dif['tasa_a'])}%{dato(dif['fecha_a'])} − tasa efectiva de fondos "
+            f"federales {_fmt(dif['tasa_b'])}%{dato(dif['fecha_b'])}. Es la fecha más reciente con las dos tasas publicadas."
+            + texto_atraso_diferencial(dif, hoy))
+
+
+def texto_atraso_diferencial(dif: dict, hoy) -> str:
+    """Aviso si la fecha de referencia del diferencial quedó atrás respecto de `hoy` (más de DIAS_HABILES_DE_ATRASO)."""
+    atraso = atraso_habil(dif["fecha_referencia"], hoy)
+    if atraso is None or atraso <= DIAS_HABILES_DE_ATRASO:
+        return ""
+    return (f" Dato atrasado: esa fecha está {atraso} días hábiles antes de {_fecha(hoy)}; es un diferencial histórico, no el "
+            "de hoy.")
+
+
+def pendiente_2s10s(macro: pd.DataFrame) -> dict | None:
+    """H3-01: spread 2s10s de la curva H.15 (DGS10 − DGS2, en puntos porcentuales), en la última fecha con las DOS tasas.
+
+    Misma fuente que la curva de esta sección. No usa el proxy de futuros 2YY=F ni el ^TNX de Yahoo. None si no hay una
+    fecha con las dos tasas. `invertida` es el signo del spread SIN redondear (no hay umbral por redondeo visual); cuando
+    la cifra mostrada se lee 0.00, quien la muestra debe aclarar el signo (ver app/dashboard.py, _texto_cifra_2s10s)."""
+    diez, dos = (s[~s.index.duplicated(keep="last")] for s in
+                 (_serie(macro, nombre_treasury("10 años")).dropna(), _serie(macro, nombre_treasury("2 años")).dropna()))
+    par = _ultimo_comun(diez, dos)
+    if par is None:
+        return None
+    spread = par[0] - par[1]
+    return {"ust10": par[0], "ust2": par[1], "spread": spread, "invertida": spread < 0, "fecha": par[2]}
+
+
 def _paso_banco_central(macro: pd.DataFrame) -> None:
     st.markdown(
         "El banco central fija la **tasa de política monetaria** (TPM en Chile) y usa **operaciones de mercado abierto**: "
@@ -750,9 +801,16 @@ def _paso_banco_central(macro: pd.DataFrame) -> None:
             st.metric(etiqueta, f"{_fmt(dato[0])}%" if dato else "—",
                       help=AYUDA_TASA_EFECTIVA_FED if SERIES_TASAS[etiqueta] == NOMBRE_TPM_EEUU else None)
             st.caption(f"Al {_fecha(dato[1])}" if dato else "Sin datos")
-    chile, eeuu = ultimos["TPM de Chile"], ultimos["Tasa efectiva de fondos federales de EE. UU."]
-    if chile and eeuu:
-        st.metric("Diferencial TPM Chile − fondos federales (pp)", f"{_fmt(chile[0] - eeuu[0])} pp")
+    # H3-07: el diferencial usa las dos tasas vigentes en UNA fecha de referencia (ver fx_carry.diferencial_vigente), no la
+    # última de cada serie en su propia fecha.
+    dif = fx.diferencial_vigente(_serie(macro, NOMBRE_TPM_CHILE), _serie(macro, NOMBRE_TPM_EEUU))
+    if dif is not None:
+        etiqueta = "Diferencial TPM Chile − fondos federales (pp)"
+        if dif["vigente"]:
+            st.metric(etiqueta, f"{_fmt(dif['diferencial'])} pp")
+        else:
+            st.metric(etiqueta, "—")
+        st.caption(texto_diferencial_tpm_fed(dif, pd.Timestamp.now().normalize()))
         st.caption(NOTA_DIFERENCIAL_TPM_FED)
 
     ventana = st.radio("Período", list(VENTANAS), horizontal=True, index=1, key="rf_ventana_tasas")

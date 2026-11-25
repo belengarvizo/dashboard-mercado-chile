@@ -35,6 +35,7 @@ import numpy as np
 import pandas as pd
 
 import estructura_tasas as et
+import fx_carry as fx  # H3-07: diferencial TPM − fondos federales con el mismo criterio que la pantalla
 import informe_base as ib
 import renta_fija as rf
 import renta_fija_ui as rfui
@@ -401,7 +402,7 @@ def _parrafos_uf(chile: dict) -> list[str]:
     ]
 
 
-def _chile(macro: pd.DataFrame) -> dict:
+def _chile(macro: pd.DataFrame, corte=None) -> dict:
     """Tasas chilenas de hoy y el diferencial BCP − BCU a 10 años (BCP y BCU en la misma fecha, ambas en % anual).
 
     `inflacion_implicita` es el diferencial BCP − BCU, en puntos porcentuales: la cifra que el PDF presenta como
@@ -410,30 +411,61 @@ def _chile(macro: pd.DataFrame) -> dict:
     (ver inflacion_implicita_fisher). Ninguno de los dos es la inflación esperada."""
     bcp = rfui._serie(macro, rfui.NOMBRE_BCP10).dropna()
     bcu = rfui._serie(macro, rfui.NOMBRE_BCU10).dropna()
-    tpm = rfui._ultimo(macro, rfui.NOMBRE_TPM_CHILE)
-    fed = rfui._ultimo(macro, rfui.NOMBRE_TASA_EEUU) if hasattr(rfui, "NOMBRE_TASA_EEUU") else rfui._ultimo(macro, rfui.NOMBRE_TPM_EEUU)
+    # H3-07: TPM y tasa efectiva de fondos federales vigentes en UNA fecha de referencia (la más reciente con las dos), igual
+    # que en la pantalla; si las fechas quedaron muy separadas, el diferencial no se calcula.
+    dif = fx.diferencial_vigente(rfui._serie(macro, rfui.NOMBRE_TPM_CHILE), rfui._serie(macro, rfui.NOMBRE_TPM_EEUU))
+    vigente = dif is not None and dif["vigente"]
     par = rfui._ultimo_comun(bcp, bcu)
     return {
         "bcp10": par[0] if par else None, "bcu10": par[1] if par else None,
         "fecha_curva_chile": par[2] if par else None,
         "inflacion_implicita": (par[0] - par[1]) if par else None,
         "inflacion_implicita_exacta": inflacion_implicita_fisher(par[0], par[1]) if par else None,
-        "tpm": tpm[0] if tpm else None, "fecha_tpm": tpm[1] if tpm else None,
-        "fed": fed[0] if fed else None, "fecha_fed": fed[1] if fed else None,
-        "diferencial": (tpm[0] - fed[0]) if tpm and fed else None,
+        "tpm": dif["tasa_a"] if vigente else None, "fecha_tpm": dif["fecha_a"] if vigente else None,
+        "fed": dif["tasa_b"] if vigente else None, "fecha_fed": dif["fecha_b"] if vigente else None,
+        "fecha_diferencial": dif["fecha_referencia"] if vigente else None,
+        "diferencial": dif["diferencial"] if vigente else None,
+        "diferencial_tpm_fed": dif,
+        "corte": corte,   # H3-A: para avisar si la fecha del diferencial quedó atrás respecto de la fecha de corte
     }
 
 
-def _credito(macro: pd.DataFrame, dias: int) -> dict | None:
+def _credito(macro: pd.DataFrame, dias: int, ventana: dict | None = None) -> tuple[dict | None, str | None]:
+    """(datos del spread Baa en el período, motivo si no se puede comparar con los ETFs).
+
+    H3-08: con ventana común de los ETFs (S, E), el spread se mide en esas MISMAS fechas: en cada extremo, la última
+    publicación en esa fecha o antes, y solo si está a lo más TOLERANCIA_RUEDAS ruedas antes (la misma tolerancia que
+    los precios). Si no, no se compara y se dicen las fechas efectivas. Sin ventana común de los ETFs, se describe con
+    su propia ventana del período (`ventana_propia`), sin compararlo con ellos."""
     baa = rfui._serie(macro, rfui.NOMBRE_BAA10Y).dropna()
-    t = _tramo(baa, dias)
-    if t is None:
-        return None
-    recorte = baa[baa.index >= t[3] - pd.Timedelta(days=dias)]
+    baa = baa[~baa.index.duplicated(keep="last")]
+    inicio_etf = ventana.get("inicio") if ventana else None
+    fin_etf = ventana.get("fin") if ventana else None
+    if inicio_etf is None or fin_etf is None:
+        t = _tramo(baa, dias)
+        if t is None:
+            return None, None
+        propia = True
+    else:
+        if baa.empty:
+            return None, None
+        a, b = _en_o_antes(baa, inicio_etf), _en_o_antes(baa, fin_etf)
+        ruedas = ventana["ruedas"]
+        atrasos = [None if o is None else _ruedas_entre(ruedas, o[1], f) for o, f in ((a, inicio_etf), (b, fin_etf))]
+        if a is None or b is None or max(atrasos) > TOLERANCIA_RUEDAS:
+            ultimo = ib.fecha(baa.index[-1])
+            return None, (f"el spread Baa no tiene datos comparables con la ventana de los ETFs (del {ib.fecha(inicio_etf)} al "
+                          f"{ib.fecha(fin_etf)}): su último dato es del {ultimo}"
+                          + ("" if a is not None else f" y no tiene datos en o antes del {ib.fecha(inicio_etf)}")
+                          + ". No se compara con períodos distintos")
+        t = (a[0], b[0], a[1], b[1])
+        propia = False
+    recorte = baa[(baa.index >= t[2]) & (baa.index <= t[3])]
     return {
         "inicio": t[0], "fin": t[1], "cambio": t[1] - t[0], "fecha_inicio": t[2], "fecha_fin": t[3],
-        "maximo": float(recorte.max()), "fecha_maximo": recorte.idxmax(),
-    }
+        "maximo": float(recorte.max()), "fecha_maximo": recorte.idxmax(), "ventana_propia": propia,
+        "inicio_etf": inicio_etf, "fin_etf": fin_etf,
+    }, None
 
 
 def _ultima(serie: pd.Series):
@@ -468,7 +500,7 @@ def calcular(macro: pd.DataFrame, precios: pd.DataFrame, dias: int, nombre_perio
         "dias_habiles_de_atraso": (int(np.busday_count(ventana["ultimo_precio"].date(), corte.date()))
                                    if corte is not None and ventana["ultimo_precio"] is not None else None),
     }
-    credito = _credito(macro, dias)
+    credito, credito_motivo = _credito(macro, dias, ventana)
     datos = {
         "periodo": nombre_periodo, "dias": dias,
         "etfs": etfs,
@@ -476,7 +508,8 @@ def calcular(macro: pd.DataFrame, precios: pd.DataFrame, dias: int, nombre_perio
         "fechas": fechas,
         "curva": _curva(macro, ventana),
         "credito": credito,
-        "chile": _chile(macro),
+        "credito_motivo": credito_motivo,
+        "chile": _chile(macro, corte),
         "hasta": ventana["fin"] if ventana["fin"] is not None else ventana["ultimo_precio"],
         "precios": precios,
         "contexto": _contexto(macro, precios, ventana, credito, etfs),
@@ -783,8 +816,25 @@ def _texto_spread(credito: dict, clase: str, pb: float) -> str:
     return f"no cambió {fechas} (se mantuvo en {hasta})."
 
 
-def _afirmacion_credito(credito: dict | None, ctx: dict) -> Afirmacion:
+def _texto_ventana_credito(credito: dict) -> str:
+    """H3-08: entre qué fechas se midió el spread respecto de la ventana de los ETFs."""
+    if credito.get("ventana_propia"):
+        return "No hay una ventana común de los ETFs para este período: el spread se mide con su propia ventana y no se compara con ellos."
+    if credito["fecha_inicio"] == credito["inicio_etf"] and credito["fecha_fin"] == credito["fin_etf"]:
+        return "Se mide entre las mismas fechas que los ETFs."
+    return (f"La ventana de los ETFs va del {ib.fecha(credito['inicio_etf'])} al {ib.fecha(credito['fin_etf'])}; el spread usa su "
+            f"último dato publicado en o antes de cada extremo (a lo más {TOLERANCIA_RUEDAS} rueda antes).")
+
+
+def _dato_del(fecha, referencia) -> str:
+    """« (dato del …)» solo si la observación es de otro día que la fecha de referencia."""
+    return "" if fecha is None or fecha == referencia else f" (dato del {ib.fecha(fecha)})"
+
+
+def _afirmacion_credito(credito: dict | None, ctx: dict, motivo: str | None = None) -> Afirmacion:
     if not credito:
+        if motivo:   # H3-08: hay datos, pero no en las fechas de la ventana de los ETFs
+            return Afirmacion("credito", NIVEL_INSUFICIENTE, f"**Crédito.** No se describe el riesgo de crédito: {motivo}.")
         return Afirmacion("credito", NIVEL_INSUFICIENTE,
                           "**Crédito.** No hay datos del spread de los bonos corporativos Baa para describir el riesgo de crédito.")
     clase, pb, umbral = _clase_spread(credito, ctx)
@@ -1100,7 +1150,7 @@ def _afirmaciones(datos: dict) -> list[Afirmacion]:
     comparacion = _afirmacion_comparacion(datos)
     if comparacion is not None:
         afirmaciones.append(comparacion)
-    afirmaciones.append(_afirmacion_credito(datos["credito"], ctx))
+    afirmaciones.append(_afirmacion_credito(datos["credito"], ctx, datos.get("credito_motivo")))
     chile = datos["chile"]
     if chile["inflacion_implicita"] is not None:
         afirmaciones.append(Afirmacion(
@@ -1448,8 +1498,10 @@ def generar(macro: pd.DataFrame, precios: pd.DataFrame, nombre_periodo: str, fec
             f"El spread Baa {_texto_spread(credito, clase_spread, pb_spread)} Su máximo en esas fechas fue "
             f"{ib.pct(float(credito['maximo']))}, el {ib.fecha(credito['fecha_maximo'])}. Es un indicador de **EEUU**, no de empresas "
             "chilenas, y corresponde a bonos de grado de inversión: no describe por sí solo el riesgo de los bonos de alto rendimiento. "
-            "Se mide con sus propias fechas de publicación, que pueden no coincidir con la ventana de los ETFs."
+            + _texto_ventana_credito(credito)
         ))
+    elif datos.get("credito_motivo"):
+        piezas.append(ib.parrafo(f"No se describe el spread de bonos corporativos Baa: {datos['credito_motivo']}."))
     else:
         piezas.append(ib.parrafo("No hay datos del spread de bonos corporativos Baa en la base para este período."))
     alto_rendimiento = etfs.loc["HYG"] if "HYG" in etfs.index else None
@@ -1498,12 +1550,16 @@ def generar(macro: pd.DataFrame, precios: pd.DataFrame, nombre_periodo: str, fec
         ))
     if chile["diferencial"] is not None:
         piezas.append(ib.parrafo(
-            f"La **TPM** está en {ib.pct(chile['tpm'])} (al {ib.fecha(chile['fecha_tpm'])}) y la tasa efectiva de fondos federales de "
-            f"EEUU, en {ib.pct(chile['fed'])} (al {ib.fecha(chile['fecha_fed'])}): un diferencial de {ib.num(chile['diferencial'], 2, True)} "
+            f"Al {ib.fecha(chile['fecha_diferencial'])}, la fecha más reciente con las dos tasas publicadas, la **TPM** era "
+            f"{ib.pct(chile['tpm'])}{_dato_del(chile['fecha_tpm'], chile['fecha_diferencial'])} y la tasa efectiva de fondos federales de "
+            f"EEUU, {ib.pct(chile['fed'])}{_dato_del(chile['fecha_fed'], chile['fecha_diferencial'])}: un diferencial de {ib.num(chile['diferencial'], 2, True)} "
             "puntos porcentuales (pp) entre las tasas de corto plazo de ambos países. Es una referencia, no una ganancia asegurada: quien se financia en "
             "dólares para invertir en pesos opera a tasas de mercado, no a las de política, y asume el tipo de cambio, que puede "
             "compensar o superar ese diferencial."
+            + rfui.texto_atraso_diferencial(chile["diferencial_tpm_fed"], chile.get("corte"))
         ))
+    elif chile.get("diferencial_tpm_fed") is not None:   # H3-07: hay datos, pero de fechas demasiado distintas
+        piezas.append(ib.parrafo("Diferencial TPM − fondos federales: " + rfui.texto_diferencial_tpm_fed(chile["diferencial_tpm_fed"])))
     piezas.append(ib.recuadro_error("Error frecuente: comparar una tasa en UF con una en pesos", _parrafos_uf(chile)))
 
     # ---- 5. Sensibilidad

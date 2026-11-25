@@ -36,6 +36,8 @@ import renta_fija as rf
 import renta_variable as rv  # correlacion_contra
 
 DIAS_DEL_ANIO_PARA_INTERES = 365
+# Cuántos días corridos puede tener una tasa DIARIA antes de considerarla vencida (fines de semana largos y feriados caben).
+ANTIGUEDAD_MAXIMA_TASA_DIARIA = 10
 DIAS_HABILES_ANIO = rf.DIAS_HABILES_ANIO
 DIAS_DE_UN_MES_HABIL = 21
 # Un tramo (entre dos fechas con precio) más largo que esto es un hueco de datos, no un fin de semana largo: no se le devenga interés
@@ -71,6 +73,42 @@ def tasa_en_cada_fecha(tasa_pct: pd.Series, fechas: pd.DatetimeIndex, antiguedad
     return resultado
 
 
+def observacion_en_o_antes(tasa_pct: pd.Series, fecha) -> tuple[float, pd.Timestamp] | None:
+    """(valor, fecha de observación) de la última observación válida en `fecha` o antes, o None. Con fechas repetidas
+    vale la última fila, como en `tasa_en_cada_fecha`."""
+    tasa = tasa_pct.dropna().sort_index()
+    tasa = tasa[~tasa.index.duplicated(keep="last")]
+    previas = tasa[tasa.index <= pd.Timestamp(fecha)]
+    return (float(previas.iloc[-1]), previas.index[-1]) if len(previas) else None
+
+
+def diferencial_vigente(tasa_a_pct: pd.Series, tasa_b_pct: pd.Series,
+                        antiguedad_maxima_dias: int = ANTIGUEDAD_MAXIMA_TASA_DIARIA) -> dict | None:
+    """Diferencial a − b (en puntos porcentuales) en una fecha de referencia trazable (H3-07).
+
+    La fecha de referencia es la MÁS ANTIGUA de las dos últimas observaciones: en ella ya se conocían las dos tasas y no
+    se usa ningún dato posterior. Cada tasa es la última observada en esa fecha o antes (el mismo criterio que
+    `tasa_en_cada_fecha`). `vigente` es False si alguna de las dos tasas usadas tiene más de `antiguedad_maxima_dias`
+    días a la fecha de referencia, o si la otra serie siguió publicando más de esos días después (la fecha común quedó
+    atrás): así no se arrastra una tasa indefinidamente. None si alguna serie no tiene datos."""
+    a, b = tasa_a_pct.dropna().sort_index(), tasa_b_pct.dropna().sort_index()
+    if a.empty or b.empty:
+        return None
+    ultima_a, ultima_b = a.index[-1], b.index[-1]
+    referencia = min(ultima_a, ultima_b)
+    obs_a, obs_b = observacion_en_o_antes(a, referencia), observacion_en_o_antes(b, referencia)
+    if obs_a is None or obs_b is None:   # una serie empieza después de que la otra terminó: no hay fecha con las dos
+        return None
+    antiguedad = max((referencia - obs_a[1]).days, (referencia - obs_b[1]).days, (max(ultima_a, ultima_b) - referencia).days)
+    return {
+        "fecha_referencia": referencia,
+        "tasa_a": obs_a[0], "fecha_a": obs_a[1], "ultima_a": ultima_a,
+        "tasa_b": obs_b[0], "fecha_b": obs_b[1], "ultima_b": ultima_b,
+        "diferencial": obs_a[0] - obs_b[0],
+        "vigente": antiguedad <= antiguedad_maxima_dias,
+    }
+
+
 def retornos_del_carry(valor_usd: pd.Series, tasa_moneda_pct: pd.Series, tasa_usd_pct: pd.Series,
                        antiguedad_maxima_moneda: int | None = None, antiguedad_maxima_usd: int | None = None,
                        dias_maximos_por_tramo: int = DIAS_MAXIMOS_POR_TRAMO) -> pd.DataFrame:
@@ -90,6 +128,31 @@ def retornos_del_carry(valor_usd: pd.Series, tasa_moneda_pct: pd.Series, tasa_us
     total = (1 + spot) * (1 + tasa_m * factor) - (1 + tasa_u * factor)
     resultado = pd.DataFrame({"spot": spot, "carry": total - spot, "total": total, "diferencial": (tasa_m - tasa_u) * 100.0})
     return resultado[dias <= dias_maximos_por_tramo].dropna()
+
+
+def tasas_del_ultimo_tramo(valor_usd: pd.Series, retornos: pd.DataFrame, tasa_moneda_pct: pd.Series, tasa_usd_pct: pd.Series,
+                           antiguedad_maxima_moneda: int | None = None, antiguedad_maxima_usd: int | None = None) -> dict | None:
+    """Las dos tasas con que `retornos_del_carry` calculó el diferencial de la ÚLTIMA fila de `retornos` (H3-06).
+
+    Ese diferencial es el vigente al inicio del último tramo (la fecha con precio anterior a la última): esa es la
+    `fecha_referencia`. Se repite el cálculo del motor con las mismas operaciones, así que `diferencial` es idéntico al de
+    la tabla. Devuelve también la fecha de observación de cada tasa. No cambia ningún retorno ni la estrategia."""
+    if retornos is None or retornos.empty:
+        return None
+    valor = valor_usd.dropna().sort_index()
+    fechas = valor.index
+    hasta = retornos.index[-1]
+    tasa_m = tasa_en_cada_fecha(tasa_moneda_pct, fechas, antiguedad_maxima_moneda).shift(1) / 100.0
+    tasa_u = tasa_en_cada_fecha(tasa_usd_pct, fechas, antiguedad_maxima_usd).shift(1) / 100.0
+    referencia = pd.Series(fechas, index=fechas).shift(1).loc[hasta]
+    m, u = float(tasa_m.loc[hasta]), float(tasa_u.loc[hasta])
+    obs_m, obs_u = observacion_en_o_antes(tasa_moneda_pct, referencia), observacion_en_o_antes(tasa_usd_pct, referencia)
+    return {
+        "fecha_referencia": referencia, "hasta": hasta,
+        "tasa_moneda": m * 100.0, "fecha_tasa_moneda": obs_m[1] if obs_m else None,
+        "tasa_usd": u * 100.0, "fecha_tasa_usd": obs_u[1] if obs_u else None,
+        "diferencial": (m - u) * 100.0,
+    }
 
 
 def estrategia_de_carry(retornos: pd.DataFrame) -> pd.DataFrame:

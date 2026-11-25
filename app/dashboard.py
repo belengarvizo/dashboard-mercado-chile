@@ -52,6 +52,8 @@ import portfolio_lab as lab
 import estructura_tasas as et
 import modelo_recesion as mr
 from renta_fija_ui import render_renta_fija
+import renta_fija_ui as rfui  # H3-01: spread 2s10s de la curva H.15 (rfui.pendiente_2s10s)
+import formato_numerico
 from renta_variable_ui import render_renta_variable
 from fx_carry_ui import render_fx_carry
 from commodities_ui import render_commodities
@@ -342,7 +344,12 @@ def calcular_cambios_periodo(serie: pd.Series) -> dict:
 
 
 def calcular_spread_2s10s(df_macro: pd.DataFrame) -> dict | None:
-    """Spread 2s10s (UST10Y - UST2Y) con marca de curva invertida si es negativo."""
+    """Spread 2s10s (UST10Y - UST2Y) con marca de curva invertida si es negativo.
+
+    H3-01: el Resumen y el Brief PDF ya NO usan esta función (usan rfui.pendiente_2s10s, de la curva H.15 en una fecha
+    común). Queda solo para la Defensa Top-Down, cuya calculadora de costo de capital precarga su «ust10»: cambiarla
+    altera ese modelo y requiere una autorización aparte. Mezcla ^TNX de Yahoo con el proxy de futuros 2YY=F, cada uno
+    en su última fecha."""
     # Mismos strings "nombre" que scripts/actualizar_bcch.py usa al guardar la serie.
     ust10 = df_macro[df_macro["nombre"] == "Bono del Tesoro de EEUU a 10 años (UST10Y)"].sort_values("fecha")
     ust2 = df_macro[df_macro["nombre"] == "Bono del Tesoro de EEUU a 2 años (UST2Y, proxy 2YY=F)"].sort_values("fecha")
@@ -358,6 +365,23 @@ def calcular_spread_2s10s(df_macro: pd.DataFrame) -> dict | None:
         "invertida": spread < 0,
         "fecha": ust10["fecha"].iloc[-1],
     }
+
+
+TEXTO_2S10S_NO_DISPONIBLE = (
+    "2s10s spread not available: there is no date with both the 2-year and the 10-year Treasury yields (H.15)."
+)
+
+
+def _texto_cifra_2s10s(spread: float) -> str:
+    """El 2s10s en pp con 2 decimales. Si se lee 0.00 pero no es cero, se aclara su signo: la marca de curva invertida
+    sigue al signo sin redondear, y la cifra no debe contradecirla (H3-A)."""
+    texto = f"{formato_numerico.cifra(spread, 2, True)} pp"
+    if spread != 0 and formato_numerico.cifra(spread, 2) == "0.00":
+        if spread < 0:
+            texto += " (slightly negative: the 10-year yield is just below the 2-year)"
+        else:
+            texto += " (slightly positive: the 10-year yield is just above the 2-year)"
+    return texto
 
 
 NOMBRE_BCP_10Y = "Bono BCCh en pesos (BCP) a 10 años - tasa mercado secundario"
@@ -2651,16 +2675,19 @@ def generar_pdf_brief_premercado() -> bytes:
         tabla.setStyle(TableStyle(comandos_tabla))
         story.append(tabla)
 
-        spread_2s10s = calcular_spread_2s10s(df_macro)
+        # H3-01: 2s10s de la curva H.15 (10 y 2 años en la misma fecha); si no hay fecha común, se dice.
+        spread_2s10s = rfui.pendiente_2s10s(df_macro)
+        story.append(Spacer(1, 8))
         if spread_2s10s:
             fecha_spread = pd.Timestamp(spread_2s10s["fecha"]).strftime("%Y-%m-%d")
             etiqueta = "Inverted curve" if spread_2s10s["invertida"] else "Normal curve"
-            story.append(Spacer(1, 8))
             story.append(Paragraph(
-                f"<b>{etiqueta}.</b> 2s10s spread (UST10Y − UST2Y): "
-                f"{spread_2s10s['spread']:+.2f} pp as of {fecha_spread}.",
+                f"<b>{etiqueta}.</b> 2s10s spread (10-year − 2-year Treasury, H.15): "
+                f"{_texto_cifra_2s10s(spread_2s10s['spread'])} as of {fecha_spread}.",
                 estilo_bullet,
             ))
+        else:
+            story.append(Paragraph(TEXTO_2S10S_NO_DISPONIBLE, estilo_bullet))
 
         breakeven = calcular_serie_inflacion_breakeven(df_macro)
         parrafo_diferencial = dif_bcp_bcu.parrafo_brief(breakeven)   # I-6b-2: diferencial en pp, con su lectura
@@ -2993,23 +3020,28 @@ if _seccion == "Brief Premercado":
                         st.metric(etiqueta_en, "—")
                         st.caption("not enough data")
 
-        spread_2s10s = calcular_spread_2s10s(df_macro)
+        # H3-01: 2s10s de la curva H.15 (10 y 2 años en la misma fecha), no ^TNX ni el proxy de futuros 2YY=F.
+        spread_2s10s = rfui.pendiente_2s10s(df_macro)
         if spread_2s10s:
             fecha_spread = pd.Timestamp(spread_2s10s["fecha"]).strftime("%Y-%m-%d")
             texto_spread = (
-                f"2s10s spread (UST10Y − UST2Y): {spread_2s10s['spread']:+.2f} pp "
-                f"(UST10Y {spread_2s10s['ust10']:.2f}% − UST2Y {spread_2s10s['ust2']:.2f}%) as of {fecha_spread}."
+                f"2s10s spread (10-year − 2-year Treasury, H.15): {_texto_cifra_2s10s(spread_2s10s['spread'])} "
+                f"(10Y {spread_2s10s['ust10']:.2f}% − 2Y {spread_2s10s['ust2']:.2f}%) as of {fecha_spread}."
             )
             if spread_2s10s["invertida"]:
                 st.error(f"🔻 **Inverted curve.** {texto_spread}")
             else:
                 st.success(texto_spread)
-            st.caption(
-                "An inverted curve (negative 2s10s spread) has historically been associated "
-                "with a higher probability of a US recession over the following 12-24 months "
-                "— it's a historical correlation, not a guaranteed prediction, and it has "
-                "given false signals in the past."
-            )
+        else:
+            st.info(TEXTO_2S10S_NO_DISPONIBLE)
+        st.caption(
+            "Source: Federal Reserve H.15 via FRED, the same curve as the Fixed Income section. The «UST 10Y Bond» card "
+            "above comes from Yahoo Finance (^TNX, latest market close), so its value and date can differ. "
+            "An inverted curve (negative 2s10s spread) has historically been associated "
+            "with a higher probability of a US recession over the following 12-24 months "
+            "— it's a historical correlation, not a guaranteed prediction, and it has "
+            "given false signals in the past."
+        )
 
         breakeven = calcular_serie_inflacion_breakeven(df_macro)
         # I-6b-2: diferencial en pp, cambio sin color y con su fecha de comparación (ver diferencial_bcp_bcu.py).

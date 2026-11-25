@@ -56,7 +56,7 @@ NOMBRES_USADOS = {
     *(m["serie_tasa"] for m in MONEDAS_CARRY.values()),
 }
 # Cuántos días puede tener una tasa publicada antes de considerarla vencida (una mensual llega con ~1 mes de rezago).
-ANTIGUEDAD_MAXIMA_DE_TASA = {"diaria": 10, "mensual": 75}
+ANTIGUEDAD_MAXIMA_DE_TASA = {"diaria": fx.ANTIGUEDAD_MAXIMA_TASA_DIARIA, "mensual": 75}
 VENTANAS_ESTRATEGIA = {"1 año": 365, "3 años": 3 * 365, "5 años": 5 * 365}
 VENTANAS_CHILE = {"1 año": 365, "5 años": 5 * 365, "Todo el historial": None}
 VENTANA_CORRELACION_CHILE = 250  # ruedas (~1 año)
@@ -111,11 +111,6 @@ def _retornos_de_las_monedas(macro: pd.DataFrame, precios: pd.DataFrame) -> dict
         if len(retornos):
             resultado[codigo] = retornos
     return resultado
-
-
-def _fecha_de_la_tasa(macro: pd.DataFrame, codigo: str) -> str | None:
-    ultimo = rfui._ultimo(macro, MONEDAS_CARRY[codigo]["serie_tasa"])
-    return rfui._fecha(ultimo[1]) if ultimo else None
 
 
 # ---------------------------------------------------------------------------
@@ -224,23 +219,37 @@ def _paso_mercado(precios: pd.DataFrame) -> None:
 # ---------------------------------------------------------------------------
 # Paso 2: tasas y carry
 # ---------------------------------------------------------------------------
+def _tasas_usadas(macro: pd.DataFrame, precios: pd.DataFrame, codigo: str, retornos: pd.DataFrame) -> dict | None:
+    """H3-06: las dos tasas con que se calculó el diferencial de la tabla, su fecha de referencia y sus fechas de observación
+    (ver fx_carry.tasas_del_ultimo_tramo). Mismos insumos y antigüedades que _retornos_de_las_monedas."""
+    datos = MONEDAS_CARRY[codigo]
+    valor = fx.valor_en_dolares(precios[datos["par"]], datos["base_es_dolar"])
+    return fx.tasas_del_ultimo_tramo(
+        valor, retornos, _tasa_de_la_moneda(macro, codigo), rfui._serie(macro, NOMBRE_TASA_EEUU),
+        ANTIGUEDAD_MAXIMA_DE_TASA[datos["frecuencia"]], ANTIGUEDAD_MAXIMA_DE_TASA["diaria"],
+    )
+
+
 def _resumen_del_carry(macro: pd.DataFrame, precios: pd.DataFrame, hoy: pd.Timestamp) -> pd.DataFrame | None:
     retornos = _retornos_de_las_monedas(macro, precios)
-    tasa_usd = rfui._ultimo(macro, NOMBRE_TASA_EEUU)
     filas = {}
     for codigo, r in retornos.items():
         resumen = fx.resumen_del_carry(r, rf.DIAS_DEL_ANIO)
         if resumen is None:
             continue
-        tasa_local = rfui._ultimo(macro, MONEDAS_CARRY[codigo]["serie_tasa"])
+        # H3-06: la tasa local y la de EEUU que se muestran son EXACTAMENTE las del diferencial de la fila (vigentes al inicio
+        # del último tramo), no la última de cada serie en su propia fecha.
+        usadas = _tasas_usadas(macro, precios, codigo, r)
         atraso = int(np.busday_count(resumen["hasta"].date(), hoy.date()))
         filas[codigo] = {
-            "Tasa local (%)": tasa_local[0] if tasa_local else None,
+            "Tasa local (%)": usadas["tasa_moneda"],
             "Diferencial (pp)": resumen["diferencial_actual"], "Spot 1 año (%)": resumen["spot"],
             "Carry 1 año (%)": resumen["carry"], "Total 1 año (%)": resumen["total"],
             "Volatilidad (%)": resumen["volatilidad_spot"], "Caída máxima (%)": resumen["caida_maxima"],
             "Carry sobre riesgo": resumen["carry_sobre_riesgo"],
-            "tasa_usd": tasa_usd[0] if tasa_usd else None, "diferencial_promedio": resumen["diferencial_promedio"],
+            "tasa_usd": usadas["tasa_usd"], "diferencial_promedio": resumen["diferencial_promedio"],
+            "fecha_referencia": usadas["fecha_referencia"], "fecha_tasa_local": usadas["fecha_tasa_moneda"],
+            "fecha_tasa_usd": usadas["fecha_tasa_usd"],
             "hasta": resumen["hasta"], "_atrasado_bool": atraso > rfui.DIAS_HABILES_DE_ATRASO,
         }
     if not filas:
@@ -254,12 +263,16 @@ def _tabla_de_carry_html(resumen: pd.DataFrame, macro: pd.DataFrame) -> str:
     def _valor(fila, columna):
         return None if pd.isna(fila[columna]) else float(fila[columna])
 
+    def _dia(valor) -> str | None:
+        return rfui._fecha(valor) if valor is not None and pd.notna(valor) else None
+
     def tooltip(codigo: str, fila: pd.Series) -> str:
         completa = resumen.loc[codigo]
         articulo = MONEDAS_CARRY[codigo]["con_articulo"]
         return "<hr>".join([
-            gl.explicacion_moneda(codigo, _valor(completa, "Tasa local (%)"), _fecha_de_la_tasa(macro, codigo)),
-            gl.explicacion_diferencial(articulo, _valor(completa, "Tasa local (%)"), _valor(completa, "tasa_usd"), _valor(completa, "Diferencial (pp)")),
+            gl.explicacion_moneda(codigo, _valor(completa, "Tasa local (%)"), _dia(completa.get("fecha_tasa_local"))),
+            gl.explicacion_diferencial(articulo, _valor(completa, "Tasa local (%)"), _valor(completa, "tasa_usd"), _valor(completa, "Diferencial (pp)"),
+                                       _dia(completa.get("fecha_referencia")), _dia(completa.get("fecha_tasa_local")), _dia(completa.get("fecha_tasa_usd"))),
             gl.explicacion_spot_y_total(articulo, _valor(completa, "Spot 1 año (%)"), _valor(completa, "Carry 1 año (%)"), _valor(completa, "Total 1 año (%)")),
             gl.explicacion_riesgo_carry(_valor(completa, "Volatilidad (%)"), _valor(completa, "Caída máxima (%)"), _valor(completa, "Carry sobre riesgo")),
         ])
@@ -294,6 +307,17 @@ def _grafico_de_compensacion(resumen: pd.DataFrame) -> None:
     rfui._grafico(fig)
 
 
+def _texto_tasa_usd_usada(resumen: pd.DataFrame) -> str:
+    """H3-06: la tasa de EEUU con que se calcularon los diferenciales de la tabla, con su fecha de referencia. Si las filas
+    usan fechas de referencia distintas, se dice en vez de mostrar una sola cifra."""
+    usadas = resumen[["tasa_usd", "fecha_referencia"]].dropna()
+    if usadas.empty:
+        return ""
+    if usadas["fecha_referencia"].nunique() == 1:
+        return f" ({cifra(float(usadas['tasa_usd'].iloc[0]), 2)}%, vigente al {rfui._fecha(usadas['fecha_referencia'].iloc[0])})"
+    return " (en cada fila, la vigente en su fecha de referencia; ver el detalle de cada moneda)"
+
+
 def _paso_carry(macro: pd.DataFrame, precios: pd.DataFrame) -> None:
     st.markdown(
         "Cada país tiene su propia **tasa de interés**. El **carry trade** busca aprovechar la diferencia: se pide prestada una moneda "
@@ -310,10 +334,9 @@ def _paso_carry(macro: pd.DataFrame, precios: pd.DataFrame) -> None:
         rfui._sin_datos("tasas y tipos de cambio para calcular el carry")
         return
     st.markdown(_tabla_de_carry_html(resumen, macro), unsafe_allow_html=True)
-    tasa_usd = resumen["tasa_usd"].dropna()
     st.caption(
         f"Datos al {rfui._fecha(resumen['hasta'].max())}. La tasa de EEUU es la tasa efectiva de fondos federales"
-        + (f" ({tasa_usd.iloc[0]:.2f}%)" if len(tasa_usd) else "")
+        + _texto_tasa_usd_usada(resumen)
         + ". **Difer.** = tasa local − tasa de EEUU, en puntos porcentuales; **Spot / Carry / Total 1A** = resultado de comprar la moneda "
         "financiándose en dólares durante el último año; **Carry/Vol** = diferencial dividido por la volatilidad del tipo de cambio. "
         "Un diferencial **negativo** significa que las tasas de referencia favorecen al dólar: la posición inversa (comprar dólares "
