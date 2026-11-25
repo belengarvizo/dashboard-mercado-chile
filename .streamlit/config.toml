@@ -1,0 +1,4 @@
+# Sirve los archivos de app/static/ (fotografías de la interfaz FRI) en la ruta app/static/…
+# No cambia el comportamiento de la interfaz clásica.
+[server]
+enableStaticServing = true

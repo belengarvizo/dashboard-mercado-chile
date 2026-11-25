@@ -63,6 +63,7 @@ from constants import TICKERS_COMMODITIES, TICKER_PETROLEO_WTI
 from catalogo_fx import NOMBRE_TASA_EEUU, PARES_FX
 from defensa_topdown import verificar_prediccion as _verificar_prediccion
 import diferencial_bcp_bcu as dif_bcp_bcu
+import fri.interfaz as fri_ui  # interfaz FRI (FRI_INTERFAZ=fri); por defecto, la clásica
 from market_data import (
     calcular_resumen_mercado,
     calcular_cambio_reciente,
@@ -166,10 +167,15 @@ from glosario import (
     TOOLTIP_CSS,
 )
 
-st.set_page_config(page_title="Mercado Económico Chileno", layout="wide")
+st.set_page_config(
+    page_title="Financial Research Intelligence" if fri_ui.modo_configurado() == "fri" else "Mercado Económico Chileno",
+    layout="wide",
+)
 
 # ?vista=labfin -> ver solo la pestaña Laboratorio Financiero (ver gate más abajo).
 _SOLO_LABFIN = st.query_params.get("vista") == "labfin"
+# Interfaz FRI: solo con FRI_INTERFAZ=fri (por defecto «clasica», sin ningún cambio). Ver fri/interfaz.py.
+_MODO_FRI = fri_ui.modo_activo(st.query_params) and not _SOLO_LABFIN
 
 # Paleta categórica de orden fijo (nunca se reasigna por índice de la
 # selección), y diverging rojo-gris-verde para el heatmap de desempeño.
@@ -197,7 +203,7 @@ MULTIPLICADOR_LIQUIDEZ = 1.3
 # siempre, en cualquier ancho.
 AUTORA = "Belén Muñoz Garvizo"
 
-if not _SOLO_LABFIN:
+if not _SOLO_LABFIN and not _MODO_FRI:
     st.title("Mercado Económico Chileno")
     st.caption(
         "Datos del Banco Central de Chile y Yahoo Finance, actualizados diariamente"
@@ -2368,36 +2374,38 @@ if _SOLO_LABFIN:
     render_laboratorio_financiero()
     st.stop()
 
-# --- Sidebar: info de última actualización ---
-with st.sidebar:
-    st.subheader("Última actualización")
+# En la interfaz FRI, la barra lateral y la última actualización las dibuja fri_ui.navegar().
+if not _MODO_FRI:
+    # --- Sidebar: info de última actualización ---
+    with st.sidebar:
+        st.subheader("Última actualización")
+        try:
+            meta = cargar_ultima_actualizacion()
+            for _, fila in meta.iterrows():
+                st.text(f"{fila['fuente']}: {fila['ultima_actualizacion']}")
+        except Exception:
+            st.warning("Aún no hay datos cargados. Corre los scripts de actualización primero.")
+
+        # Autoría, al pie del sidebar: visible en todas las secciones sin competir
+        # con los datos. Va dentro de este bloque a propósito, porque la vista
+        # aislada del Laboratorio Financiero (?vista=labfin) corta antes con
+        # st.stop() y no debe mostrar sidebar — ver tests/test_labfin_view.py.
+        st.divider()
+        st.caption(f"Creado por **{AUTORA}**")
+
+    # --- Barra de última actualización (visible arriba, antes de las pestañas) ---
+    NOMBRES_FUENTE = {"bcch": "Banco Central de Chile", "yfinance": "Yahoo Finance"}
     try:
         meta = cargar_ultima_actualizacion()
-        for _, fila in meta.iterrows():
-            st.text(f"{fila['fuente']}: {fila['ultima_actualizacion']}")
+        columnas_meta = st.columns(len(meta)) if len(meta) else []
+        for col, (_, fila) in zip(columnas_meta, meta.iterrows()):
+            with col:
+                st.caption(
+                    f"🔄 **{NOMBRES_FUENTE.get(fila['fuente'], fila['fuente'])}**: "
+                    f"{fila['ultima_actualizacion'].strftime('%d-%m-%Y %H:%M')}"
+                )
     except Exception:
-        st.warning("Aún no hay datos cargados. Corre los scripts de actualización primero.")
-
-    # Autoría, al pie del sidebar: visible en todas las secciones sin competir
-    # con los datos. Va dentro de este bloque a propósito, porque la vista
-    # aislada del Laboratorio Financiero (?vista=labfin) corta antes con
-    # st.stop() y no debe mostrar sidebar — ver tests/test_labfin_view.py.
-    st.divider()
-    st.caption(f"Creado por **{AUTORA}**")
-
-# --- Barra de última actualización (visible arriba, antes de las pestañas) ---
-NOMBRES_FUENTE = {"bcch": "Banco Central de Chile", "yfinance": "Yahoo Finance"}
-try:
-    meta = cargar_ultima_actualizacion()
-    columnas_meta = st.columns(len(meta)) if len(meta) else []
-    for col, (_, fila) in zip(columnas_meta, meta.iterrows()):
-        with col:
-            st.caption(
-                f"🔄 **{NOMBRES_FUENTE.get(fila['fuente'], fila['fuente'])}**: "
-                f"{fila['ultima_actualizacion'].strftime('%d-%m-%Y %H:%M')}"
-            )
-except Exception:
-    st.caption("Aún no hay datos cargados. Corre los scripts de actualización primero.")
+        st.caption("Aún no hay datos cargados. Corre los scripts de actualización primero.")
 
 
 # Selector de sección en vez de st.tabs(). Motivo medido, no estético:
@@ -2432,9 +2440,16 @@ SECCIONES_FUERA_DEL_SELECTOR = (
     "Defensa Top-Down",
 )
 SECCIONES = [s for s in SECCIONES_TODAS if s not in SECCIONES_FUERA_DEL_SELECTOR]
-_seccion = st.segmented_control(
-    "Sección", SECCIONES, default=SECCIONES[0], key="seccion_activa", label_visibility="collapsed",
-) or SECCIONES[0]
+if _MODO_FRI:
+    # La interfaz FRI elige la sección por su menú y sus pestañas, y devuelve el mismo nombre de sección que usa el
+    # resto del script (o None si la pestaña aún no tiene una sección existente): se ejecuta el mismo código de siempre.
+    _seccion = fri_ui.navegar(cargar_ultima_actualizacion, AUTORA)
+else:
+    if fri_ui.modo_configurado() == "fri":   # solo con FRI_INTERFAZ=fri y ?ui=clasica: enlace para volver
+        st.sidebar.markdown('<a href="?ui=fri" target="_self">Volver a la interfaz FRI</a>', unsafe_allow_html=True)
+    _seccion = st.segmented_control(
+        "Sección", SECCIONES, default=SECCIONES[0], key="seccion_activa", label_visibility="collapsed",
+    ) or SECCIONES[0]
 
 # --- Tab 0: Brief Premercado ---
 ETIQUETA_EN_POR_ES = {

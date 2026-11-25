@@ -219,6 +219,8 @@ ARCHIVOS_SIN_CONEXION_VERIFICADOS = {
                                  "app/dashboard.py, con datos sintéticos; no abre la base (H1)",
     "test_commodities_sin_sharpe.py": "AppTest.from_function sobre render_commodities con datos sintéticos; no abre "
                                       "app/dashboard.py ni la base (H1-b1)",
+    "test_fri_interfaz.py": "AppTest.from_function sobre fri.interfaz.navegar con datos de actualización inventados; lee el "
+                            "código de app/dashboard.py como texto; no abre la base (F0/F1)",
     "test_h3a_consistencia_temporal.py": "AppTest sobre funciones de Renta Fija y sobre el bloque 2s10s recortado de "
                                          "app/dashboard.py (solo sus definiciones), con datos sintéticos; no abre la base (H3-A)",
 }
