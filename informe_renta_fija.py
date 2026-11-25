@@ -647,6 +647,10 @@ EXPOSICION_POR_GRUPO = {
 }
 GRUPOS_COMPARABLES_POR_PLAZO = {"Tesoro EEUU"}
 GRUPOS_CON_CREDITO = {"Mercado total", "Empresas", "High yield", "Emergentes"}
+# H3-A2: estados del spread Baa en la atribución de los fondos con crédito.
+SPREAD_MATERIAL = "comparable, con cambio material"
+SPREAD_SIN_CAMBIO_MATERIAL = "comparable, sin cambio material"
+SPREAD_NO_COMPARABLE = "no disponible o no comparable"
 
 
 @dataclass(frozen=True)
@@ -911,10 +915,20 @@ def _evaluar_atribucion(ticker: str, fila: pd.Series, ctx: dict, credito: dict |
     if not precisa:
         return cerrar("imprecisa")
     if grupo in GRUPOS_CON_CREDITO:
+        # H3-A2: tres estados del spread Baa. Sin datos comparables (C) NO equivale a «sin cambio material» (B): la
+        # contribución del crédito queda indeterminada y el resultado no se atribuye solo a la duración. `clase_tasas`
+        # conserva lo que dice la comparación con la sensibilidad a tasas, que no cambia.
         clase_s, pb_s, _ = _clase_spread(credito, ctx)
         ev["spread_pb"] = pb_s
-        ev["condiciones"].append(("spread sin cambio material", clase_s not in (SUBE, BAJA), pb_s, None))
-        if clase_s in (SUBE, BAJA):
+        if clase_s is None:
+            ev["estado_spread"] = SPREAD_NO_COMPARABLE
+            ev["clase_tasas"] = clase
+            ev["condiciones"].append(("spread comparable en la ventana", False, None, None))
+            return cerrar("credito_indeterminado")
+        material = clase_s in (SUBE, BAJA)
+        ev["estado_spread"] = SPREAD_MATERIAL if material else SPREAD_SIN_CAMBIO_MATERIAL
+        ev["condiciones"].append(("spread sin cambio material", not material, pb_s, None))
+        if material:
             return cerrar("credito")
     return cerrar(clase)
 
@@ -936,7 +950,13 @@ def _frase_de_evaluacion(ev: dict) -> str:
     else:
         rindio, neto = f"rindió {R}", f"su retorno ({R})"
     if clase == "consistente":
-        extra = " El modelo no incluye su riesgo de crédito." if ev["grupo"] in GRUPOS_CON_CREDITO else ""
+        extra = ""
+        if ev.get("estado_spread") == SPREAD_SIN_CAMBIO_MATERIAL:
+            # H3-A2: el Baa es una referencia agregada; que no se mueva no asegura que el crédito del fondo se haya mantenido.
+            extra = (" El spread Baa no cambió de forma material, pero es una referencia agregada: no asegura que el riesgo de "
+                     "crédito propio del fondo se haya mantenido, y el modelo no lo incluye.")
+        elif ev["grupo"] in GRUPOS_CON_CREDITO:
+            extra = " El modelo no incluye su riesgo de crédito."
         return f"{t} {rindio}, en línea con el {X} que anticipaba su sensibilidad estimada ante el cambio de {pb} de {tasa}.{extra}"
     if clase == "parcial":
         return (f"{t} {rindio}; su sensibilidad anticipaba {X}, en la misma dirección pero con una diferencia de {dif} pp, de modo "
@@ -965,6 +985,17 @@ def _frase_de_evaluacion(ev: dict) -> str:
         return (f"{t} rindió {R} y su sensibilidad a tasas anticipaba {X}, pero el spread de crédito también se movió "
                 f"({ib.num(ev['spread_pb'], 0, True)} pb): la coincidencia puede reflejar efectos que se compensan y no permite "
                 "separarlos.")
+    if clase == "credito_indeterminado":
+        # H3-A2: estado C. Se informa la comparación con la sensibilidad a tasas, sin atribuir el resultado solo a la duración.
+        # «Cercano» solo si se cumple el criterio vigente de proximidad (clase por tasas «consistente»).
+        if ev.get("clase_tasas") == "consistente":
+            comparacion = (f"En {t}, el retorno observado ({R}) fue numéricamente cercano al estimado por el modelo de sensibilidad a "
+                           f"tasas ({X}, ante el cambio de {pb} de {tasa}). Sin embargo")
+        else:
+            comparacion = (f"En {t}, el retorno observado ({R}) y el estimado por el modelo de sensibilidad a tasas ({X}) van en la "
+                           f"misma dirección, pero difieren en {dif} pp, más de lo que permite el criterio de proximidad. Además")
+        return (f"{comparacion}, no hay datos comparables del spread Baa que permitan determinar la contribución del crédito, por lo "
+                "que el resultado no puede atribuirse exclusivamente a los movimientos de tasas.")
     if clase == "sin_tasa_real":
         return (f"{t} rindió {R}. Su precio responde a la tasa real del Tesoro y al reajuste de su capital por inflación, y la "
                 "base solo tiene tasas nominales: no se estima su sensibilidad ni se contrasta su retorno con las tasas.")
@@ -997,8 +1028,12 @@ def _afirmacion_atribucion(datos: dict, evaluaciones: list[dict]) -> Afirmacion:
                       "de tasas no da cuenta de su resultado.")
     if por_clase.get("sin_movimiento"):
         partes.append(f"En {_lista(por_clase['sin_movimiento'])}, ni la tasa de referencia ni el precio se movieron de forma material.")
+    if por_clase.get("credito_indeterminado"):
+        partes.append(f"En {_lista(por_clase['credito_indeterminado'])}, fondos con riesgo de crédito, no hay datos comparables del "
+                      "spread Baa en la ventana: no es posible determinar la contribución del crédito, y su resultado no se atribuye "
+                      "solo a la sensibilidad a tasas.")
     otros = [ev["ETF"] for ev in evaluaciones
-             if ev["clase"] not in ("consistente", "parcial", "contraria", "sin_movimiento", "sin_tasa_real")]
+             if ev["clase"] not in ("consistente", "parcial", "contraria", "sin_movimiento", "sin_tasa_real", "credito_indeterminado")]
     if otros:
         partes.append(f"Para {_lista(otros)}, la evidencia no permite una conclusión sobre el papel de las tasas (ver sección 2).")
     if por_clase.get("sin_tasa_real"):
@@ -1192,6 +1227,9 @@ def _nota_metodologica(datos: dict) -> str:
         f"supera la mitad del retorno observado (con un piso de {ib.num(u['pp_retorno'], 2)} pp), el ajuste de la relación diaria es suficiente (R² de al "
         f"menos {ib.num(u['r2_minimo'], 1)}) y la pendiente es precisa (error estándar de hasta "
         f"{ib.num(u['error_relativo_maximo'] * 100, 0)}% de la estimación). "
+        "En los fondos con riesgo de crédito, además, el spread Baa debe estar disponible en las fechas de la ventana y no haber "
+        "cambiado de forma material; si no hay datos comparables, la contribución del crédito queda indeterminada. El Baa es una "
+        "referencia agregada, no la exposición de crédito de cada fondo. "
         "El R² describe la relación diaria del último año: no mide qué parte del retorno del período explican las tasas ni establece "
         "causalidad. Dos fondos solo se comparan por plazo si ambos son bonos nominales del Tesoro. En los fondos del Tesoro se descuenta "
         "un devengo aproximado (tasa de referencia al inicio × días / 365), que no es el rendimiento del fondo; en los demás no se estima "
