@@ -56,11 +56,14 @@ PESTANAS: dict[str, list[tuple[str, list[str] | None]]] = {
         ("Panorama general", None), ("Análisis de riesgo", ["Riesgo"]), ("Correlaciones y diversificación", None), ("Derivados", ["Derivados"]),
     ],
     "investigacion": [("Investigador", None), ("Regulación financiera", None), ("Investigaciones guardadas", None)],
-    "informes": [("Informes", None)],
+    "informes": [("Informe semanal", None), ("Archivo de informes", None), ("Informes especializados", None)],
 }
 # Pestañas con panorama propio de FRI (F2): se dibujan con los datos y motores existentes (fri/panoramas.py).
 PANORAMAS = {("macro", "Panorama general"): "macro", ("mercados", "Panorama general"): "mercados",
-             ("riesgo", "Panorama general"): "riesgo"}
+             ("riesgo", "Panorama general"): "riesgo",
+             # F3: Informes (fri/informes.py)
+             ("informes", "Informe semanal"): "informe_semanal", ("informes", "Archivo de informes"): "archivo",
+             ("informes", "Informes especializados"): "especializados"}
 # Rótulos FRI para las secciones clásicas dentro de una pestaña con varias.
 ROTULOS = {"Renta Variable y ETFs": "ETF y mercados", "Acciones IPSA": "Acciones IPSA", "Atribución IPSA": "Atribución IPSA",
            "Acciones Dow Jones": "Acciones Dow Jones", "Benchmark": "Comparación internacional"}
@@ -83,7 +86,6 @@ PENDIENTES = {
     ("investigacion", "Investigador"): "Conversación con fuentes verificables y cálculos deterministas de FRI.",
     ("investigacion", "Regulación financiera"): "Observatorio «Qué cambió y por qué importa» (Basilea III, CMF, NIIF).",
     ("investigacion", "Investigaciones guardadas"): "Biblioteca de investigaciones y expedientes, con versiones.",
-    ("informes", "Informes"): "Informe semanal dominical (3–4 páginas) y su archivo. El PDF de renta fija existente está en Mercados → Renta fija.",
 }
 
 
@@ -179,7 +181,7 @@ def _texto_actualizacion(cargar_ultima_actualizacion) -> str:
 # ---------------------------------------------------------------------------
 # Inicio
 # ---------------------------------------------------------------------------
-def _inicio() -> None:
+def _inicio(actualizacion: str = "") -> None:
     ahora = datetime.now(SANTIAGO)
     prox = proxima_publicacion(ahora)
     st.markdown(
@@ -204,13 +206,16 @@ def _inicio() -> None:
         unsafe_allow_html=True)
     st.markdown(
         f"""<div class="fri-foco"><div class="imagen"></div>
-        <div><div class="etiqueta">EN FOCO</div><div class="h3">Espacio editorial</div>
-        <p>Aquí aparecerá el análisis destacado de la semana, escrito con datos verificados. Todavía no está implementado.</p>
+        <div><div class="etiqueta">EN FOCO</div><div class="h3">Sin análisis publicado</div>
+        <p>Este espacio mostrará el análisis destacado de la semana solo cuando exista uno respaldado por datos verificables, con sus
+        fuentes y fechas. Mientras tanto no se publica ningún texto: ni generado ni de ejemplo.</p>
         <span class="boton-inactivo" title="Pendiente de implementación">Leer análisis {c.icono('flecha', 16, T['texto_3'])}</span>
         <span class="estado estado-pendiente" style="margin-left:10px">PENDIENTE</span></div>
-        <div class="proximo"><div class="etiqueta">{c.icono('calendario', 20)} PRÓXIMO INFORME</div>
-        <b>Informe semanal de mercados</b><span>{_fecha_larga(prox)} · 10:00 (Santiago)</span><br>
-        <span style="font-size:13px;color:{T['texto_3']}">Publicación prevista; el motor del informe dominical aún no está implementado.</span></div></div>""",
+        <div class="proximo"><div class="etiqueta">{c.icono('calendario', 20)} INFORME SEMANAL</div>
+        <b>Informe semanal de mercados</b><span>Fecha prevista (no programada): {_fecha_larga(prox)} · 10:00 (Santiago)</span><br>
+        <span style="font-size:13px;color:{T['texto_3']}">Estado: no implementado · publicación automática deshabilitada · sin ediciones.</span>
+        {f'<br><span style="font-size:13px;color:{T["texto_3"]}">Datos del dashboard: {actualizacion.replace("<br>", " · ").replace("Última actualización · ", "")}</span>' if actualizacion else ""}
+        </div></div>""",
         unsafe_allow_html=True,
     )
 
@@ -230,7 +235,7 @@ def navegar(cargar_ultima_actualizacion, autora: str = "", cargadores: dict | No
     _menu(seccion, autora)
     if seccion == "inicio":   # la portada no lleva barra superior (diseño aprobado)
         _aviso_base_local()
-        _inicio()
+        _inicio(_texto_actualizacion(cargar_ultima_actualizacion))
         return None
     _barra_superior()
     _encabezado(seccion, _texto_actualizacion(cargar_ultima_actualizacion))
@@ -265,6 +270,15 @@ def _panorama(cual: str, cargadores: dict | None) -> None:
     from fri import panoramas as p
     if cual == "riesgo":
         p.panorama_riesgo()
+        return
+    if cual in ("informe_semanal", "archivo", "especializados"):
+        from fri import informes
+        if cual == "informe_semanal":
+            informes.informe_semanal(_fecha_larga, proxima_publicacion)
+        elif cual == "archivo":
+            informes.archivo()
+        else:
+            informes.especializados(cargadores)
         return
     if not cargadores:
         _pendiente("Panorama sin acceso a los datos del dashboard.")

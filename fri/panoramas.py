@@ -36,6 +36,9 @@ NOMBRE_TREASURY_10 = rfui.nombre_treasury("10 años")      # H.15 (decisión de 
 TICKER_SP500 = "^GSPC"
 INDICES = [(TICKER_SP500, "S&P 500"), (TICKER_DOW_JONES, "Dow Jones"), (TICKER_NASDAQ, "Nasdaq Composite"), ("EEM", "MSCI Emergentes (EEM)")]
 PARES_PANORAMA = ["USDCLP=X", "EURUSD=X", "USDJPY=X", "USDBRL=X", "USDMXN=X"]
+# H3-D en curso: se muestran las fechas reales, pero todavía no se marca automáticamente qué dato está atrasado.
+NOTA_ANTIGUEDAD = ("Antigüedad de los datos: cada cifra muestra su fecha real, pero FRI todavía no marca automáticamente los datos "
+                   "atrasados según el calendario de cada mercado (corrección H3-D en curso). Compara la fecha con la de hoy.")
 MOTIVO_IPSA = ("No hay una serie directa del IPSA verificada en la base. ECH (un ETF en dólares) no se presenta como IPSA. "
                "Fuente candidata: serie diaria del Banco Central de Chile, pendiente de confirmar.")
 
@@ -187,6 +190,7 @@ def panorama_macro(df_macro: pd.DataFrame, df_precios: pd.DataFrame) -> None:
     with col3, st.container(border=True):
         _titulo_panel("Mercado laboral: tasa de desempleo", "Tasa (%)")
         _linea([("Desempleo", _ultimo_anio(desempleo), T["dorado"], "solid")], " %", 2)
+    st.markdown(f'<div class="fri-nota">{NOTA_ANTIGUEDAD}</div>', unsafe_allow_html=True)
     st.markdown(f'<div class="fri-nota">Cada tarjeta muestra su fecha real y su fuente; el cambio es contra el dato anterior de la '
                 f'misma serie (diario o mensual según la serie). El análisis interpretativo («Análisis FRI») está pendiente.</div>',
                 unsafe_allow_html=True)
@@ -282,6 +286,7 @@ def panorama_mercados(df_macro: pd.DataFrame, df_precios: pd.DataFrame) -> None:
     st.markdown('<div class="fri-nota">Var.: cambio contra el dato ANTERIOR de cada serie (calcular_cambio_reciente); no es necesariamente '
                 'un cambio de un día (fines de semana, feriados o huecos). 1A: retorno de los últimos '
                 '12 meses (renta_fija.retorno_ultimo_anio). Cada tabla usa la última fecha disponible de su propia serie.</div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="fri-nota">{NOTA_ANTIGUEDAD}</div>', unsafe_allow_html=True)
 
 
 # ---------------------------------------------------------------------------

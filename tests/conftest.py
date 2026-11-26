@@ -221,6 +221,8 @@ ARCHIVOS_SIN_CONEXION_VERIFICADOS = {
                                       "app/dashboard.py ni la base (H1-b1)",
     "test_fri_interfaz.py": "AppTest.from_function sobre fri.interfaz.navegar con datos de actualización inventados; lee el "
                             "código de app/dashboard.py como texto; no abre la base (F0/F1)",
+    "test_fri_informes.py": "AppTest.from_function sobre fri.interfaz.navegar (Inicio e Informes) con DataFrames de prueba; "
+                            "no abre app/dashboard.py ni la base (F3)",
     "test_fri_panoramas.py": "AppTest.from_function sobre fri.panoramas con DataFrames de prueba construidos en el archivo; "
                              "no abre app/dashboard.py ni la base (F2)",
     "test_h3a_consistencia_temporal.py": "AppTest sobre funciones de Renta Fija y sobre el bloque 2s10s recortado de "

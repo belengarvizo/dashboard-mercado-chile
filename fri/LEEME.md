@@ -34,3 +34,28 @@ Las herramientas viven fuera del repositorio, en `%USERPROFILE%\FRI-local\`:
 - `fri_local.py`: lanzador con los guardias del proyecto activos (sin PostgreSQL ni red).
 - `iniciar_fri.bat`: abre la interfaz FRI en http://127.0.0.1:8620.
 - `iniciar_clasica.bat`: abre la interfaz clásica en http://127.0.0.1:8621.
+
+## Panoramas e Informes (F2 y F3)
+
+- Panoramas de Macroeconomía, Mercados y Riesgo: `fri/panoramas.py`. Usan los cargadores del dashboard
+  (`cargar_series_macro`, `cargar_precios_acciones`) y funciones existentes (`calcular_cambio_reciente`,
+  `retorno_ultimo_anio`, `curva_en_fecha`). Sin datos: «No disponible», nunca una cifra de relleno.
+- Informes: `fri/informes.py`. Muestra el estado real del informe semanal (no implementado, fecha prevista no
+  programada), el archivo vacío y el PDF especializado EXISTENTE de renta fija (no es el informe semanal).
+
+## Limitaciones aceptadas de la primera versión (se muestran en pantalla)
+
+| Pendiente | Cómo se ve hoy |
+|---|---|
+| IPSA diario y su volumen | «No disponible». No hay fuente diaria gratuita verificada: el BCCh publica solo la serie mensual (promedio de cierres); `^IPSA` no existe en Yahoo. ECH no se presenta como IPSA. Sin gráfico de volumen. |
+| Actividad económica de China | «Sin fuente». |
+| Investigador y Observatorio regulatorio | «Pendiente de implementación». |
+| Informe dominical | «No implementado»; la fecha prevista no es una publicación programada. |
+| Nuevos modelos de derivados | «Pendiente de implementación»; se usan los motores existentes. |
+| Antigüedad de los datos | Cada cifra muestra su fecha real, pero no se marcan automáticamente los datos atrasados (H3-D en curso). |
+
+## Pendiente de revisión (sin ampliar el uso actual)
+
+- **Condiciones de uso de Yahoo Finance.** Sus términos (sección 2) restringen la recolección automatizada y el uso
+  comercial sin permiso. El cron ya descarga precios de Yahoo: hay que revisar esas condiciones para el uso actual y
+  no ampliar el uso de esa fuente mientras tanto (FRI no agrega tickers nuevos de Yahoo).
