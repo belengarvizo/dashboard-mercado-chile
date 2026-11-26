@@ -105,7 +105,11 @@ def no_disponible(nombre: str, motivo: str) -> str:
 
 def _fila(grupo_html: str, tarjetas: list[str]) -> None:
     columnas = "minmax(0,.8fr) " + " ".join(["minmax(0,1fr)"] * len(tarjetas))
-    st.markdown(f'<div class="fri-kpis" style="grid-template-columns:{columnas}">{grupo_html}{"".join(tarjetas)}</div>', unsafe_allow_html=True)
+    # --mitad: en pantallas angostas el rótulo del grupo ocupa dos filas y los indicadores se reparten en dos filas parejas
+    # (ver «ESCALA ADAPTABLE» en fri/estilos.py). Solo presentación.
+    mitad = max(1, -(-len(tarjetas) // 2))
+    st.markdown(f'<div class="fri-kpis fri-kpis-grupo" style="grid-template-columns:{columnas};--mitad:{mitad}">'
+                f'{grupo_html}{"".join(tarjetas)}</div>', unsafe_allow_html=True)
 
 
 def _titulo_panel(texto: str, nota: str = "") -> None:

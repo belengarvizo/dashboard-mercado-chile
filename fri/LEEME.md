@@ -59,3 +59,21 @@ Las herramientas viven fuera del repositorio, en `%USERPROFILE%\FRI-local\`:
 - **Condiciones de uso de Yahoo Finance.** Sus términos (sección 2) restringen la recolección automatizada y el uso
   comercial sin permiso. El cron ya descarga precios de Yahoo: hay que revisar esas condiciones para el uso actual y
   no ampliar el uso de esa fuente mientras tanto (FRI no agrega tickers nuevos de Yahoo).
+
+## Escala adaptable (F4-b)
+
+El diseño aprobado se trazó para un ancho útil de unos 1672 px. Con el escalado de pantalla de Windows (125–150 %), una
+pantalla de 1920×1080 se ve como 1536 o 1280 px de ancho útil aunque el zoom del navegador esté al 100 %. Además,
+Streamlit recuerda en el navegador si alguna vez se cerró el menú lateral (`localStorage`, clave `stSidebarCollapsed-`).
+
+El bloque «ESCALA ADAPTABLE» de `fri/estilos.py` hace cuatro cosas:
+- **Menú lateral:** lo mantiene siempre visible.
+- **Tamaños:** reduce en proporción tipografías, portada y tarjetas con `clamp()`. El máximo es el valor aprobado, así que a
+  1672 px o más la interfaz queda idéntica a la maqueta.
+- **Títulos e ilustraciones:** los títulos no se cortan en mitad de una palabra, y la ilustración de cada tarjeta ocupa su
+  propio espacio.
+- **Grillas:** las reorganiza solo cuando ya no caben. Las tarjetas de Inicio pasan a 3 columnas bajo 1200 px y a 2 bajo
+  900 px; los indicadores se reparten en dos filas parejas.
+
+Se verificó en 1366×768, 1920×1080, 2560×1440, 1536×864 (escala 1,25) y 1280×720 (escala 1,5), en las seis secciones, con
+Streamlit 1.67.0 (la versión que instala Railway).

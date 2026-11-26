@@ -190,5 +190,87 @@ html, body, [data-testid="stAppViewContainer"], .stApp {{
 
 .fri-enlace-clasica {{ padding: 18px 24px 0 24px; }}
 .fri-enlace-clasica a {{ color: {T['texto_3']} !important; font-size: 13px; text-decoration: none !important; border-bottom: 1px dotted {T['texto_3']}; }}
+
+/* =====================================================================================================================
+   ESCALA ADAPTABLE (F4-b). El diseño aprobado se trazó para un ancho útil de ~1672 px. Las reglas de arriba quedan como
+   están; las de abajo solo REDUCEN en proporción cuando la ventana es más angosta (clamp(mín, vw, máx), con máx = el valor
+   aprobado, de modo que a ≥1672 px todo queda idéntico) y reorganizan las grillas cuando ya no caben. No cambian colores,
+   fuentes ni componentes. Causa: con el escalado de Windows (125–150 %), una pantalla de 1920×1080 se ve como 1536 o
+   1280 px de ancho útil aunque el zoom del navegador esté al 100 %.
+   ===================================================================================================================== */
+
+/* Menú lateral SIEMPRE visible. Streamlit recuerda en el navegador (localStorage «stSidebarCollapsed-») si alguna vez se
+   cerró el menú, por ejemplo en la interfaz clásica; entonces lo desplaza fuera de la pantalla. FRI oculta el botón para
+   abrirlo y reserva sus 248 px, así que quedaba el espacio vacío y sin forma de recuperarlo. */
+[data-testid="stSidebar"] {{ transform: none !important; visibility: visible !important; left: 0 !important; }}
+[data-testid="stExpandSidebarButton"], [data-testid="stSidebarCollapsedControl"], [data-testid="collapsedControl"] {{ display: none !important; }}
+
+/* Los títulos no se cortan en mitad de una palabra («Macroecono-mía»). */
+.fri-portada .h1, .fri-portada .subtitulo, .fri-encabezado .h1, .fri-tarjeta-nav .h3, .fri-foco .h3, .fri-grupo b,
+.fri-panel-titulo .t, .fri-pendiente .h4, .fri-kpi .nombre, .fri-barra .titulo {{
+  overflow-wrap: normal !important; word-break: normal !important; hyphens: manual; }}
+
+.block-container {{ max-width: 1880px; }}
+
+/* Portada: misma composición, más baja y con títulos proporcionales en pantallas angostas. */
+.fri-portada {{ height: clamp(300px, 25.1vw, 420px); }}
+.fri-portada .contenido {{ top: clamp(22px, 2.15vw, 36px); left: clamp(2.2rem, 4vw, 4.2rem); max-width: min(660px, 58%); }}
+.fri-portada .ruta span.linea {{ width: clamp(80px, 25.1vw, 420px); }}
+.fri-portada .h1 {{ font-size: clamp(40px, 3.83vw, 64px); margin: clamp(14px, 1.55vw, 26px) 0 clamp(8px, .72vw, 12px) 0; }}
+.fri-portada .subtitulo {{ font-size: clamp(20px, 1.67vw, 28px); margin-bottom: clamp(8px, .84vw, 14px); }}
+.fri-portada .bajada {{ font-size: clamp(14.5px, 1.05vw, 17.5px); }}
+.fri-portada .fecha {{ font-size: clamp(13px, .87vw, 14.5px); }}
+
+/* Tarjetas de Inicio: la ilustración ocupa su propio espacio sobre el enlace y nunca tapa el texto. */
+.fri-tarjetas {{ gap: clamp(12px, 1.08vw, 18px); margin-top: clamp(-36px, -2.15vw, -20px); }}
+.fri-tarjeta-nav {{ --pad: clamp(16px, 1.32vw, 22px); padding: clamp(18px, 1.44vw, 24px) var(--pad) clamp(14px, 1.2vw, 20px) var(--pad);
+  min-height: clamp(240px, 17.3vw, 290px); }}
+.fri-tarjeta-nav .h3 {{ font-size: clamp(18px, 1.5vw, 25px); }}
+.fri-tarjeta-nav p {{ font-size: clamp(13.5px, .9vw, 15px); }}
+.fri-tarjeta-nav .decoracion {{ position: relative; left: auto; right: auto; bottom: auto; order: 1; flex: none;
+  margin: auto calc(-1 * var(--pad)) 6px calc(-1 * var(--pad)); height: clamp(48px, 3.83vw, 64px); }}
+.fri-tarjeta-nav .decoracion svg {{ width: 100%; height: 100%; }}
+.fri-tarjeta-nav a {{ order: 2; margin-top: 0; font-size: clamp(13px, .87vw, 14.5px); white-space: nowrap; }}
+
+/* Cabecera de las secciones */
+.fri-encabezado .h1 {{ font-size: clamp(30px, 2.4vw, 40px); }}
+.fri-encabezado p {{ font-size: clamp(14px, .96vw, 16px); }}
+.fri-barra .titulo {{ font-size: clamp(18px, 1.32vw, 22px); }}
+.fri-barra .sub {{ font-size: clamp(13px, .87vw, 14.5px); }}
+
+/* Filas de indicadores: la variación puede bajar bajo el nombre en vez de salirse de la tarjeta. */
+.fri-kpi .fila {{ flex-wrap: wrap; }}
+.fri-kpi .nombre {{ font-size: clamp(14px, .93vw, 15.5px); }}
+
+@media (max-width: 1600px) {{
+  .fri-kpis {{ grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)) !important; }}
+  .fri-kpis.fri-kpis-grupo {{ grid-template-columns: minmax(0, .8fr) repeat(var(--mitad), minmax(0, 1fr)) !important; }}
+  .fri-kpis.fri-kpis-grupo > :first-child {{ grid-row: span 2; }}
+  .fri-foco {{ grid-template-columns: 150px 1fr 300px; gap: 22px; }}
+}}
+@media (max-width: 1360px) {{
+  .fri-tarjeta-nav .h3 {{ font-size: clamp(17px, 1.36vw, 25px); }}
+}}
+@media (max-width: 1200px) {{
+  .fri-tarjetas {{ grid-template-columns: repeat(3, minmax(0, 1fr)); }}
+  .fri-foco {{ grid-template-columns: 120px 1fr; }}
+  .fri-foco .proximo {{ grid-column: 1 / -1; border-left: none; border-top: 1px solid {T['borde_fuerte']}; padding: 14px 0 0 0; }}
+  .fri-encabezado .meta {{ display: none; }}
+}}
+@media (max-width: 900px) {{
+  .fri-tarjetas {{ grid-template-columns: repeat(2, minmax(0, 1fr)); }}
+  .fri-portada .fecha {{ display: none; }}
+}}
+
+/* Pantallas bajas (p. ej. 1280×720 útiles): el pie con la fotografía no tapa «Interfaz clásica». */
+@media (max-height: 860px) {{
+  .fri-marca {{ padding: 18px 12px 10px 12px; }}
+  .fri-marca .logo {{ font-size: 34px; }}
+  .fri-marca .filete {{ margin: 10px auto; }}
+  .fri-nav {{ margin-top: 8px; }}
+  .fri-nav a {{ padding: 10px 22px; }}
+  .fri-enlace-clasica {{ padding-top: 12px; }}
+  .fri-pie-menu {{ height: 96px; padding-top: 42px; }}
+}}
 </style>
 """
