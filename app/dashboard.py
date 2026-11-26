@@ -2443,7 +2443,8 @@ SECCIONES = [s for s in SECCIONES_TODAS if s not in SECCIONES_FUERA_DEL_SELECTOR
 if _MODO_FRI:
     # La interfaz FRI elige la sección por su menú y sus pestañas, y devuelve el mismo nombre de sección que usa el
     # resto del script (o None si la pestaña aún no tiene una sección existente): se ejecuta el mismo código de siempre.
-    _seccion = fri_ui.navegar(cargar_ultima_actualizacion, AUTORA)
+    _seccion = fri_ui.navegar(cargar_ultima_actualizacion, AUTORA,
+                              cargadores={"macro": cargar_series_macro, "precios": cargar_precios_acciones})
 else:
     if fri_ui.modo_configurado() == "fri":   # solo con FRI_INTERFAZ=fri y ?ui=clasica: enlace para volver
         st.sidebar.markdown('<a href="?ui=fri" target="_self">Volver a la interfaz FRI</a>', unsafe_allow_html=True)

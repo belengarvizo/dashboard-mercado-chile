@@ -11,13 +11,13 @@ from formato_numerico import cifra  # noqa: E402  regla única de cero sin signo
 from fri.estilos import T  # noqa: E402
 
 # ---------------------------------------------------------------------------
-# Formato numérico chileno (coma decimal, punto de miles) sobre la regla de H2
+# Formato numérico: el MISMO del dashboard (formato_numerico.cifra, regla de cero sin signo de H2), para que una
+# cifra se lea igual en FRI, en las secciones existentes y en la interfaz clásica.
 # ---------------------------------------------------------------------------
 def num(valor, decimales: int = 2, con_signo: bool = False) -> str:
     if valor is None or (isinstance(valor, float) and math.isnan(valor)):
         return "—"
-    texto = cifra(float(valor), decimales, con_signo, True)
-    return texto.replace(",", "§").replace(".", ",").replace("§", ".")
+    return cifra(float(valor), decimales, con_signo, True)
 
 
 def chip(valor: float, unidad: str = "%", decimales: int = 2, invertir_color: bool = False) -> str:

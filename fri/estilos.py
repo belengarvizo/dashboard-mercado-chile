@@ -125,11 +125,12 @@ html, body, [data-testid="stAppViewContainer"], .stApp {{
 /* ---------- KPI ---------- */
 .fri-kpis {{ display: grid; gap: 14px; margin: 14px 0 4px 0; }}
 .fri-kpi {{ background: linear-gradient(180deg, {T['superficie_2']} 0%, {T['superficie']} 100%); border: 1px solid {T['borde']}; border-radius: 10px; padding: 15px 17px 8px 17px; }}
-.fri-kpi .fila {{ display: flex; justify-content: space-between; align-items: flex-start; }}
+.fri-kpis > div {{ min-width: 0; }}
+.fri-kpi .fila {{ display: flex; justify-content: space-between; align-items: flex-start; gap: 6px; }}
 .fri-kpi .nombre {{ color: {T['texto']}; font-size: 15.5px; font-weight: 600; line-height: 1.25; }}
-.fri-kpi .valor {{ font-size: 28px; color: {T['texto']}; margin-top: 3px; font-variant-numeric: tabular-nums; white-space: nowrap; }}
+.fri-kpi .valor {{ font-size: clamp(20px, 1.55vw, 28px); color: {T['texto']}; margin-top: 3px; font-variant-numeric: tabular-nums; white-space: nowrap; }}
 .fri-kpi .valor small {{ font-size: 15px; color: {T['texto_2']}; }}
-.fri-kpi .var {{ text-align: right; font-size: 12.5px; color: {T['texto_2']}; white-space: nowrap; flex: none; padding-left: 6px; }}
+.fri-kpi .var {{ text-align: right; font-size: 12px; color: {T['texto_2']}; flex: none; padding-left: 6px; max-width: 96px; line-height: 1.3; }}
 .fri-kpi .chip {{ display: inline-block; white-space: nowrap; font-size: 13px; font-weight: 600; padding: 3px 9px; border-radius: 5px; margin-bottom: 4px; font-variant-numeric: tabular-nums; }}
 .chip-pos {{ background: rgba(127,192,158,0.18); color: {T['positivo']}; }}
 .chip-neg {{ background: rgba(227,154,154,0.18); color: {T['negativo']}; }}

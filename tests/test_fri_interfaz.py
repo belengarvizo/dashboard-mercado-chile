@@ -116,7 +116,7 @@ def test_cada_pestana_conectada_devuelve_la_seccion_existente(seccion, pestaña,
     assert _correr(seccion, pestaña, apartado).session_state["_devuelta"] == esperada
 
 
-@pytest.mark.parametrize("seccion, pestaña", [("mercados", "Panorama general"), ("macro", "Inflación"), ("riesgo", "Panorama general"),
+@pytest.mark.parametrize("seccion, pestaña", [("macro", "Inflación"), ("riesgo", "Correlaciones y diversificación"),
                                                ("investigacion", "Investigador"), ("informes", None)])
 def test_las_pestanas_sin_seccion_dicen_que_estan_pendientes(seccion, pestaña):
     at = _correr(seccion, pestaña)

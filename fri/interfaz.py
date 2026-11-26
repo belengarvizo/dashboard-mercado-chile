@@ -58,6 +58,9 @@ PESTANAS: dict[str, list[tuple[str, list[str] | None]]] = {
     "investigacion": [("Investigador", None), ("Regulación financiera", None), ("Investigaciones guardadas", None)],
     "informes": [("Informes", None)],
 }
+# Pestañas con panorama propio de FRI (F2): se dibujan con los datos y motores existentes (fri/panoramas.py).
+PANORAMAS = {("macro", "Panorama general"): "macro", ("mercados", "Panorama general"): "mercados",
+             ("riesgo", "Panorama general"): "riesgo"}
 # Rótulos FRI para las secciones clásicas dentro de una pestaña con varias.
 ROTULOS = {"Renta Variable y ETFs": "ETF y mercados", "Acciones IPSA": "Acciones IPSA", "Atribución IPSA": "Atribución IPSA",
            "Acciones Dow Jones": "Acciones Dow Jones", "Benchmark": "Comparación internacional"}
@@ -215,8 +218,11 @@ def _inicio() -> None:
 # ---------------------------------------------------------------------------
 # Navegación
 # ---------------------------------------------------------------------------
-def navegar(cargar_ultima_actualizacion, autora: str = "") -> str | None:
-    """Dibuja la interfaz FRI y devuelve la sección clásica que el dashboard debe ejecutar (o None)."""
+def navegar(cargar_ultima_actualizacion, autora: str = "", cargadores: dict | None = None) -> str | None:
+    """Dibuja la interfaz FRI y devuelve la sección clásica que el dashboard debe ejecutar (o None).
+
+    `cargadores`: {"macro": cargar_series_macro, "precios": cargar_precios_acciones} del dashboard, para los panoramas
+    (F2). Son las mismas funciones cacheadas que usa el resto del dashboard: en producción leen la base real."""
     st.markdown(CSS, unsafe_allow_html=True)
     seccion = str(st.query_params.get("s", "inicio"))
     if seccion not in {s for s, _, _ in SECCIONES_FRI}:
@@ -233,8 +239,15 @@ def navegar(cargar_ultima_actualizacion, autora: str = "") -> str | None:
     elegida = st.segmented_control("Pestaña", nombres, default=nombres[0], key=f"fri_pestana_{seccion}",
                                    label_visibility="collapsed") or nombres[0] if len(nombres) > 1 else nombres[0]
     _aviso_base_local()
+    if (seccion, elegida) in PANORAMAS:
+        _panorama(PANORAMAS[(seccion, elegida)], cargadores)
     secciones = dict(pestañas)[elegida]
+    if seccion == "macro" and elegida == "Panorama general" and secciones:
+        st.markdown('<div class="fri-panel-titulo" style="margin-top:18px"><div class="t">Todas las series macroeconómicas</div>'
+                    '<span>Explorador existente («Indicadores macro»)</span></div>', unsafe_allow_html=True)
     if not secciones:
+        if (seccion, elegida) in PANORAMAS:
+            return None
         nota = (' <span class="estado estado-existente" style="margin-left:8px">EN LA INTERFAZ CLÁSICA</span>'
                 if (seccion, elegida) == ("riesgo", "Correlaciones y diversificación") else "")
         _pendiente(PENDIENTES.get((seccion, elegida), "Pendiente de implementación."), nota)
@@ -245,3 +258,25 @@ def navegar(cargar_ultima_actualizacion, autora: str = "") -> str | None:
     sub = st.segmented_control("Apartado", rotulos, default=rotulos[0], key=f"fri_apartado_{seccion}_{elegida}",
                                label_visibility="collapsed") or rotulos[0]
     return secciones[rotulos.index(sub)]
+
+
+def _panorama(cual: str, cargadores: dict | None) -> None:
+    """Dibuja un panorama con los cargadores del dashboard. Si faltan, lo dice (nunca muestra cifras de relleno)."""
+    from fri import panoramas as p
+    if cual == "riesgo":
+        p.panorama_riesgo()
+        return
+    if not cargadores:
+        _pendiente("Panorama sin acceso a los datos del dashboard.")
+        return
+    try:
+        df_macro = cargadores["macro"]()
+    except Exception as e:  # noqa: BLE001  la sección sigue funcionando y dice qué falló
+        st.warning(f"No se pudieron cargar las series macroeconómicas: {e}")
+        df_macro = None
+    try:
+        df_precios = cargadores["precios"](tickers=p.tickers_necesarios(cual))
+    except Exception as e:  # noqa: BLE001
+        st.warning(f"No se pudieron cargar los precios: {e}")
+        df_precios = None
+    (p.panorama_macro if cual == "macro" else p.panorama_mercados)(df_macro, df_precios)
