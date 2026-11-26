@@ -59,3 +59,12 @@ def test_la_fila_de_indicadores_se_reparte_en_dos_filas_parejas(monkeypatch):
     for n, mitad in ((6, 3), (4, 2), (5, 3), (1, 1)):
         p._fila("<div>grupo</div>", ["<div>k</div>"] * n)
         assert f"--mitad:{mitad}" in salida[-1] and 'class="fri-kpis fri-kpis-grupo"' in salida[-1]
+
+
+def test_las_tablas_de_instrumentos_no_se_montan_sobre_el_recuadro_vecino():
+    """F4-c: bajo 1600 px la fila de tablas de Mercados pasa a 2×2, y una tabla que no cabe se desplaza dentro de su recuadro."""
+    texto = open(os.path.join(RAIZ, "fri", "panoramas.py"), encoding="utf-8").read()
+    assert 'st.container(key="fri_fila_tablas")' in texto
+    bloque = re.search(r"@media \(max-width: 1600px\) \{\s*\.st-key-fri_fila_tablas(.*?)\n\}", ADAPTABLE, re.S)
+    assert bloque and "flex-wrap: wrap !important" in bloque.group(1) and "calc(50% - 1rem)" in bloque.group(1)
+    assert '[data-testid="stMarkdownContainer"]:has(> .fri-tabla) { overflow-x: auto; }' in ADAPTABLE

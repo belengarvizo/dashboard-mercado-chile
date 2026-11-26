@@ -248,6 +248,14 @@ html, body, [data-testid="stAppViewContainer"], .stApp {{
   .fri-kpis.fri-kpis-grupo > :first-child {{ grid-row: span 2; }}
   .fri-foco {{ grid-template-columns: 150px 1fr 300px; gap: 22px; }}
 }}
+/* F4-c: las tablas de instrumentos nunca se montan sobre el recuadro vecino. Bajo 1600 px, la fila «índices · divisas ·
+   materias primas · comentario» pasa a 2×2; si aun así una tabla no cabe, se desplaza dentro de su propio recuadro. */
+[data-testid="stMarkdownContainer"]:has(> .fri-tabla) {{ overflow-x: auto; }}
+@media (max-width: 1600px) {{
+  .st-key-fri_fila_tablas [data-testid="stHorizontalBlock"] {{ flex-wrap: wrap !important; row-gap: 1rem; }}
+  .st-key-fri_fila_tablas [data-testid="stHorizontalBlock"] > [data-testid="stColumn"] {{
+    flex: 1 1 calc(50% - 1rem) !important; min-width: calc(50% - 1rem) !important; width: calc(50% - 1rem) !important; }}
+}}
 @media (max-width: 1360px) {{
   .fri-tarjeta-nav .h3 {{ font-size: clamp(17px, 1.36vw, 25px); }}
 }}

@@ -269,7 +269,9 @@ def panorama_mercados(df_macro: pd.DataFrame, df_precios: pd.DataFrame) -> None:
                            " No hay una curva completa un mes antes: no se muestra la comparación.")
             st.markdown('<div class="fri-nota">Fuente: Banco Central de Chile (BCP 2, 5 y 10 años). Cada curva usa una sola fecha con los '
                         f'tres plazos (renta_fija.curva_en_fecha): la actual es del {_fecha(f1)}.{nota_previa}</div>', unsafe_allow_html=True)
-    t1, t2, t3, t4 = st.columns([1.1, 1, 1.15, 1], gap="medium")
+    # La clave marca esta fila para que, en pantallas angostas, pase a una grilla de 2×2 (fri/estilos.py, F4-c). Solo presentación.
+    with st.container(key="fri_fila_tablas"):
+        t1, t2, t3, t4 = st.columns([1.1, 1, 1.15, 1], gap="medium")
     with t1, st.container(border=True):
         _titulo_panel("Principales índices")
         st.markdown(_tabla_instrumentos([(n, serie_precio(df_precios, t)) for t, n in INDICES]), unsafe_allow_html=True)
