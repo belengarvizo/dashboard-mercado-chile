@@ -1,0 +1,30 @@
+{
+  "id": "fed_junta",
+  "nombre": "Junta de la Reserva Federal (publicaciones como el H.15)",
+  "tipo": "feriados",
+  "mercado_o_fuente": "Junta de Gobernadores de la Reserva Federal (Board). Calendario de días hábiles de la Junta, que publica el H.15.",
+  "fuente_oficial": "Federal Reserve Board — Holidays Observed (k8), Last Update July 8, 2026",
+  "url": "https://www.federalreserve.gov/aboutthefed/k8.htm",
+  "fecha_verificacion": "2026-11-25",
+  "cobertura": [["2026-01-01", "2026-12-31"]],
+  "feriados": {
+    "2026-01-01": "New Year's Day",
+    "2026-01-19": "Birthday of Martin Luther King, Jr.",
+    "2026-02-16": "Washington's Birthday",
+    "2026-05-25": "Memorial Day",
+    "2026-06-19": "Juneteenth National Independence Day",
+    "2026-07-03": "Independence Day (el 4 cae sábado: la Junta cierra el viernes 3)",
+    "2026-09-07": "Labor Day",
+    "2026-10-12": "Columbus Day",
+    "2026-11-11": "Veterans Day",
+    "2026-11-26": "Thanksgiving Day",
+    "2026-12-25": "Christmas Day"
+  },
+  "cierres_extraordinarios": {},
+  "sesiones_reducidas": {},
+  "limitaciones": [
+    "La fuente cubre 2026–2030, pero solo se verificó 2026 para la Junta. En 2027 la fuente indica la apertura de los Bancos de la Reserva el 18-jun y el 24-dic, sin precisar si la Junta abre esos días, así que 2027 queda sin cobertura para la Junta.",
+    "La fuente no incluye 2025.",
+    "Este calendario indica días hábiles de la Junta, no la hora ni el rezago de publicación del H.15 (H3-E)."
+  ]
+}

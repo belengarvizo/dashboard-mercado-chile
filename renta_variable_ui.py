@@ -38,6 +38,7 @@ import streamlit as st
 
 import glosario_renta_variable as gl
 import renta_fija as rf
+import calendarios_financieros as calf
 import renta_fija_ui as rfui
 import renta_variable as rv
 from catalogo_etfs_acciones import ETFS_ACCIONES, MERCADOS_EEUU, PAISES_Y_REGIONES, SECTORES_EEUU, nombre_de
@@ -97,7 +98,8 @@ def _resumen_de_etfs(precios: pd.DataFrame, tickers: list[str], tasa_libre: floa
         r = rv.resumen_de_etf(precios[ticker], mercado, tasa_libre)
         if r is None:
             continue
-        atraso = int(np.busday_count(r["ultima_fecha"].date(), hoy.date()))
+        # H3-D1: calendario del instrumento (sin bolsa de listado registrada: aproximación de lunes a viernes).
+        atraso = calf.sesiones_entre(calf.calendario_de_instrumento(ticker), r["ultima_fecha"], hoy).sesiones
         r.update({"Grupo": ETFS_ACCIONES[ticker]["grupo"], "_atrasado_bool": atraso > rfui.DIAS_HABILES_DE_ATRASO})
         filas[ticker] = r
     if not filas:

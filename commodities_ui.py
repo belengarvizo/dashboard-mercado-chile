@@ -37,6 +37,7 @@ import plotly.graph_objects as go
 import streamlit as st
 
 import glosario_commodities as gl
+import calendarios_financieros as calf
 import renta_fija_ui as rfui
 import renta_variable as rv
 from catalogo_commodities import COMMODITIES, GRUPOS_EN_ORDEN, nombre_de, tickers_del_grupo
@@ -89,7 +90,8 @@ def _resumen_del_grupo(precios: pd.DataFrame, tickers: list[str], tasa_libre: fl
         r = rv.resumen_de_etf(precios[ticker], mercado, tasa_libre)
         if r is None:
             continue
-        atraso = int(np.busday_count(r["ultima_fecha"].date(), hoy.date()))
+        # H3-D1: cada futuro con el calendario de su bolsa (ICE para el café; CME, aún no verificado, para el resto).
+        atraso = calf.sesiones_entre(calf.calendario_de_instrumento(ticker), r["ultima_fecha"], hoy).sesiones
         r["_atrasado_bool"] = atraso > rfui.DIAS_HABILES_DE_ATRASO
         filas[ticker] = r
     if not filas:

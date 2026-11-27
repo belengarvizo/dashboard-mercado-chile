@@ -1,0 +1,17 @@
+{
+  "id": "dias_corridos",
+  "nombre": "Días corridos",
+  "tipo": "dias_corridos",
+  "mercado_o_fuente": "Series con un valor por cada día del calendario, como la UF (que el BCCh publica por adelantado).",
+  "fuente_oficial": "Calendario estructural (todos los días)",
+  "url": "",
+  "fecha_verificacion": "2026-11-25",
+  "cobertura": "estructural",
+  "feriados": {},
+  "cierres_extraordinarios": {},
+  "sesiones_reducidas": {},
+  "limitaciones": [
+    "Cuenta días del calendario, no sesiones.",
+    "La UF puede tener fechas futuras en la base (se publica por adelantado): un dato posterior a la fecha de comparación da un conteo negativo, no un atraso."
+  ]
+}

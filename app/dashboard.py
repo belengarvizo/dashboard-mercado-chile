@@ -64,6 +64,7 @@ from catalogo_fx import NOMBRE_TASA_EEUU, PARES_FX
 from defensa_topdown import verificar_prediccion as _verificar_prediccion
 import diferencial_bcp_bcu as dif_bcp_bcu
 import fri.interfaz as fri_ui  # interfaz FRI (FRI_INTERFAZ=fri); por defecto, la clásica
+import calendarios_financieros as calf  # H3-D1: sesiones por calendario y umbral único de atraso
 from market_data import (
     calcular_resumen_mercado,
     calcular_cambio_reciente,
@@ -480,23 +481,31 @@ def _mostrar_banner_apagon(df_precios: pd.DataFrame, tickers: list, nombre_unive
     apagon = detectar_apagon_mercado(df_precios, tickers)
     if apagon is None:
         return
+    # H3-D1: si el atraso se contó con un calendario no verificado (aproximación de lunes a viernes), no se afirma el
+    # apagón: se advierte como posible.
+    aproximado = apagon.get("aproximado", False)
     st.error(
-        f"⚠️ **Apagón de datos detectado**: el {apagon['pct_afectado'] * 100:.0f}% de "
+        f"⚠️ **{'Posible apagón de datos' if aproximado else 'Apagón de datos detectado'}**: el "
+        f"{apagon['pct_afectado'] * 100:.0f}% de "
         f"{nombre_universo} no ha recibido precios nuevos de Yahoo Finance desde el "
         f"{apagon['fecha_apagon'].strftime('%Y-%m-%d')}. Esto afecta a un tramo amplio "
         "del mercado en esta fuente, no a acciones específicas — los cálculos de esta "
         "pestaña (retorno, volatilidad, Beta, correlación, optimización, etc.) usan el "
         "último dato real disponible antes del apagón."
+        + (" Los días sin precio se contaron de lunes a viernes, porque el calendario de la bolsa todavía no está "
+           "verificado: un feriado largo podría explicar parte del atraso." if aproximado else "")
     )
 
 
-def _texto_atraso(atrasado: bool, dias_habiles_atraso: int) -> str:
+def _texto_atraso(atrasado: bool, dias_habiles_atraso: int, aproximado: bool = False) -> str:
     """Texto de la columna "Atraso" del heatmap: explícito sobre cuántos días
     hábiles lleva sin refrescarse el precio, en vez de un ícono booleano que
     no dice cuánto atraso hay. "Al día" (no "0 días") cuando no hay atraso,
-    para no insinuar una cuenta que no se está mostrando."""
+    para no insinuar una cuenta que no se está mostrando. Con `aproximado`
+    (H3-D1: el calendario de la bolsa no está verificado para ese tramo) el
+    número se presenta como aproximado, no como una cuenta exacta."""
     if atrasado:
-        return f"Precio congelado — {dias_habiles_atraso} días hábiles"
+        return f"Precio congelado — {'unos ' if aproximado else ''}{dias_habiles_atraso} días hábiles{' (aprox.)' if aproximado else ''}"
     return "Al día"
 
 
@@ -681,8 +690,11 @@ def calcular_resumen_ipsa(df_todas: pd.DataFrame, df_macro: pd.DataFrame, hoy: p
 
         # `hoy` llega como argumento (ver _hoy_normalizado): calcularlo acá lo
         # congelaría en el caché junto con el resto del resultado.
-        dias_habiles_atraso = int(np.busday_count(ultima_fecha_real.date(), hoy.date()))
-        atrasado = dias_habiles_atraso > 5
+        # H3-D1: sesiones del calendario de la Bolsa de Santiago (aproximación de lunes a viernes mientras no esté
+        # verificado) y el umbral único de atraso.
+        conteo_atraso = calf.sesiones_entre(calf.calendario_de_instrumento(ticker), ultima_fecha_real, hoy)
+        dias_habiles_atraso = conteo_atraso.sesiones
+        atrasado = conteo_atraso.atrasado()
 
         # Volatilidad anualizada: rolling 21 días hábiles sobre retornos "reales"
         # únicamente (se excluyen los días de precio congelado — un retorno de 0%
@@ -758,7 +770,7 @@ def calcular_resumen_ipsa(df_todas: pd.DataFrame, df_macro: pd.DataFrame, hoy: p
             "Treynor (%)": treynor,
             "Alpha (%)": alpha,
             "Última actualización": ultima_fecha_real.strftime("%Y-%m-%d"),
-            "Atraso": _texto_atraso(atrasado, dias_habiles_atraso),
+            "Atraso": _texto_atraso(atrasado, dias_habiles_atraso, conteo_atraso.aproximado),
             "_atrasado_bool": atrasado,
         })
 
@@ -837,8 +849,11 @@ def calcular_resumen_dow_jones(df_todas: pd.DataFrame, df_macro: pd.DataFrame, h
         ultima_fecha_real = serie.index[cambia][-1]
 
         # `hoy` llega como argumento, igual que en calcular_resumen_ipsa.
-        dias_habiles_atraso = int(np.busday_count(ultima_fecha_real.date(), hoy.date()))
-        atrasado = dias_habiles_atraso > 5
+        # H3-D1: estas acciones no tienen registrada su bolsa de listado (NYSE o Nasdaq): el conteo es una aproximación
+        # de lunes a viernes rotulada, con el umbral único de atraso.
+        conteo_atraso = calf.sesiones_entre(calf.calendario_de_instrumento(ticker), ultima_fecha_real, hoy)
+        dias_habiles_atraso = conteo_atraso.sesiones
+        atrasado = conteo_atraso.atrasado()
 
         retornos_reales_ticker = retornos_ticker[cambia].dropna()
         volatilidad_anualizada = (
@@ -900,7 +915,7 @@ def calcular_resumen_dow_jones(df_todas: pd.DataFrame, df_macro: pd.DataFrame, h
             "Treynor (%)": treynor,
             "Alpha (%)": alpha,
             "Última actualización": ultima_fecha_real.strftime("%Y-%m-%d"),
-            "Atraso": _texto_atraso(atrasado, dias_habiles_atraso),
+            "Atraso": _texto_atraso(atrasado, dias_habiles_atraso, conteo_atraso.aproximado),
             "_atrasado_bool": atrasado,
         })
 
@@ -3434,7 +3449,8 @@ if _seccion == "Acciones IPSA":
             "La columna \"Atraso\" muestra \"Precio congelado — N días hábiles\" cuando Yahoo "
             "Finance no refrescó el precio de ese ticker hace más de 5 días hábiles (contados "
             "desde la última fecha con cambio real de precio) — el % de cambio mostrado no es "
-            "confiable en ese caso. "
+            "confiable en ese caso. Mientras el calendario de la bolsa no esté verificado, los días "
+            "hábiles se cuentan de lunes a viernes y el número se rotula como aproximado («aprox.»). "
             "\"Sharpe\" = (retorno realizado del último año − Rf) / volatilidad: retorno extra "
             "por unidad de riesgo TOTAL. \"Treynor\" = (retorno realizado − Rf) / Beta: retorno "
             "extra por unidad de riesgo NO diversificable, asumiendo que el resto ya se "
@@ -3748,7 +3764,8 @@ if _seccion == "Acciones Dow Jones":
             "La columna \"Atraso\" muestra \"Precio congelado — N días hábiles\" cuando Yahoo "
             "Finance no refrescó el precio de ese ticker hace más de 5 días hábiles (contados "
             "desde la última fecha con cambio real de precio) — el % de cambio mostrado no es "
-            "confiable en ese caso. "
+            "confiable en ese caso. Mientras el calendario de la bolsa no esté verificado, los días "
+            "hábiles se cuentan de lunes a viernes y el número se rotula como aproximado («aprox.»). "
             "\"Sharpe\" = (retorno realizado del último año − Rf) / volatilidad. \"Treynor\" = "
             "(retorno realizado − Rf) / Beta. "
             "\"Alpha\" (Jensen, simplificado): retorno realizado del último año menos el mínimo "

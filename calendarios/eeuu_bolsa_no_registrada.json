@@ -1,0 +1,18 @@
+{
+  "id": "eeuu_bolsa_no_registrada",
+  "nombre": "Instrumentos de EE. UU. sin bolsa de listado registrada",
+  "tipo": "feriados",
+  "mercado_o_fuente": "ETF e índices de EE. UU. de Yahoo Finance (por ejemplo ^GSPC, ^DJI, ^IXIC, ^VIX, ^TNX, ECH, SHY, TLT, SPY). El catálogo no registra en qué bolsa cotiza o se calcula cada uno.",
+  "fuente_oficial": "Ninguna: falta registrar la bolsa de listado de cada instrumento",
+  "url": "",
+  "fecha_verificacion": "2026-11-25",
+  "cobertura": [],
+  "feriados": {},
+  "cierres_extraordinarios": {},
+  "sesiones_reducidas": {},
+  "limitaciones": [
+    "NO VERIFICADO: no se asume que todos los ETF cotizan en NYSE. Algunos pueden cotizar en Nasdaq, cuyo calendario tampoco se verificó.",
+    "Para usar el calendario de la NYSE (verificado 2026–2028), primero hay que registrar con fuente la bolsa de listado de cada instrumento.",
+    "Mientras tanto, el conteo usa lunes a viernes como aproximación rotulada."
+  ]
+}

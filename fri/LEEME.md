@@ -52,7 +52,7 @@ Las herramientas viven fuera del repositorio, en `%USERPROFILE%\FRI-local\`:
 | Investigador y Observatorio regulatorio | «Pendiente de implementación». |
 | Informe dominical | «No implementado»; la fecha prevista no es una publicación programada. |
 | Nuevos modelos de derivados | «Pendiente de implementación»; se usan los motores existentes. |
-| Antigüedad de los datos | Cada cifra muestra su fecha real, pero no se marcan automáticamente los datos atrasados (H3-D en curso). |
+| Antigüedad de los datos | Cada cifra muestra su fecha real. Los panoramas no marcan datos atrasados (H3-D3 pendiente); las tablas de cada sección sí, con el calendario de su mercado (H3-D1) o una aproximación rotulada si no está verificado. |
 
 ## Pendiente de revisión (sin ampliar el uso actual)
 

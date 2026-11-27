@@ -1,0 +1,40 @@
+{
+  "id": "chile_bancario",
+  "nombre": "Días hábiles bancarios de Chile",
+  "tipo": "feriados",
+  "mercado_o_fuente": "Mercado bancario chileno: feriados legales nacionales más el feriado bancario del 31 de diciembre.",
+  "fuente_oficial": "Gobierno de Chile (gob.cl), Feriados 2026; CMF (24-12-2025) sobre la Ley N° 21.791 (Diario Oficial 17-12-2025), que repone el feriado bancario del 31 de diciembre (art. 38 de la Ley General de Bancos, «cada año»)",
+  "url": "https://www.gob.cl/noticias/feriados-2026-revisa-cuantos-habra-y-cuales-son-irrenunciables/",
+  "url_adicional": "https://www.cmfchile.cl/portal/prensa/625/w4-article-102258.html",
+  "fecha_verificacion": "2026-11-25",
+  "cobertura": [["2026-01-01", "2026-12-31"]],
+  "feriados": {
+    "2026-01-01": "Año Nuevo (irrenunciable)",
+    "2026-04-03": "Viernes Santo",
+    "2026-04-04": "Sábado Santo (sábado)",
+    "2026-05-01": "Día del Trabajo (irrenunciable)",
+    "2026-05-21": "Día de las Glorias Navales",
+    "2026-06-21": "Día de los Pueblos Indígenas (domingo)",
+    "2026-06-29": "San Pedro y San Pablo",
+    "2026-07-16": "Virgen del Carmen",
+    "2026-08-15": "Asunción de la Virgen (sábado)",
+    "2026-09-18": "Independencia Nacional (irrenunciable)",
+    "2026-09-19": "Glorias del Ejército (irrenunciable, sábado)",
+    "2026-10-12": "Encuentro de Dos Mundos",
+    "2026-10-31": "Día de las Iglesias Evangélicas y Protestantes (sábado)",
+    "2026-11-01": "Día de Todos los Santos (domingo)",
+    "2026-12-08": "Inmaculada Concepción",
+    "2026-12-25": "Navidad (irrenunciable)",
+    "2026-12-31": "Feriado bancario (art. 38 LGB, repuesto por la Ley N° 21.791)"
+  },
+  "derivado_de_regla": {
+    "2026-12-31": "La CMF informó el cierre del 31-dic-2025. Para 2026 se aplica la misma regla anual del art. 38 de la LGB («cada año»), repuesta por la Ley N° 21.791; no hay un comunicado específico de 2026."
+  },
+  "cierres_extraordinarios": {},
+  "sesiones_reducidas": {},
+  "limitaciones": [
+    "Solo se verificó 2026. 2025 y 2027 quedan sin cobertura (no se encontró la página oficial).",
+    "Los feriados regionales no se incluyen como nacionales: 7-jun (Arica y Parinacota) y 20-ago (Chillán y Chillán Viejo).",
+    "Para 2023–2024 no se verificó si hubo cierre bancario el 31 de diciembre (la regla fue eliminada en 2023 y repuesta en dic-2025)."
+  ]
+}

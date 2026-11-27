@@ -36,9 +36,11 @@ NOMBRE_TREASURY_10 = rfui.nombre_treasury("10 años")      # H.15 (decisión de 
 TICKER_SP500 = "^GSPC"
 INDICES = [(TICKER_SP500, "S&P 500"), (TICKER_DOW_JONES, "Dow Jones"), (TICKER_NASDAQ, "Nasdaq Composite"), ("EEM", "MSCI Emergentes (EEM)")]
 PARES_PANORAMA = ["USDCLP=X", "EURUSD=X", "USDJPY=X", "USDBRL=X", "USDMXN=X"]
-# H3-D en curso: se muestran las fechas reales, pero todavía no se marca automáticamente qué dato está atrasado.
-NOTA_ANTIGUEDAD = ("Antigüedad de los datos: cada cifra muestra su fecha real, pero FRI todavía no marca automáticamente los datos "
-                   "atrasados según el calendario de cada mercado (corrección H3-D en curso). Compara la fecha con la de hoy.")
+# H3-D1 hecho (calendarios en las tablas de cada sección); los estados de frescura de los panoramas quedan para H3-D3.
+NOTA_ANTIGUEDAD = ("Antigüedad de los datos: cada cifra muestra su fecha real, pero estos panoramas todavía no marcan los datos "
+                   "atrasados (corrección H3-D3 pendiente). Las tablas de cada sección sí los marcan con el calendario de su "
+                   "mercado, o con una aproximación de lunes a viernes si ese calendario no está verificado. Compara la fecha con "
+                   "la de hoy.")
 MOTIVO_IPSA = ("No hay una serie directa del IPSA verificada en la base. ECH (un ETF en dólares) no se presenta como IPSA. "
                "Fuente candidata: serie diaria del Banco Central de Chile, pendiente de confirmar.")
 

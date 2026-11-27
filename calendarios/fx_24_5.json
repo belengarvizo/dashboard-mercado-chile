@@ -1,0 +1,18 @@
+{
+  "id": "fx_24_5",
+  "nombre": "Mercado cambiario (24 horas, 5 días a la semana)",
+  "tipo": "lunes_a_viernes",
+  "mercado_o_fuente": "Pares de divisas «=X» de Yahoo Finance. El mercado cambiario no tiene una bolsa central: opera de lunes a viernes, también en la mayoría de los feriados nacionales.",
+  "fuente_oficial": "Calendario estructural (sin lista de feriados)",
+  "url": "",
+  "fecha_verificacion": "2026-11-25",
+  "cobertura": "estructural",
+  "feriados": {},
+  "cierres_extraordinarios": {},
+  "sesiones_reducidas": {},
+  "limitaciones": [
+    "Calendario estructural, no una lista oficial: todos los días de lunes a viernes cuentan como sesión.",
+    "En feriados de alguna plaza (por ejemplo, Navidad o Año Nuevo) la liquidez es mínima y Yahoo puede no traer dato; eso no se marca como cierre.",
+    "La convención de fecha de los pares «=X» de Yahoo está pendiente de verificar (H3-10)."
+  ]
+}

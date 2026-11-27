@@ -42,6 +42,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
+import calendarios_financieros as calf  # H3-D1: calendario de cada instrumento y umbral único de atraso
 import estructura_tasas as et
 import fx_carry as fx  # H3-07: mismo criterio de tasa vigente que la sección FX
 import glosario_renta_fija as gl
@@ -109,7 +110,11 @@ HORIZONTES = {0.5: "6 meses", 1.0: "1 año"}
 # Más de tantos días seguidos sin dato en una serie se considera un hueco: la línea
 # del gráfico se corta ahí, en vez de unir los dos bordes con una recta que parece dato.
 UMBRAL_HUECO_DIAS = 30
-DIAS_HABILES_DE_ATRASO = 5
+# Umbral único de «dato atrasado» (más de 5 sesiones), definido en calendarios_financieros (H3-D1). Este nombre se conserva
+# porque lo usan las demás secciones y el informe en PDF.
+DIAS_HABILES_DE_ATRASO = calf.UMBRAL_SESIONES_DE_ATRASO
+# H3-D1: el diferencial TPM − fondos federales necesita las dos tasas: cuenta solo días que son sesión en los dos calendarios.
+CALENDARIOS_DIFERENCIAL_TPM_FED = ("bcch_series", "fed_nueva_york")
 
 COLUMNAS_TABLA = [
     "Grupo", "1D %", "1W %", "1M %", "YTD %", "Retorno 1 año (%)", "Volatilidad (%)", "Caída máxima 1 año (%)",
@@ -313,7 +318,7 @@ def _resumen_de_etfs(precios: pd.DataFrame, macro: pd.DataFrame, hoy: pd.Timesta
         )
         if r is None:
             continue
-        atraso = int(np.busday_count(r["ultima_fecha"].date(), hoy.date()))
+        atraso = calf.sesiones_entre(calf.calendario_de_instrumento(ticker), r["ultima_fecha"], hoy).sesiones
         if not usa_tasa_nominal(ticker):
             # I-4a: la regresión contra la tasa nominal no es la duración real de TIP: no se estima.
             r.update({columna: None for columna in COLUMNAS_DE_SENSIBILIDAD_NOMINAL})
@@ -734,11 +739,16 @@ def _ultimo_comun(a: pd.Series, b: pd.Series):
     return (float(juntas.iloc[-1, 0]), float(juntas.iloc[-1, 1]), juntas.index[-1]) if len(juntas) else None
 
 
-def atraso_habil(fecha, hoy) -> int | None:
-    """Días hábiles entre la fecha de un dato y `hoy` (la fecha de consulta o de corte), o None si falta alguna."""
-    if fecha is None or hoy is None:
-        return None
-    return int(np.busday_count(pd.Timestamp(fecha).date(), pd.Timestamp(hoy).date()))
+def conteo_de_atraso(fecha, hoy, calendarios=CALENDARIOS_DIFERENCIAL_TPM_FED) -> calf.ConteoSesiones | None:
+    """Sesiones entre la fecha de un dato y `hoy` (la fecha de consulta o de corte), con su calendario (H3-D1), o None si
+    falta alguna fecha. Convención de calendarios_financieros.sesiones_entre: incluye la fecha del dato, excluye `hoy`."""
+    return calf.sesiones_entre(calendarios, fecha, hoy)
+
+
+def atraso_habil(fecha, hoy, calendarios=CALENDARIOS_DIFERENCIAL_TPM_FED) -> int | None:
+    """Número de sesiones de conteo_de_atraso, o None si falta alguna fecha."""
+    conteo = conteo_de_atraso(fecha, hoy, calendarios)
+    return None if conteo is None else conteo.sesiones
 
 
 def texto_diferencial_tpm_fed(dif: dict, hoy=None) -> str:
@@ -760,11 +770,14 @@ def texto_diferencial_tpm_fed(dif: dict, hoy=None) -> str:
 
 def texto_atraso_diferencial(dif: dict, hoy) -> str:
     """Aviso si la fecha de referencia del diferencial quedó atrás respecto de `hoy` (más de DIAS_HABILES_DE_ATRASO)."""
-    atraso = atraso_habil(dif["fecha_referencia"], hoy)
-    if atraso is None or atraso <= DIAS_HABILES_DE_ATRASO:
+    conteo = conteo_de_atraso(dif["fecha_referencia"], hoy)
+    if conteo is None or not conteo.atrasado(DIAS_HABILES_DE_ATRASO):
         return ""
-    return (f" Dato atrasado: esa fecha está {atraso} días hábiles antes de {_fecha(hoy)}; es un diferencial histórico, no el "
-            "de hoy.")
+    if not conteo.verificado:     # H3-D1: con un calendario no verificado no se afirma el atraso; se advierte
+        return (f" Posible dato atrasado: esa fecha está {calf.texto_de_conteo(conteo)} antes de {_fecha(hoy)}; "
+                "probablemente es un diferencial histórico, no el de hoy.")
+    return (f" Dato atrasado: esa fecha está {calf.texto_de_conteo(conteo)} antes de {_fecha(hoy)}; es un diferencial "
+            "histórico, no el de hoy.")
 
 
 def pendiente_2s10s(macro: pd.DataFrame) -> dict | None:

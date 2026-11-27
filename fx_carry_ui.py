@@ -36,6 +36,7 @@ import streamlit as st
 import fx_carry as fx
 import glosario_fx as gl
 import renta_fija as rf
+import calendarios_financieros as calf
 import renta_fija_ui as rfui
 from catalogo_fx import (
     MONEDAS_CARRY, MONEDAS_SIN_TASA, NOMBRE_COBRE, NOMBRE_TASA_CHILE, NOMBRE_TASA_EEUU, NOMBRE_TIPO_DE_CAMBIO_OBSERVADO,
@@ -127,7 +128,8 @@ def _resumen_de_pares(precios: pd.DataFrame, hoy: pd.Timestamp) -> pd.DataFrame 
         r = fx.resumen_de_par(precios[ticker], pd.Series(dtype=float) if ticker == TICKER_DXY else referencia)
         if r is None:
             continue
-        atraso = int(np.busday_count(r["ultima_fecha"].date(), hoy.date()))
+        # H3-D1: pares «=X» con el calendario cambiario 24/5; el índice dólar, con el de ICE (aún no verificado).
+        atraso = calf.sesiones_entre(calf.calendario_de_instrumento(ticker), r["ultima_fecha"], hoy).sesiones
         r.update({"Grupo": datos["grupo"], "ticker": ticker, "_atrasado_bool": atraso > rfui.DIAS_HABILES_DE_ATRASO})
         filas[etiqueta_corta(ticker)] = r
     if not filas:
@@ -240,7 +242,8 @@ def _resumen_del_carry(macro: pd.DataFrame, precios: pd.DataFrame, hoy: pd.Times
         # H3-06: la tasa local y la de EEUU que se muestran son EXACTAMENTE las del diferencial de la fila (vigentes al inicio
         # del último tramo), no la última de cada serie en su propia fecha.
         usadas = _tasas_usadas(macro, precios, codigo, r)
-        atraso = int(np.busday_count(resumen["hasta"].date(), hoy.date()))
+        # H3-D1: el retorno del carry sigue al par de divisas: calendario cambiario 24/5.
+        atraso = calf.sesiones_entre("fx_24_5", resumen["hasta"], hoy).sesiones
         filas[codigo] = {
             "Tasa local (%)": usadas["tasa_moneda"],
             "Diferencial (pp)": resumen["diferencial_actual"], "Spot 1 año (%)": resumen["spot"],

@@ -1,0 +1,18 @@
+{
+  "id": "bolsa_santiago",
+  "nombre": "Bolsa de Santiago",
+  "tipo": "feriados",
+  "mercado_o_fuente": "Bolsa de Comercio de Santiago (acciones «.SN»).",
+  "fuente_oficial": "Bolsa de Santiago — Horarios y feriados",
+  "url": "https://www.bolsadesantiago.com/mercado_horarios_feriados",
+  "fecha_verificacion": "2026-11-25",
+  "cobertura": [],
+  "feriados": {},
+  "cierres_extraordinarios": {},
+  "sesiones_reducidas": {},
+  "limitaciones": [
+    "Calendario NO VERIFICADO: la página oficial se carga con JavaScript y no se pudo obtener la lista.",
+    "No se asume que la Bolsa sigue exactamente los feriados legales (por ejemplo, el 31 de diciembre bancario).",
+    "Mientras no se verifique, el conteo usa lunes a viernes como aproximación rotulada."
+  ]
+}

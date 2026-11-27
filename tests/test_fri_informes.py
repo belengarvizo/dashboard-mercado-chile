@@ -109,6 +109,7 @@ def test_la_interfaz_no_activa_tareas_programadas_ni_gemini():
 
 def test_los_panoramas_advierten_que_aun_no_se_marcan_los_datos_atrasados():
     import fri.panoramas as p
-    assert "corrección H3-D en curso" in p.NOTA_ANTIGUEDAD
+    # H3-D1: la nota no contradice a los motores: los panoramas aún no marcan atraso (H3-D3); las tablas sí, con su calendario.
+    assert "corrección H3-D3 pendiente" in p.NOTA_ANTIGUEDAD and "aproximación de lunes a viernes" in p.NOTA_ANTIGUEDAD
     fuente = open(os.path.join(RAIZ, "fri", "panoramas.py"), encoding="utf-8").read()
     assert fuente.count("{NOTA_ANTIGUEDAD}") == 2   # en Macroeconomía y en Mercados

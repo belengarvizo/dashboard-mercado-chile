@@ -1,0 +1,37 @@
+{
+  "id": "ice_futures_us_blandos",
+  "nombre": "ICE Futures U.S. — productos blandos (Coffee \"C\", cacao, algodón, FCOJ, azúcar)",
+  "tipo": "feriados",
+  "mercado_o_fuente": "ICE Futures U.S., contratos de café «C», cacao, algodón, jugo de naranja (FCOJ) y azúcar.",
+  "fuente_oficial": "ICE Futures U.S. — Exchange Notice «2026 Trading Holiday Calendar» (9-jun-2025) y aviso de Thanksgiving 2026 (23-sep-2026)",
+  "url": "https://www.ice.com/publicdocs/futures_us/exchange_notices/ICE_Futures_US_Exchange_Notice_2026_Holiday_Calendar_20260609.pdf",
+  "fecha_verificacion": "2026-11-25",
+  "cobertura": [["2026-01-01", "2026-12-31"]],
+  "instrumentos": ["KC=F"],
+  "feriados": {
+    "2026-01-01": "New Year's Day",
+    "2026-01-19": "Martin Luther King, Jr. Day",
+    "2026-02-16": "Presidents' Day",
+    "2026-04-03": "Good Friday",
+    "2026-05-25": "Memorial Day",
+    "2026-06-19": "Juneteenth",
+    "2026-07-03": "Independence Day (observado)",
+    "2026-09-07": "Labor Day",
+    "2026-11-26": "Thanksgiving Day",
+    "2026-12-25": "Christmas Day",
+    "2027-01-01": "New Year's Day (fuera de la cobertura: el resto de 2027 no se verificó)"
+  },
+  "abiertos_aunque_haya_feriado": {
+    "2026-10-12": "Columbus Day: abierto",
+    "2026-11-11": "Veterans Day: abierto",
+    "2026-12-28": "abierto",
+    "2026-11-27": "día siguiente a Thanksgiving: horario regular para el café (aviso del 23-sep-2026)"
+  },
+  "cierres_extraordinarios": {},
+  "sesiones_reducidas": {},
+  "limitaciones": [
+    "Solo 2026 (más el 1-ene-2027). 2025 y el resto de 2027 no se verificaron.",
+    "El aviso no detalla sesiones reducidas para estos productos: no se cargó ninguna.",
+    "No cubre otros productos de ICE (por ejemplo, el índice dólar DX), que tienen otro calendario."
+  ]
+}

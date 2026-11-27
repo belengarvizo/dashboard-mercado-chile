@@ -1,0 +1,46 @@
+{
+  "id": "fed_nueva_york",
+  "nombre": "Reserva Federal de Nueva York (publicación de la EFFR / DFF)",
+  "tipo": "feriados",
+  "mercado_o_fuente": "Federal Reserve Bank of New York. La EFFR se publica «each business day that is not included in the Federal Reserve Bank of New York's Holiday Schedule», con la tasa del día hábil anterior. La serie DFF de FRED trae observaciones en días corridos, pero eso no significa que se publiquen tasas nuevas los siete días de la semana.",
+  "fuente_oficial": "Federal Reserve Bank of New York — Holiday Schedule (2026–2029) y Additional Information about Reference Rates; Federal Reserve — Holidays Observed (k8)",
+  "url": "https://www.newyorkfed.org/aboutthefed/holiday_schedule",
+  "url_adicional": "https://www.newyorkfed.org/markets/reference-rates/additional-information-about-reference-rates",
+  "fecha_verificacion": "2026-11-25",
+  "uso": "Calendario de PUBLICACIÓN de la EFFR: días en que puede llegar una tasa nueva. No es el calendario de OBSERVACIONES de la serie DFF de FRED, que trae un valor por cada día corrido (los fines de semana y feriados repiten la tasa vigente); ese calendario es «dias_corridos». La frescura se mide con este calendario de publicación.",
+  "cobertura": [["2026-01-01", "2027-12-30"]],
+  "feriados": {
+    "2026-01-01": "New Year's Day",
+    "2026-01-19": "Birthday of Martin Luther King, Jr.",
+    "2026-02-16": "Washington's Birthday",
+    "2026-05-25": "Memorial Day",
+    "2026-06-19": "Juneteenth National Independence Day",
+    "2026-09-07": "Labor Day",
+    "2026-10-12": "Columbus Day",
+    "2026-11-11": "Veterans Day",
+    "2026-11-26": "Thanksgiving Day",
+    "2026-12-25": "Christmas Day",
+    "2027-01-01": "New Year's Day",
+    "2027-01-18": "Birthday of Martin Luther King, Jr.",
+    "2027-02-15": "Washington's Birthday",
+    "2027-05-31": "Memorial Day",
+    "2027-07-05": "Independence Day (el 4 cae domingo: cierra el lunes 5)",
+    "2027-09-06": "Labor Day",
+    "2027-10-11": "Columbus Day",
+    "2027-11-11": "Veterans Day",
+    "2027-11-25": "Thanksgiving Day"
+  },
+  "abiertos_aunque_haya_feriado": {
+    "2026-07-03": "Independence Day cae sábado: los Bancos de la Reserva abren el viernes 3 (la Junta cierra)",
+    "2027-06-18": "Juneteenth cae sábado: los Bancos de la Reserva abren el viernes 18",
+    "2027-12-24": "Christmas Day cae sábado: los Bancos de la Reserva abren el viernes 24"
+  },
+  "cierres_extraordinarios": {},
+  "sesiones_reducidas": {},
+  "limitaciones": [
+    "La cobertura termina el 30-dic-2027: para el 31-dic-2027 la fuente solo indica que la Junta cierra (Año Nuevo 2028 en sábado); no se verificó si abre la Reserva Federal de Nueva York.",
+    "La fuente no incluye 2025.",
+    "Indica días de publicación, no la hora: la EFFR se publica cerca de las 9:00 a.m. ET y puede revisarse cerca de las 2:30 p.m. ET.",
+    "No se reconstruyen fechas históricas de publicación (fuera del alcance de H3-D1)."
+  ]
+}

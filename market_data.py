@@ -9,6 +9,8 @@ import numpy as np
 import pandas as pd
 from scipy import stats
 
+import calendarios_financieros as calf
+
 # (etiqueta, tipo de tabla de origen, nombre/ticker, unidad a mostrar, cadencia,
 #  menor_es_mejor)
 # `cadencia` ("diaria" | "mensual") controla la regla de frescura del badge de
@@ -61,25 +63,28 @@ INDICADORES_PREMERCADO = [
     ("Tasa de desempleo (sin ajuste)", "macro", "Tasa de desocupación nacional (INE, sin ajuste estacional)", "%", "mensual", True),
 ]
 
-# Feriados de EEUU 2026 (calendario de la Reserva Federal) — para medir
-# "días hábiles detrás" en las series de fuente estadounidense (ej. la
-# Effective Federal Funds Rate de FRED, que no publica dato nuevo en
-# feriado). Lista mínima a propósito: se usa solo para np.busday_count en la
-# regla de frescura del badge, no vale la pena una librería de calendarios.
-# Actualizar en enero de 2027.
-FERIADOS_EEUU_2026 = [
-    "2026-01-01",  # New Year's Day
-    "2026-01-19",  # Martin Luther King Jr. Day
-    "2026-02-16",  # Presidents' Day
-    "2026-05-25",  # Memorial Day
-    "2026-06-19",  # Juneteenth
-    "2026-07-03",  # Independence Day (observado; el 4 cae sábado)
-    "2026-09-07",  # Labor Day
-    "2026-10-12",  # Columbus Day
-    "2026-11-11",  # Veterans Day
-    "2026-11-26",  # Thanksgiving
-    "2026-12-25",  # Christmas
-]
+# H3-D1: calendario de cada indicador DIARIO para la regla de frescura del badge (antes, una sola lista manual de
+# feriados federales de EE. UU. 2026 para todas las series, que vencía en enero de 2027). Cada serie se cuenta con el
+# calendario del mercado donde se forma o de la fuente que la publica (calendarios/*.json). Sin calendario verificado
+# para el tramo, el conteo es una aproximación de lunes a viernes y queda marcado como tal (calendarios_financieros).
+CALENDARIO_DE_INDICADOR = {
+    "S&P 500": calf.calendario_de_instrumento("^GSPC"),
+    "Dow Jones": calf.calendario_de_instrumento("^DJI"),
+    "Nasdaq": calf.calendario_de_instrumento("^IXIC"),
+    "VIX": calf.calendario_de_instrumento("^VIX"),
+    # Series del BCCh: días hábiles bancarios de Chile como APROXIMACIÓN de su calendario de publicación (no verificado serie
+    # por serie; ver calendarios/bcch_series.json).
+    "Cobre": "bcch_series",                                  # precio del cobre del Banco Central de Chile
+    "Petróleo WTI": calf.calendario_de_instrumento("CL=F"),  # futuro NYMEX (CME Group)
+    "Bono UST 10 años": calf.calendario_de_instrumento("^TNX"),  # ^TNX de Yahoo (índice de Cboe), no el H.15
+    # DFF: se mide con el calendario de PUBLICACIÓN de la Fed de Nueva York, no con el de OBSERVACIONES de FRED (que trae
+    # un valor por cada día corrido y repite la tasa los fines de semana y feriados). Ver calendarios/fed_nueva_york.json.
+    "TPM EEUU": "fed_nueva_york",
+    "IPSA (proxy ECH)": calf.calendario_de_instrumento("ECH"),
+    "USD/CLP": "bcch_series",                                # dólar observado
+    "UF": "dias_corridos",                                   # un valor por día, publicado por adelantado
+    "TPM Chile": "bcch_series",
+}
 
 
 def calcular_cambio_reciente(serie: pd.Series) -> tuple[float, float, object, float] | None:
@@ -235,10 +240,12 @@ def _badge_visible(item: dict, fecha_referencia) -> bool:
     muestra (su atraso frente a las diarias es esperado); una serie DIARIA
     lo oculta si su último dato quedó más de un día hábil detrás de
     `fecha_referencia` (la fecha más reciente entre los indicadores diarios)
-    — ahí "+0.00%" significa "no llegó dato nuevo", no "sin cambio". Los
-    días hábiles se cuentan con el calendario de feriados de EEUU (cubre el
-    caso de la Effective Federal Funds Rate, que no publica en feriado
-    estadounidense)."""
+    — ahí "+0.00%" significa "no llegó dato nuevo", no "sin cambio". Las
+    sesiones se cuentan con el calendario de CADA serie (CALENDARIO_DE_INDICADOR,
+    H3-D1): por ejemplo, la Effective Federal Funds Rate con los días hábiles de
+    la Fed de Nueva York y el dólar observado con los días hábiles bancarios de
+    Chile. El conteo queda en item["frescura"] (calendarios_financieros.ConteoSesiones),
+    que dice si el calendario estaba verificado para ese tramo o si es una aproximación."""
     if item["resultado"] is None:
         return False
     if item["cadencia"] == "mensual":
@@ -246,8 +253,9 @@ def _badge_visible(item: dict, fecha_referencia) -> bool:
     if fecha_referencia is None:
         return True
     fecha_dato = pd.Timestamp(item["resultado"][2]).date()
-    dias_habiles_detras = int(np.busday_count(fecha_dato, fecha_referencia, holidays=FERIADOS_EEUU_2026))
-    return dias_habiles_detras <= 1
+    conteo = calf.sesiones_entre(item.get("calendario"), fecha_dato, fecha_referencia)
+    item["frescura"] = conteo
+    return conteo.sesiones <= 1
 
 
 def calcular_resumen_mercado(df_macro: pd.DataFrame, df_acciones: pd.DataFrame) -> list[dict]:
@@ -278,6 +286,7 @@ def calcular_resumen_mercado(df_macro: pd.DataFrame, df_acciones: pd.DataFrame) 
             "cadencia": cadencia,
             "menor_es_mejor": menor_es_mejor,
             "resultado": calcular_cambio_reciente(serie),
+            "calendario": CALENDARIO_DE_INDICADOR.get(etiqueta) if cadencia == "diaria" else None,
         })
 
     fechas_diarias = [
@@ -303,7 +312,7 @@ def detectar_apagon_mercado(
     tickers: list,
     umbral_pct: float = 0.8,
     ventana_dias: int = 3,
-    dias_habiles_min_atraso: int = 5,
+    dias_habiles_min_atraso: int = calf.UMBRAL_SESIONES_DE_ATRASO,
 ) -> dict | None:
     """Detecta un corte de la fuente de datos a nivel de mercado completo
     (ej. Yahoo Finance dejó de refrescar toda la Bolsa de Santiago), a
@@ -334,6 +343,7 @@ def detectar_apagon_mercado(
     hoy = pd.Timestamp.now().normalize()
 
     fechas_atraso = []
+    conteo_aproximado = False
     for ticker in tickers:
         serie = df_precios[df_precios["ticker"] == ticker].sort_values("fecha").set_index("fecha")["precio_cierre"]
         if len(serie) < 2:
@@ -341,9 +351,12 @@ def detectar_apagon_mercado(
         cambia = serie.ne(serie.shift(1))
         cambia.iloc[0] = True
         ultima_fecha_real = serie.index[cambia][-1]
-        dias_atraso = int(np.busday_count(ultima_fecha_real.date(), hoy.date()))
-        if dias_atraso > dias_habiles_min_atraso:
+        # H3-D1: sesiones del calendario del ticker (Bolsa de Santiago para «.SN»; mientras no esté verificado, es una
+        # aproximación de lunes a viernes, igual que antes, y el resultado lo dice en «aproximado»).
+        conteo = calf.sesiones_entre(calf.calendario_de_instrumento(ticker), ultima_fecha_real, hoy)
+        if conteo.sesiones > dias_habiles_min_atraso:
             fechas_atraso.append(ultima_fecha_real)
+            conteo_aproximado = conteo_aproximado or not conteo.verificado
 
     n_total = len(tickers)
     if not fechas_atraso or n_total == 0:
@@ -361,6 +374,8 @@ def detectar_apagon_mercado(
         "n_afectados": len(agrupadas),
         "n_total": n_total,
         "fecha_apagon": fecha_min.date(),
+        # H3-D1: True si el atraso se contó con un calendario no verificado (aproximación de lunes a viernes).
+        "aproximado": conteo_aproximado,
     }
 
 

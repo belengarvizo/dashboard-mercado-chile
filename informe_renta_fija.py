@@ -38,6 +38,7 @@ import estructura_tasas as et
 import fx_carry as fx  # H3-07: diferencial TPM − fondos federales con el mismo criterio que la pantalla
 import informe_base as ib
 import renta_fija as rf
+import calendarios_financieros as calf
 import renta_fija_ui as rfui
 from catalogo_renta_fija import ETFS_RENTA_FIJA
 
@@ -497,7 +498,9 @@ def calcular(macro: pd.DataFrame, precios: pd.DataFrame, dias: int, nombre_perio
                 [u for u in (_ultima(rfui._serie(macro, n)) for n in (rfui.NOMBRE_BCP10, rfui.NOMBRE_BCU10, rfui.NOMBRE_TPM_CHILE))
                  if u is not None], default=None),
         },
-        "dias_habiles_de_atraso": (int(np.busday_count(ventana["ultimo_precio"].date(), corte.date()))
+        # H3-D1: sesiones del calendario de los ETF (sin bolsa de listado registrada: aproximación de lunes a viernes, que
+        # la portada ya presenta como «estimado sin feriados»). Las ruedas observadas de la ventana no cambian.
+        "dias_habiles_de_atraso": (calf.sesiones_entre("eeuu_bolsa_no_registrada", ventana["ultimo_precio"], corte).sesiones
                                    if corte is not None and ventana["ultimo_precio"] is not None else None),
     }
     credito, credito_motivo = _credito(macro, dias, ventana)

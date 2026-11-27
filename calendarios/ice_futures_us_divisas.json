@@ -1,0 +1,17 @@
+{
+  "id": "ice_futures_us_divisas",
+  "nombre": "ICE Futures U.S. — índice dólar (DX)",
+  "tipo": "feriados",
+  "mercado_o_fuente": "Índice dólar de ICE Futures U.S. (ticker de Yahoo DX-Y.NYB).",
+  "fuente_oficial": "ICE Futures U.S. — Trading Holiday Calendar",
+  "url": "https://www.ice.com/publicdocs/futures_us/exchange_notices/ICE_Futures_US_Exchange_Notice_2026_Holiday_Calendar_20260609.pdf",
+  "fecha_verificacion": "2026-11-25",
+  "cobertura": [],
+  "instrumentos": ["DX-Y.NYB"],
+  "feriados": {},
+  "cierres_extraordinarios": {},
+  "sesiones_reducidas": {},
+  "limitaciones": [
+    "Calendario NO VERIFICADO para el índice dólar: en el aviso de ICE solo se registraron las fechas de los productos blandos (café, cacao, algodón, FCOJ, azúcar)."
+  ]
+}

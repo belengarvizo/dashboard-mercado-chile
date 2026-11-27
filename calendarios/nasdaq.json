@@ -1,0 +1,17 @@
+{
+  "id": "nasdaq",
+  "nombre": "Nasdaq",
+  "tipo": "feriados",
+  "mercado_o_fuente": "Nasdaq Stock Market.",
+  "fuente_oficial": "Nasdaq Trader — Holiday Schedule",
+  "url": "https://www.nasdaqtrader.com/Trader.aspx?id=Calendar",
+  "fecha_verificacion": "2026-11-25",
+  "cobertura": [],
+  "feriados": {},
+  "cierres_extraordinarios": {},
+  "sesiones_reducidas": {},
+  "limitaciones": [
+    "Calendario NO VERIFICADO: nasdaqtrader.com redirigió a una página de error y nasdaq.com agotó el tiempo de espera.",
+    "No se asume que coincide con la NYSE."
+  ]
+}

@@ -1,0 +1,15 @@
+{
+  "id": "bcch_series",
+  "nombre": "Series diarias del Banco Central de Chile",
+  "tipo": "feriados",
+  "base": "chile_bancario",
+  "mercado_o_fuente": "Series diarias del BCCh (dólar observado, TPM, cobre, BCP/BCU), contadas con los días hábiles bancarios de Chile.",
+  "fuente_oficial": "Las del calendario base chile_bancario",
+  "url": "https://www.gob.cl/noticias/feriados-2026-revisa-cuantos-habra-y-cuales-son-irrenunciables/",
+  "fecha_verificacion": "2026-11-25",
+  "supuesto": "APROXIMACIÓN: se supone que el BCCh publica sus series diarias (dólar observado, TPM, cobre, BCP/BCU) en días hábiles bancarios de Chile. No es una verificación individual de cada serie: el calendario de publicaciones del propio BCCh no se verificó, y una serie concreta podría publicarse con otro calendario o rezago.",
+  "limitaciones": [
+    "Supuesto no verificado: que el BCCh publica en días hábiles bancarios. Es el calendario de los días, no el de la hora ni el rezago de publicación (H3-E).",
+    "La UF no usa este calendario: es una serie de días corridos que se publica por adelantado."
+  ]
+}

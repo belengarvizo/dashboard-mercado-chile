@@ -1,0 +1,18 @@
+{
+  "id": "cme_group",
+  "nombre": "CME Group (NYMEX, COMEX, CBOT)",
+  "tipo": "feriados",
+  "mercado_o_fuente": "Futuros de CME Group: petróleo (CL) y gas natural (NG) en NYMEX; oro (GC), plata (SI) y cobre (HG) en COMEX; maíz (ZC), trigo (ZW) y soya (ZS) en CBOT.",
+  "fuente_oficial": "CME Group — Trading Hours y Holiday Calendar",
+  "url": "https://www.cmegroup.com/trading-hours.html",
+  "fecha_verificacion": "2026-11-25",
+  "cobertura": [],
+  "instrumentos": ["CL=F", "NG=F", "GC=F", "SI=F", "HG=F", "ZC=F", "ZW=F", "ZS=F"],
+  "feriados": {},
+  "cierres_extraordinarios": {},
+  "sesiones_reducidas": {},
+  "limitaciones": [
+    "Calendario NO VERIFICADO: trading-hours.html, holiday-calendar.html y los PDF de 2026 agotaron el tiempo de espera (dos intentos).",
+    "Los productos de CME pueden tener horarios distintos en un mismo feriado: no se asume un calendario común."
+  ]
+}
