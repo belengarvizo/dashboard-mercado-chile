@@ -13,3 +13,4 @@ google-genai
 statsmodels
 openpyxl
 reportlab
+tzdata==2026.6
