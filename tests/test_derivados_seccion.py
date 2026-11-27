@@ -25,6 +25,8 @@ from streamlit.testing.v1 import AppTest
 
 import black_scholes as bs
 import derivados_ui as ui
+import reloj
+import tiempo_al_vencimiento as tv
 
 load_dotenv()
 
@@ -110,6 +112,13 @@ def test_ningun_texto_de_la_seccion_lleva_signo_de_dolar():
             assert "$" not in t, f"{paso}: {t[:80]!r}"
 
 
+def _t_del_modelo(ticker: str, vencimiento: str) -> float:
+    """El mismo T que usa la pantalla: desde el instante del precio del subyacente hasta el cierre de negociación."""
+    con_hora = ui._precio_en_vivo_con_hora(ticker)
+    valoracion, _ = tv.instante_de_valoracion(con_hora[1] if con_hora else None)
+    return tv.anios(tv.horizonte(ticker, vencimiento), valoracion)
+
+
 # ---------------------------------------------------------------------------
 # Paso 2: la cadena de opciones
 # ---------------------------------------------------------------------------
@@ -128,7 +137,7 @@ def test_el_vencimiento_por_defecto_no_es_hoy_mismo_si_hay_otra_opcion():
 @pytest.mark.externa
 def test_la_cadena_trae_precio_en_vivo_y_dias_al_vencimiento_coherentes():
     at = _abrir(ui.PASOS[1])
-    spot = _numero(_metrica(at, "Precio de SPY ahora").value)
+    spot = _numero(_metrica(at, "Último precio de SPY").value)
     dias = int(_metrica(at, "Días al vencimiento").value)
     assert spot > 0
     vencimiento = at.selectbox(key="dv_vencimiento_cadena").value
@@ -151,7 +160,7 @@ def test_cambiar_de_subyacente_trae_otra_cadena_real():
     at = _abrir(ui.PASOS[1])
     at.selectbox(key="dv_subyacente_cadena").set_value("TLT").run()
     assert not at.exception
-    spot_tlt = _numero(_metrica(at, "Precio de TLT ahora").value)
+    spot_tlt = _numero(_metrica(at, "Último precio de TLT").value)
     assert spot_tlt > 0
     assert any("iShares 20+ Year Treasury Bond ETF" in c.value for c in at.caption)
 
@@ -163,8 +172,7 @@ def test_cambiar_de_subyacente_trae_otra_cadena_real():
 def test_los_cinco_datos_mostrados_son_los_que_de_verdad_entran_al_modelo():
     at = _abrir(ui.PASOS[2])
     vencimiento = at.selectbox(key="dv_vencimiento_bs").value
-    dias_mostrados = int(_metrica(at, "Vencimiento (T)").value.split()[0])
-    assert dias_mostrados == ui._dias_al_vencimiento(vencimiento)
+    assert _metrica(at, "Tiempo al vencimiento (T)").value == tv.texto_de_tiempo(_t_del_modelo("SPY", vencimiento))
 
     spot_mostrado = _numero(_metrica(at, "Subyacente (S)").value)
     spot_real = ui._precio_en_vivo("SPY")
@@ -178,8 +186,12 @@ def test_los_cinco_datos_mostrados_son_los_que_de_verdad_entran_al_modelo():
 def test_dias_al_vencimiento_nunca_es_negativo_para_una_fecha_pasada():
     """Función pura, probada sin pasar por la pantalla: una fecha de ayer debe dar 0 (recortado), no un número
     negativo que luego ensuciaría T en Black-Scholes."""
-    assert ui._dias_al_vencimiento("2020-01-01") == 0
-    assert ui._dias_al_vencimiento((pd.Timestamp.now() + pd.Timedelta(days=10)).strftime("%Y-%m-%d")) == 10
+    from datetime import datetime
+    with reloj.fijar(datetime(2026, 11, 16, 15, 0, tzinfo=reloj.ZONA_NUEVA_YORK)):      # lunes 3:00 p.m. ET
+        assert ui._dias_al_vencimiento("2020-01-01") == 0
+        # Hasta el miércoles 25-nov a las 4:15 p.m. ET (cierre de negociación): 9 días y 1 h 15 min → 9 días completos.
+        assert ui._dias_al_vencimiento("2026-11-25") == 9
+        assert ui._dias_al_vencimiento("2026-11-16") == 0                                  # vence hoy: quedan 1 h 15 min
 
 
 @pytest.mark.externa
@@ -223,8 +235,7 @@ def test_el_precio_teorico_con_vol_realizada_coincide_con_recalcularlo_aparte():
     vencimiento = at.selectbox(key="dv_vencimiento_bs").value
     strike = at.selectbox(key="dv_strike").value
     spot = ui._precio_en_vivo("SPY")
-    dias = ui._dias_al_vencimiento(vencimiento)
-    T = dias / bs.DIAS_DEL_ANIO
+    T = _t_del_modelo("SPY", vencimiento)
 
     calls, _ = ui._cadena_de_opciones("SPY", vencimiento)
     import pandas as pd_
@@ -256,8 +267,7 @@ def test_la_volatilidad_implicita_mostrada_de_verdad_reproduce_el_precio_de_merc
     vencimiento = at.selectbox(key="dv_vencimiento_bs").value
     strike = at.selectbox(key="dv_strike").value
     spot = ui._precio_en_vivo("SPY")
-    dias = ui._dias_al_vencimiento(vencimiento)
-    T = dias / bs.DIAS_DEL_ANIO
+    T = _t_del_modelo("SPY", vencimiento)
 
     frases_iv = [m.value for m in at.markdown if "volatilidad implícita de" in m.value]
     if not frases_iv:
@@ -280,8 +290,8 @@ def test_la_volatilidad_implicita_mostrada_de_verdad_reproduce_el_precio_de_merc
 def test_las_griegas_mostradas_coinciden_con_recalcularlas_aparte():
     at = _abrir(ui.PASOS[2])
     vencimiento = at.selectbox(key="dv_vencimiento_bs").value
-    if ui._dias_al_vencimiento(vencimiento) == 0:
-        pytest.skip("con vencimiento hoy mismo no se muestran griegas")
+    if _t_del_modelo("SPY", vencimiento) == 0:
+        pytest.skip("con el horizonte terminado no se muestran griegas")
     deltas = [m for m in at.metric if m.label == "Delta"]
     if not deltas:
         pytest.skip("no se pudo calcular una volatilidad implícita para este contrato, así que no hay griegas")
@@ -298,12 +308,14 @@ def test_cambiar_a_put_trae_otra_tabla_de_strikes():
 
 
 @pytest.mark.externa
-def test_el_aviso_de_vencimiento_hoy_solo_aparece_si_se_elige_ese_vencimiento():
+def test_el_aviso_de_horizonte_terminado_solo_aparece_si_ya_termino():
+    """H3-D2: un contrato que vence hoy ANTES del cierre tiene T > 0 y no lleva aviso; solo uno cuyo cierre de
+    negociación ya pasó lleva el aviso de horizonte terminado."""
     at = _abrir(ui.PASOS[2])
     vencimientos = ui._vencimientos_disponibles("SPY")
-    hoy = [v for v in vencimientos if ui._dias_al_vencimiento(v) == 0]
-    if not hoy:
-        pytest.skip("hoy no hay un vencimiento que expire el mismo día para probar el aviso")
-    at.selectbox(key="dv_vencimiento_bs").set_value(hoy[0]).run()
+    terminados = [v for v in vencimientos if _t_del_modelo("SPY", v) == 0]
+    if not terminados:
+        pytest.skip("ningún vencimiento listado tiene su horizonte terminado en este momento")
+    at.selectbox(key="dv_vencimiento_bs").set_value(terminados[0]).run()
     assert not at.exception
-    assert any("vence hoy" in w.value for w in at.warning)
+    assert any("ya terminó" in w.value for w in at.warning)

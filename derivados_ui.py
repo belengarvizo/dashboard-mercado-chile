@@ -43,7 +43,9 @@ import pandas as pd
 import streamlit as st
 
 import black_scholes as bs
+import reloj
 import renta_fija as rf
+import tiempo_al_vencimiento as tv  # H3-D2: T continuo ACT/365F hasta el cierre de negociación
 import renta_fija_ui as rfui
 from catalogo_derivados import SUBYACENTES, nombre_de
 
@@ -84,16 +86,32 @@ def _cadena_de_opciones(ticker: str, vencimiento: str):
 
 
 @st.cache_data(ttl=_TTL_CADENA, show_spinner=False)
-def _precio_en_vivo(ticker: str) -> float | None:
-    """El último precio del subyacente, en vivo (no el cierre de ayer que trae la base)."""
+def _precio_en_vivo_con_hora(ticker: str):
+    """(último precio del subyacente, instante de ese precio con zona) en vivo, o None si falla. Se piden barras de 1
+    minuto para saber A QUÉ HORA es el precio (una barra diaria solo trae la fecha): el instante de valoración de
+    Black-Scholes es el de este precio, no «ahora» (H3-D2)."""
     try:
         import yfinance as yf
-        historico = yf.Ticker(ticker).history(period="1d", timeout=_TIMEOUT_YAHOO)
+        subyacente = yf.Ticker(ticker)
+        # Primero el día en curso (≈390 barras); solo si viene vacío (por ejemplo, antes de la apertura) se piden 5 días.
+        historico = subyacente.history(period="1d", interval="1m", timeout=_TIMEOUT_YAHOO)
         if historico is None or historico.empty:
+            historico = subyacente.history(period="5d", interval="1m", timeout=_TIMEOUT_YAHOO)
+        if historico is None or historico.empty or pd.isna(historico["Close"].iloc[-1]):
             return None
-        return float(historico["Close"].iloc[-1])
+        inicio = pd.Timestamp(historico.index[-1])
+        if inicio.tzinfo is None:
+            return float(historico["Close"].iloc[-1]), None       # sin zona no se inventa la hora: «hora no informada»
+        # La barra se fecha con su INICIO; su cierre es el precio al FINAL del minuto (tv.instante_del_cierre_de_barra).
+        return float(historico["Close"].iloc[-1]), tv.instante_del_cierre_de_barra(inicio.to_pydatetime())
     except Exception:
         return None
+
+
+def _precio_en_vivo(ticker: str) -> float | None:
+    """El último precio del subyacente, en vivo (no el cierre de ayer que trae la base)."""
+    con_hora = _precio_en_vivo_con_hora(ticker)
+    return None if con_hora is None else con_hora[0]
 
 
 # ---------------------------------------------------------------------------
@@ -127,13 +145,15 @@ def _elegir_subyacente_y_vencimiento(clave: str) -> tuple[str, str] | None:
     # Por defecto, el primer vencimiento que NO sea hoy mismo: un contrato que vence hoy todavía tiene horas de
     # mercado por delante, pero _dias_al_vencimiento (en días completos) le da T=0, con lo que Black-Scholes deja
     # de poder explicar su precio (ver la nota en _paso_black_scholes). Igual se puede elegir a propósito.
-    no_hoy = [i for i, v in enumerate(vencimientos) if _dias_al_vencimiento(v) > 0]
+    no_hoy = [i for i, v in enumerate(vencimientos) if _dias_al_vencimiento(v, ticker) > 0]
     vencimiento = st.selectbox("Vencimiento", vencimientos, index=no_hoy[0] if no_hoy else 0, key=f"dv_vencimiento_{clave}")
     return ticker, vencimiento
 
 
-def _dias_al_vencimiento(vencimiento: str) -> int:
-    return max((pd.Timestamp(vencimiento) - pd.Timestamp.now().normalize()).days, 0)
+def _dias_al_vencimiento(vencimiento: str, ticker: str = "SPY") -> int:
+    """Días COMPLETOS que quedan hasta el horizonte del modelo (cierre de negociación del día de vencimiento), medidos
+    desde ahora. Solo para mostrar y para elegir el vencimiento por defecto: la valorización usa T continuo (tv.anios)."""
+    return tv.dias_completos(tv.anios(tv.horizonte(ticker, vencimiento), reloj.ahora_utc()))
 
 
 # ---------------------------------------------------------------------------
@@ -204,11 +224,16 @@ def _paso_cadena(macro: pd.DataFrame) -> None:
         rfui._sin_datos(f"la cadena de opciones de {ticker} para el {vencimiento} (Yahoo Finance no respondió)")
         return
 
-    dias = _dias_al_vencimiento(vencimiento)
+    dias = _dias_al_vencimiento(vencimiento, ticker)
+    instante_spot = (_precio_en_vivo_con_hora(ticker) or (None, None))[1]
+    h = tv.horizonte(ticker, vencimiento)
+    T = tv.anios(h, reloj.ahora_utc())
     c1, c2 = st.columns(2)
-    c1.metric(f"Precio de {ticker} ahora", f"{rfui._fmt(spot, 2)}")
-    c2.metric("Días al vencimiento", f"{dias}")
-    st.caption(f"Vencimiento: {vencimiento} · Subyacente: {nombre_de(ticker)} · Consultado ahora mismo a Yahoo Finance.")
+    c1.metric(f"Último precio de {ticker}", f"{rfui._fmt(spot, 2)}")
+    c2.metric("Días al vencimiento", f"{dias}", help=f"Tiempo hasta el cierre de negociación del día de vencimiento: "
+              f"{tv.texto_de_tiempo(T)}.")
+    st.caption(f"Vencimiento: {vencimiento} · Subyacente: {nombre_de(ticker)} · Precio del subyacente de las "
+               f"{_hora_de(instante_spot)} (Yahoo Finance).")
 
     cuantos_nombre = st.radio("Cuántos strikes mostrar", list(CANTIDADES_DE_STRIKES), horizontal=True, key="dv_cuantos_strikes")
     cuantos = CANTIDADES_DE_STRIKES[cuantos_nombre]
@@ -237,6 +262,41 @@ def _precio_de_mercado(fila: pd.Series) -> float | None:
     if bid > 0 and ask > 0:
         return (bid + ask) / 2
     return ultimo if ultimo > 0 else None
+
+
+def _hora_de(instante) -> str:
+    """«27-11-2026 15:58 ET (17:58 Santiago)», o «hora no informada»."""
+    if instante is None:
+        return "hora no informada"
+    ny = instante.astimezone(reloj.ZONA_NUEVA_YORK)
+    return f"{ny:%d-%m-%Y %H:%M} ET ({instante.astimezone(reloj.ZONA_SANTIAGO):%H:%M} Santiago)"
+
+
+# UMBRAL OPERATIVO DE ADVERTENCIA, no una garantía: una última operación más antigua que esto respecto del instante de
+# valoración se advierte como no contemporánea; una más reciente tampoco prueba que lo sea (solo no se advierte).
+_ANTIGUEDAD_MAXIMA_DE_COTIZACION = pd.Timedelta(minutes=30)
+
+
+def _avisar_precio_no_contemporaneo(fila: pd.Series, valoracion) -> None:
+    """H3-D2: distingue la hora del precio de la opción del instante de valoración. Bid/ask: Yahoo no informa su hora.
+    Último transado: si es mucho más antiguo que el precio del subyacente, se advierte que no son contemporáneos."""
+    bid, ask = float(fila["bid"]), float(fila["ask"])
+    if bid > 0 and ask > 0:
+        st.caption("Precio de la opción: punto medio bid/ask. Yahoo Finance no informa la hora de esa cotización, así que no "
+                   "se puede afirmar que sea contemporánea del precio del subyacente.")
+        return
+    ultima = pd.Timestamp(fila["lastTradeDate"]) if "lastTradeDate" in fila and pd.notna(fila["lastTradeDate"]) else None
+    if ultima is None:
+        st.caption("Precio de la opción: última operación, sin hora informada.")
+        return
+    if ultima.tzinfo is None:
+        ultima = ultima.tz_localize("UTC")
+    if pd.Timestamp(valoracion) - ultima > _ANTIGUEDAD_MAXIMA_DE_COTIZACION:
+        st.warning(f"Precio de la opción: la última operación es del {_hora_de(ultima.to_pydatetime())}, anterior al precio "
+                   "del subyacente. **No son contemporáneos**: la comparación con Black-Scholes y la volatilidad implícita "
+                   "mezclan momentos distintos.")
+    else:
+        st.caption(f"Precio de la opción: última operación del {_hora_de(ultima.to_pydatetime())}.")
 
 
 def _paso_black_scholes(macro: pd.DataFrame, precios: pd.DataFrame) -> None:
@@ -271,15 +331,28 @@ def _paso_black_scholes(macro: pd.DataFrame, precios: pd.DataFrame) -> None:
         rfui._sin_datos("un precio de mercado utilizable para este contrato (ni bid/ask ni última operación)")
         return
 
-    dias = _dias_al_vencimiento(vencimiento)
-    if dias == 0:
+    # H3-D2: un solo T (años ACT/365F hasta el cierre de negociación del día de vencimiento), medido desde el instante
+    # del precio del subyacente. Es el mismo T para la tasa, el precio teórico, la volatilidad implícita y las griegas.
+    instante_spot = (_precio_en_vivo_con_hora(ticker) or (None, None))[1]
+    valoracion, del_precio = tv.instante_de_valoracion(instante_spot)
+    h = tv.horizonte(ticker, vencimiento)
+    T = tv.anios(h, valoracion)
+    consulta = reloj.ahora_utc()
+    if tv.vencido_al_consultar(h, consulta):
         st.warning(
-            "Este contrato **vence hoy**: todavía le quedan horas de mercado, pero este modelo mide el tiempo al "
-            "vencimiento en días completos (T=0), así que Black-Scholes lo trata como si ya no quedara nada de tiempo "
-            "y solo puede explicar su **valor intrínseco**, no el precio real de mercado. Elige otro vencimiento para "
-            "ver la comparación completa."
+            f"**Contrato vencido**: su negociación terminó el {_hora_de(h.cierre_de_negociacion)}. Lo que sigue es una "
+            f"**valorización histórica** al {_hora_de(valoracion)}, no una valorización vigente."
         )
-    T = dias / bs.DIAS_DEL_ANIO
+    elif pd.Timestamp(consulta) - pd.Timestamp(valoracion) > _ANTIGUEDAD_MAXIMA_DE_COTIZACION:
+        st.info(f"Valorización al último precio disponible del subyacente ({_hora_de(valoracion)}), no al momento de la "
+                f"consulta ({_hora_de(consulta)}).")
+    if tv.terminado(h, valoracion):
+        st.warning(
+            "El horizonte de este contrato **ya terminó** al instante de valoración: T = 0. Black-Scholes solo da el **valor "
+            "intrínseco** con el precio de ese instante, que NO es la liquidación contractual (esta depende del precio al "
+            "cierre y de las decisiones de ejercicio). No se despeja volatilidad implícita ni se calculan griegas."
+        )
+    _avisar_precio_no_contemporaneo(fila, valoracion)
     tasa = _tasa_libre_para(macro, T)
     if tasa is None:
         rfui._sin_datos("la curva de tasas del Tesoro para calcular la tasa libre de riesgo")
@@ -297,7 +370,7 @@ def _paso_black_scholes(macro: pd.DataFrame, precios: pd.DataFrame) -> None:
     c1, c2, c3, c4, c5 = st.columns(5)
     c1.metric("Subyacente (S)", f"{rfui._fmt(spot, 2)}")
     c2.metric("Strike (K)", f"{rfui._fmt(strike, 2)}")
-    c3.metric("Vencimiento (T)", f"{dias} días")
+    c3.metric("Tiempo al vencimiento (T)", tv.texto_de_tiempo(T), help=f"T = {T:.6f} años (ACT/365F).")
     c4.metric("Tasa libre de riesgo (r)", f"{r * 100:.2f}%")
     c5.metric("Precio de mercado", f"{rfui._fmt(precio_mercado, 2)}")
     if tasa_recortada:
@@ -305,6 +378,14 @@ def _paso_black_scholes(macro: pd.DataFrame, precios: pd.DataFrame) -> None:
             "La tasa usada es la del plazo más corto que tiene la curva real (1 mes): este contrato vence antes de eso "
             "y no hay una tasa más corta en la base."
         )
+    st.caption(
+        f"Instante de consulta: {_hora_de(consulta)}. Instante de valoración: {_hora_de(valoracion)}"
+        + (" (el del último precio del subyacente)." if del_precio else " (no se conoce la hora del precio del subyacente: "
+           "se usa el momento de la consulta).")
+        + f" Horizonte: {_hora_de(h.cierre_de_negociacion)} (cierre de negociación). Plazo de ejercicio: "
+        f"{_hora_de(h.plazo_de_ejercicio)} (regla general de FINRA; los intermediarios pueden fijar uno anterior; el modelo no "
+        "lo usa). " + " ".join(h.aproximaciones)
+    )
 
     st.subheader("Dos volatilidades, dos precios")
     if vol_realizada is not None:
@@ -359,8 +440,10 @@ def _paso_black_scholes(macro: pd.DataFrame, precios: pd.DataFrame) -> None:
 
     st.info(
         "**Lo que este paso no hace:** no descuenta dividendos del subyacente, no corrige por ser una opción americana "
-        "(se puede ejercer antes del vencimiento) y asume que la volatilidad es constante hasta el vencimiento. Ninguna "
-        "de las tres es exactamente cierta en el mercado real; son las simplificaciones estándar de Black-Scholes."
+        "(se puede ejercer antes del vencimiento: aquí se valora con Black-Scholes europeo) y asume que la volatilidad es "
+        "constante hasta el vencimiento. Ninguna de las tres es exactamente cierta en el mercado real; son las "
+        "simplificaciones estándar de Black-Scholes. El tiempo se mide en años ACT/365F hasta el cierre de negociación "
+        "del día de vencimiento, que es una aproximación del horizonte (ver arriba)."
     )
 
 
