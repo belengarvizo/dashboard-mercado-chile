@@ -107,9 +107,9 @@ def test_la_interfaz_no_activa_tareas_programadas_ni_gemini():
                 assert prohibido not in texto, (archivo, prohibido)
 
 
-def test_los_panoramas_advierten_que_aun_no_se_marcan_los_datos_atrasados():
+def test_los_panoramas_explican_sus_estados_de_frescura():
     import fri.panoramas as p
-    # H3-D1: la nota no contradice a los motores: los panoramas aún no marcan atraso (H3-D3); las tablas sí, con su calendario.
-    assert "corrección H3-D3 pendiente" in p.NOTA_ANTIGUEDAD and "aproximación de lunes a viernes" in p.NOTA_ANTIGUEDAD
+    # H3-D3: la nota describe los estados y no contradice a los motores (misma regla de «atrasado»).
+    assert "misma regla que las tablas de cada sección" in p.NOTA_ANTIGUEDAD and "nunca se marcan atrasadas" in p.NOTA_ANTIGUEDAD
     fuente = open(os.path.join(RAIZ, "fri", "panoramas.py"), encoding="utf-8").read()
     assert fuente.count("{NOTA_ANTIGUEDAD}") == 2   # en Macroeconomía y en Mercados

@@ -13,11 +13,13 @@ Banco Central no se pudo confirmar en el catálogo público), así que se muestr
 """
 from __future__ import annotations
 
+import html
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
+import frescura  # H3-D3: estados de frescura
 import renta_fija as rf
 import renta_fija_ui as rfui
 from catalogo_commodities import COMMODITIES
@@ -36,11 +38,14 @@ NOMBRE_TREASURY_10 = rfui.nombre_treasury("10 años")      # H.15 (decisión de 
 TICKER_SP500 = "^GSPC"
 INDICES = [(TICKER_SP500, "S&P 500"), (TICKER_DOW_JONES, "Dow Jones"), (TICKER_NASDAQ, "Nasdaq Composite"), ("EEM", "MSCI Emergentes (EEM)")]
 PARES_PANORAMA = ["USDCLP=X", "EURUSD=X", "USDJPY=X", "USDBRL=X", "USDMXN=X"]
-# H3-D1 hecho (calendarios en las tablas de cada sección); los estados de frescura de los panoramas quedan para H3-D3.
-NOTA_ANTIGUEDAD = ("Antigüedad de los datos: cada cifra muestra su fecha real, pero estos panoramas todavía no marcan los datos "
-                   "atrasados (corrección H3-D3 pendiente). Las tablas de cada sección sí los marcan con el calendario de su "
-                   "mercado, o con una aproximación de lunes a viernes si ese calendario no está verificado. Compara la fecha con "
-                   "la de hoy.")
+# H3-D3: cada cifra lleva su estado de frescura (frescura.py), con la misma regla de atraso que las tablas de cada sección.
+NOTA_ANTIGUEDAD = ("Antigüedad de los datos: cada cifra muestra su fecha real y su estado (vigente, posiblemente atrasado, "
+                   "atrasado o sin calendario verificado), según su frecuencia, el calendario de su mercado y el plazo de "
+                   "publicación esperado. «Atrasado» usa la misma regla que las tablas de cada sección (más de 5 sesiones, con "
+                   "calendario verificado). Las series mensuales nunca se marcan atrasadas por no tener datos diarios. La fecha "
+                   "es la del período del dato, no la de su carga: el dashboard no registra cuándo se cargó cada dato. "
+                   "«(estimado)» indica un plazo de publicación supuesto; las fechas oficiales verificadas (INE, BLS) se usan "
+                   "donde están cargadas.")
 MOTIVO_IPSA = ("No hay una serie directa del IPSA verificada en la base. ECH (un ETF en dólares) no se presenta como IPSA. "
                "Fuente candidata: serie diaria del Banco Central de Chile, pendiente de confirmar.")
 
@@ -80,8 +85,10 @@ def _fecha(f, mensual: bool = False) -> str:
 # Tarjetas
 # ---------------------------------------------------------------------------
 def tarjeta(nombre: str, serie: pd.Series, fuente: str, *, decimales: int = 2, sufijo: str = "", variacion: str = "pct",
-            invertir: bool = False, mensual: bool = False, unidad: str = "", motivo_vacio: str = "Sin datos en la base.") -> str:
-    """Valor, cambio contra el dato anterior (calcular_cambio_reciente) y su fecha real. variacion: pct | pp | pb."""
+            invertir: bool = False, mensual: bool = False, unidad: str = "", motivo_vacio: str = "Sin datos en la base.",
+            perfil: frescura.Perfil | None = None) -> str:
+    """Valor, cambio contra el dato anterior (calcular_cambio_reciente), su fecha real y, con `perfil`, su estado de
+    frescura (H3-D3). variacion: pct | pp | pb."""
     r = calcular_cambio_reciente(serie)
     if r is None:
         return no_disponible(nombre, motivo_vacio)
@@ -97,12 +104,37 @@ def tarjeta(nombre: str, serie: pd.Series, fuente: str, *, decimales: int = 2, s
     etiqueta = f"vs. {_fecha(anterior, mensual)}"
     return c.kpi(nombre, f"{c.num(valor, decimales)}{sufijo}", ch, etiqueta, serie.tail(60 if not mensual else 24).to_numpy(),
                  T["azul_dato"] if variacion != "pct" else c.color_tendencia(serie.tail(60).to_numpy()),
-                 f"{fuente} · {_fecha(fecha, mensual)}", unidad)
+                 f"{fuente} · {_fecha(fecha, mensual)}{estado_html(serie, perfil)}", unidad)
 
 
 def no_disponible(nombre: str, motivo: str) -> str:
     return (f'<div class="fri-kpi"><div class="nombre">{nombre}</div><div class="valor" style="font-size:20px;color:{T["texto_3"]}">No disponible</div>'
             f'<p style="color:{T["texto_2"]};font-size:13px;margin:6px 0 10px 0">{motivo}</p></div>')
+
+
+_ETIQUETA_ESTADO = {
+    frescura.VIGENTE: ("Vigente", "vigente"), frescura.POSIBLEMENTE_ATRASADO: ("Posible atraso", "posible"),
+    frescura.ATRASADO: ("Atrasado", "atrasado"), frescura.COBERTURA_DESCONOCIDA: ("Sin calendario verificado", "desconocida"),
+    frescura.NO_DISPONIBLE: ("No disponible", "desconocida"),
+}
+
+
+def _perfil(nombre_serie: str) -> frescura.Perfil | None:
+    return frescura.PERFILES_DE_SERIE.get(nombre_serie)
+
+
+def estado_html(serie: pd.Series, perfil: frescura.Perfil | None, solo_si_no_vigente: bool = False) -> str:
+    """Rótulo corto del estado de frescura (H3-D3), con la explicación completa en el tooltip. Sin perfil, nada."""
+    if perfil is None:
+        return ""
+    e = frescura.evaluar(serie, perfil)
+    if solo_si_no_vigente and e.estado == frescura.VIGENTE:
+        return ""
+    etiqueta, clase = _ETIQUETA_ESTADO[e.estado]
+    if e.estimado and e.estado in (frescura.VIGENTE, frescura.POSIBLEMENTE_ATRASADO):
+        etiqueta += " (estimado)"
+    detalle = html.escape(f"{e.texto} {perfil.nota}".strip(), quote=True)
+    return f' <span class="fri-frescura fri-frescura-{clase}" title="{detalle}">· {etiqueta}</span>'
 
 
 def _fila(grupo_html: str, tarjetas: list[str]) -> None:
@@ -172,17 +204,18 @@ def panorama_macro(df_macro: pd.DataFrame, df_precios: pd.DataFrame) -> None:
     fed, ust10 = serie_macro(df_macro, NOMBRE_TASA_EEUU), serie_macro(df_macro, NOMBRE_TREASURY_10)
     dxy = serie_precio(df_precios, TICKER_DXY)
     _fila(f'<div class="fri-kpi fri-grupo"><b>{c.bandera_chile(28)} Chile</b><span>Principales indicadores macroeconómicos</span></div>', [
-        tarjeta("Imacec a/a", imacec, "BCCh", decimales=2, sufijo=" %", variacion="pp", mensual=True),
-        tarjeta("IPC anual", ipc, "INE/BCCh", decimales=2, sufijo=" %", variacion="pp", invertir=True, mensual=True),
-        tarjeta("Desempleo", desempleo, "INE", decimales=2, sufijo=" %", variacion="pp", invertir=True, mensual=True),
-        tarjeta("TPM Chile", tpm, "BCCh", sufijo=" %", variacion="pb"),
-        tarjeta("USD/CLP", dolar, "BCCh (dólar observado)", invertir=True),
-        tarjeta("Precio del cobre", cobre, "BCCh", unidad="USD/lb"),
+        tarjeta("Imacec a/a", imacec, "BCCh", decimales=2, sufijo=" %", variacion="pp", mensual=True, perfil=_perfil(NOMBRE_IMACEC)),
+        tarjeta("IPC anual", ipc, "INE/BCCh", decimales=2, sufijo=" %", variacion="pp", invertir=True, mensual=True, perfil=_perfil(NOMBRE_IPC)),
+        tarjeta("Desempleo", desempleo, "INE", decimales=2, sufijo=" %", variacion="pp", invertir=True, mensual=True,
+                perfil=_perfil(NOMBRE_DESEMPLEO)),
+        tarjeta("TPM Chile", tpm, "BCCh", sufijo=" %", variacion="pb", perfil=_perfil(NOMBRE_TASA_CHILE)),
+        tarjeta("USD/CLP", dolar, "BCCh (dólar observado)", invertir=True, perfil=_perfil(NOMBRE_TIPO_DE_CAMBIO_OBSERVADO)),
+        tarjeta("Precio del cobre", cobre, "BCCh", unidad="USD/lb", perfil=_perfil(NOMBRE_COBRE)),
     ])
     _fila(f'<div class="fri-kpi fri-grupo"><b>{c.icono("globo", 24)} Entorno internacional</b><span>Referencias clave del contexto global</span></div>', [
-        tarjeta("Tasa efectiva de fondos federales", fed, "FRED (DFF)", sufijo=" %", variacion="pb"),
-        tarjeta("Treasury 10 años (H.15)", ust10, "FRED (H.15)", sufijo=" %", variacion="pb"),
-        tarjeta("Dólar global (DXY)", dxy, "Yahoo Finance", decimales=2),
+        tarjeta("Tasa efectiva de fondos federales", fed, "FRED (DFF)", sufijo=" %", variacion="pb", perfil=_perfil(NOMBRE_TASA_EEUU)),
+        tarjeta("Treasury 10 años (H.15)", ust10, "FRED (H.15)", sufijo=" %", variacion="pb", perfil=_perfil(NOMBRE_TREASURY_10)),
+        tarjeta("Dólar global (DXY)", dxy, "Yahoo Finance", decimales=2, perfil=frescura.perfil_de_instrumento(TICKER_DXY)),
         no_disponible("Actividad económica de China", "Sin fuente verificada en FRI; no se muestra una cifra inventada."),
     ])
     col1, col2, col3 = st.columns(3, gap="medium")
@@ -224,14 +257,17 @@ def objetivo_mes_anterior(f1) -> pd.Timestamp:
     return pd.Timestamp(f1) - pd.DateOffset(months=1)
 
 
-def _tabla_instrumentos(filas_datos: list[tuple[str, pd.Series]], decimales: int = 2) -> str:
+def _tabla_instrumentos(filas_datos: list[tuple], decimales: int = 2) -> str:
+    """Filas (nombre, serie) o (nombre, serie, perfil de frescura): con perfil, la fila lleva su estado si no está vigente."""
     filas, clases = [], []
-    for nombre, s in filas_datos:
+    for nombre, s, *resto in filas_datos:
+        perfil = resto[0] if resto else None
         r = calcular_cambio_reciente(s)
         anual = rf.retorno_ultimo_anio(s) if len(s) >= 2 else None
         if r is None:
             filas.append([nombre, "—", "—", "—"]); clases.append(["", "", "", ""]); continue
-        filas.append([nombre, c.num(r[0], decimales), f"{c.num(r[1], 2, True)} %", f"{c.num(anual, 1, True)} %" if anual is not None else "—"])
+        filas.append([f"{nombre}{estado_html(s, perfil, solo_si_no_vigente=True)}", c.num(r[0], decimales),
+                      f"{c.num(r[1], 2, True)} %", f"{c.num(anual, 1, True)} %" if anual is not None else "—"])
         clases.append(["", "", c.clase_signo(r[1]), c.clase_signo(anual, 1) if anual is not None else ""])
     return c.tabla(["Instrumento", "Nivel", "Var.", "1A"], filas, clases)
 
@@ -241,9 +277,9 @@ def panorama_mercados(df_macro: pd.DataFrame, df_precios: pd.DataFrame) -> None:
     bcp10 = serie_macro(df_macro, rfui.NOMBRE_BCP10)
     st.markdown('<div class="fri-kpis" style="grid-template-columns:repeat(4,1fr)">' + "".join([
         no_disponible("IPSA (Chile)", MOTIVO_IPSA),
-        tarjeta("S&P 500 (EE. UU.)", spx, "Yahoo Finance"),
-        tarjeta("Tasa 10 años Chile (BCP)", bcp10, "BCCh", sufijo=" %", variacion="pb", invertir=True),
-        tarjeta("USD/CLP (dólar observado)", dolar, "BCCh", invertir=True),
+        tarjeta("S&P 500 (EE. UU.)", spx, "Yahoo Finance", perfil=frescura.perfil_de_instrumento(TICKER_SP500)),
+        tarjeta("Tasa 10 años Chile (BCP)", bcp10, "BCCh", sufijo=" %", variacion="pb", invertir=True, perfil=_perfil(rfui.NOMBRE_BCP10)),
+        tarjeta("USD/CLP (dólar observado)", dolar, "BCCh", invertir=True, perfil=_perfil(NOMBRE_TIPO_DE_CAMBIO_OBSERVADO)),
     ]) + "</div>", unsafe_allow_html=True)
     izq, der = st.columns([1.55, 1], gap="medium")
     with izq, st.container(border=True):
@@ -276,15 +312,16 @@ def panorama_mercados(df_macro: pd.DataFrame, df_precios: pd.DataFrame) -> None:
         t1, t2, t3, t4 = st.columns([1.1, 1, 1.15, 1], gap="medium")
     with t1, st.container(border=True):
         _titulo_panel("Principales índices")
-        st.markdown(_tabla_instrumentos([(n, serie_precio(df_precios, t)) for t, n in INDICES]), unsafe_allow_html=True)
+        st.markdown(_tabla_instrumentos([(n, serie_precio(df_precios, t), frescura.perfil_de_instrumento(t)) for t, n in INDICES]), unsafe_allow_html=True)
     with t2, st.container(border=True):
         _titulo_panel("Divisas")
-        st.markdown(_tabla_instrumentos([(etiqueta_corta(t), serie_precio(df_precios, t)) for t in PARES_PANORAMA if t in PARES_FX]),
+        st.markdown(_tabla_instrumentos([(etiqueta_corta(t), serie_precio(df_precios, t), frescura.perfil_de_instrumento(t)) for t in PARES_PANORAMA if t in PARES_FX]),
                     unsafe_allow_html=True)
     with t3, st.container(border=True):
         _titulo_panel("Materias primas")
-        filas = [("Cobre BCCh (USD/lb)", serie_macro(df_macro, NOMBRE_COBRE))]
-        filas += [(datos["nombre"].split(" (")[0], serie_precio(df_precios, t)) for t, datos in COMMODITIES.items()][:5]
+        filas = [("Cobre BCCh (USD/lb)", serie_macro(df_macro, NOMBRE_COBRE), _perfil(NOMBRE_COBRE))]
+        filas += [(datos["nombre"].split(" (")[0], serie_precio(df_precios, t), frescura.perfil_de_instrumento(t))
+                  for t, datos in COMMODITIES.items()][:5]
         st.markdown(_tabla_instrumentos(filas), unsafe_allow_html=True)
         st.markdown('<div class="fri-nota">Futuros continuos (Yahoo Finance): los cambios de contrato pueden generar saltos.</div>', unsafe_allow_html=True)
     with t4, st.container(border=True):

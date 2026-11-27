@@ -189,6 +189,13 @@ html, body, [data-testid="stAppViewContainer"], .stApp {{
 [data-testid="stButtonGroup"] button p {{ font-size: 15px !important; }}
 
 .fri-enlace-clasica {{ padding: 18px 24px 0 24px; }}
+
+/* H3-D3: rótulo del estado de frescura junto a la fecha de cada cifra (explicación completa en el tooltip). */
+.fri-frescura {{ font-size: 11.5px; white-space: nowrap; cursor: help; }}
+.fri-frescura-vigente {{ color: {T['texto_3']}; }}
+.fri-frescura-posible {{ color: {T['dorado']}; }}
+.fri-frescura-atrasado {{ color: {T['negativo']}; }}
+.fri-frescura-desconocida {{ color: {T['texto_3']}; font-style: italic; }}
 .fri-enlace-clasica a {{ color: {T['texto_3']} !important; font-size: 13px; text-decoration: none !important; border-bottom: 1px dotted {T['texto_3']}; }}
 
 /* =====================================================================================================================
