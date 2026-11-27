@@ -39,6 +39,7 @@ import streamlit as st
 import glosario_renta_variable as gl
 import renta_fija as rf
 import calendarios_financieros as calf
+import reloj
 import renta_fija_ui as rfui
 import renta_variable as rv
 from catalogo_etfs_acciones import ETFS_ACCIONES, MERCADOS_EEUU, PAISES_Y_REGIONES, SECTORES_EEUU, nombre_de
@@ -139,7 +140,7 @@ def _tabla_de_etfs_html(resumen: pd.DataFrame, tasa_libre: float | None, titulo_
 
 def _mostrar_tabla(precios: pd.DataFrame, tickers: list[str], titulo_grupo: str, tasa_libre: float | None) -> pd.DataFrame | None:
     """Dibuja una tabla de ETFs y devuelve su resumen (o avisa que no hay datos y devuelve None)."""
-    resumen = _resumen_de_etfs(precios, tickers, tasa_libre, pd.Timestamp.now().normalize())
+    resumen = _resumen_de_etfs(precios, tickers, tasa_libre, reloj.hoy_santiago_ts())
     if resumen is None:
         rfui._sin_datos("estos ETFs")
         return None

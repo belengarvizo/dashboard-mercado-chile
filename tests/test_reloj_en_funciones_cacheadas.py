@@ -35,7 +35,10 @@ DASHBOARD_PATH = os.path.join(os.path.dirname(__file__), "..", "app", "dashboard
 
 # Llamadas que devuelven "ahora". Se comparan por el final del nombre punteado,
 # así que cubre pd.Timestamp.now, datetime.datetime.now, date.today, etc.
-LLAMADAS_DE_RELOJ = ("Timestamp.now", "datetime.now", "date.today", "time.time")
+LLAMADAS_DE_RELOJ = ("Timestamp.now", "datetime.now", "date.today", "time.time",
+                     # H3-D2: el reloj centralizado también es reloj; leerlo dentro de una función cacheada la congela igual.
+                     "reloj.ahora_utc", "reloj.ahora_santiago", "reloj.hoy_santiago", "reloj.hoy_santiago_ts",
+                     "reloj.marca_de_generacion")
 
 # EXCEPCIÓN CORRECTA, no un pendiente: generar_pdf_brief_premercado.
 #

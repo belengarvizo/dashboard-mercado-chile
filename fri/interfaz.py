@@ -23,6 +23,8 @@ from zoneinfo import ZoneInfo
 
 import streamlit as st
 
+import reloj  # H3-D2: reloj centralizado (America/Santiago)
+
 from fri import componentes as c
 from fri.estilos import CSS, T
 
@@ -182,7 +184,7 @@ def _texto_actualizacion(cargar_ultima_actualizacion) -> str:
 # Inicio
 # ---------------------------------------------------------------------------
 def _inicio(actualizacion: str = "") -> None:
-    ahora = datetime.now(SANTIAGO)
+    ahora = reloj.ahora_santiago()
     prox = proxima_publicacion(ahora)
     st.markdown(
         f"""<div class="fri-portada"><div class="fecha">{c.icono('calendario', 20)} {_fecha_larga(ahora)}<span style="color:{T['borde_fuerte']}">|</span>

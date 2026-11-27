@@ -65,6 +65,7 @@ from defensa_topdown import verificar_prediccion as _verificar_prediccion
 import diferencial_bcp_bcu as dif_bcp_bcu
 import fri.interfaz as fri_ui  # interfaz FRI (FRI_INTERFAZ=fri); por defecto, la clásica
 import calendarios_financieros as calf  # H3-D1: sesiones por calendario y umbral único de atraso
+import reloj  # H3-D2: reloj centralizado (America/Santiago)
 from market_data import (
     calcular_resumen_mercado,
     calcular_cambio_reciente,
@@ -229,7 +230,7 @@ def _hoy_normalizado() -> pd.Timestamp:
     que el cambio de día invalida la entrada solo. Dentro del mismo día la
     clave no cambia, por lo que el caché sigue sirviendo igual que antes.
     """
-    return pd.Timestamp.now().normalize()
+    return reloj.hoy_santiago_ts()  # H3-D2: fecha de Santiago, igual en cualquier zona del servidor
 
 
 @st.cache_data(ttl=3600)  # cachea 1 hora, para no golpear la BD en cada click
@@ -2621,11 +2622,11 @@ def generar_pdf_brief_premercado() -> bytes:
         canvas.line(1.8 * cm, 1.5 * cm, letter[0] - 1.8 * cm, 1.5 * cm)
         canvas.setFont("Helvetica", 7.5)
         canvas.setFillColor(c_muted)
-        canvas.drawString(1.8 * cm, 1.1 * cm, f"Generated {datetime.now().strftime('%Y-%m-%d %H:%M')} — Mercado Económico Chileno")
+        canvas.drawString(1.8 * cm, 1.1 * cm, f"Generated {reloj.ahora_santiago().strftime('%Y-%m-%d %H:%M')} (Santiago time) — Mercado Económico Chileno")
         canvas.drawRightString(letter[0] - 1.8 * cm, 1.1 * cm, f"Page {doc.page}")
         canvas.restoreState()
 
-    hoy = date.today()
+    hoy = reloj.hoy_santiago()
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(
         buffer, pagesize=letter, topMargin=1.8 * cm, bottomMargin=2.2 * cm,
@@ -2991,7 +2992,7 @@ if _seccion == "Brief Premercado":
         st.download_button(
             "📄 Download PDF",
             data=generar_pdf_brief_premercado(),
-            file_name=f"financial_market_{date.today().isoformat()}.pdf",
+            file_name=f"financial_market_{reloj.hoy_santiago().isoformat()}.pdf",
             mime="application/pdf",
         )
     except Exception as e:
@@ -3085,7 +3086,7 @@ if _seccion == "Brief Premercado":
     st.subheader("Economic calendar — next 7 days")
 
     try:
-        hoy = date.today()
+        hoy = reloj.hoy_santiago()  # H3-D2: «próximos 7 días» contados desde la fecha de Santiago
         eventos_semana = proximos_eventos(hoy, dias=7)
 
         if not eventos_semana:

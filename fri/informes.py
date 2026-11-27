@@ -17,6 +17,8 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 import streamlit as st
 
+import reloj  # H3-D2: reloj centralizado (America/Santiago)
+
 from fri import componentes as c
 from fri.estilos import T
 
@@ -30,7 +32,7 @@ def _titulo(texto: str, nota: str = "") -> None:
 
 
 def informe_semanal(fecha_larga, proxima_publicacion) -> None:
-    prox = proxima_publicacion(datetime.now(SANTIAGO))
+    prox = proxima_publicacion(reloj.ahora_santiago())
     izq, der = st.columns([1.6, 1], gap="medium")
     with izq, st.container(border=True):
         _titulo("Informe semanal de mercados", "Domingos 10:00 (Santiago)")

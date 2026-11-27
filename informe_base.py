@@ -29,6 +29,8 @@ import io
 import re
 from datetime import datetime
 
+import reloj  # H3-D2: la hora del pie lleva su zona (America/Santiago)
+
 import matplotlib
 
 matplotlib.use("Agg", force=False)  # sin ventanas: el PDF se arma en el servidor
@@ -215,7 +217,7 @@ def _pie_de_pagina(titulo_corto: str):
         canvas.line(MARGEN, 1.5 * cm, letter[0] - MARGEN, 1.5 * cm)
         canvas.setFont("Helvetica", 7.3)
         canvas.setFillColor(_C["muted"])
-        canvas.drawString(MARGEN, 1.1 * cm, f"{titulo_corto} — generado el {datetime.now().strftime('%d-%m-%Y %H:%M')}")
+        canvas.drawString(MARGEN, 1.1 * cm, f"{titulo_corto} — generado el {reloj.marca_de_generacion()}")
         canvas.drawRightString(letter[0] - MARGEN, 1.1 * cm, f"Página {doc.page}")
         canvas.restoreState()
 

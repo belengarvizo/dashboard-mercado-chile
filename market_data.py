@@ -10,6 +10,7 @@ import pandas as pd
 from scipy import stats
 
 import calendarios_financieros as calf
+import reloj
 
 # (etiqueta, tipo de tabla de origen, nombre/ticker, unidad a mostrar, cadencia,
 #  menor_es_mejor)
@@ -330,7 +331,7 @@ def detectar_apagon_mercado(
     fuente cortó el mercado completo el mismo día" de "varias acciones no
     relacionadas tienen atrasos idiosincráticos en fechas distintas".
 
-    Se recalcula cada vez contra `pd.Timestamp.now()` — nunca hardcodea una
+    Se recalcula cada vez contra la fecha de hoy en Santiago (reloj.hoy_santiago_ts, H3-D2) — nunca hardcodea una
     fecha de apagón — así que se activa solo mientras el apagón esté
     vigente y se apaga solo cuando la fuente vuelva a refrescar datos, o
     detecta un apagón nuevo en el futuro sin cambios de código.
@@ -340,7 +341,7 @@ def detectar_apagon_mercado(
     es la fecha más antigua entre los tickers atrasados agrupados (el día
     en que la fuente dejó de refrescar)."""
     df_precios = df_precios.assign(fecha=pd.to_datetime(df_precios["fecha"]))
-    hoy = pd.Timestamp.now().normalize()
+    hoy = reloj.hoy_santiago_ts()  # H3-D2: fecha de Santiago
 
     fechas_atraso = []
     conteo_aproximado = False

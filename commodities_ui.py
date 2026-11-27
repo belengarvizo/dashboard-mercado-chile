@@ -38,6 +38,7 @@ import streamlit as st
 
 import glosario_commodities as gl
 import calendarios_financieros as calf
+import reloj
 import renta_fija_ui as rfui
 import renta_variable as rv
 from catalogo_commodities import COMMODITIES, GRUPOS_EN_ORDEN, nombre_de, tickers_del_grupo
@@ -127,7 +128,7 @@ def _tabla_html(resumen: pd.DataFrame, tasa_libre: float | None) -> str:
 
 def _mostrar_grupo(precios: pd.DataFrame, grupo: str, tasa_libre: float | None) -> pd.DataFrame | None:
     st.subheader(grupo)
-    resumen = _resumen_del_grupo(precios, tickers_del_grupo(grupo), tasa_libre, pd.Timestamp.now().normalize())
+    resumen = _resumen_del_grupo(precios, tickers_del_grupo(grupo), tasa_libre, reloj.hoy_santiago_ts())
     if resumen is None:
         rfui._sin_datos(f"los commodities de {grupo.lower()}")
         return None

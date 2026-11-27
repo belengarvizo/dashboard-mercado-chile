@@ -43,6 +43,7 @@ import plotly.graph_objects as go
 import streamlit as st
 
 import calendarios_financieros as calf  # H3-D1: calendario de cada instrumento y umbral único de atraso
+import reloj  # H3-D2: «hoy» = fecha de Santiago
 import estructura_tasas as et
 import fx_carry as fx  # H3-07: mismo criterio de tasa vigente que la sección FX
 import glosario_renta_fija as gl
@@ -417,7 +418,7 @@ def _paso_mercado(macro: pd.DataFrame, precios: pd.DataFrame) -> None:
     )
 
     st.subheader("ETFs de bonos: desempeño y riesgo (datos reales)")
-    hoy = pd.Timestamp.now().normalize()
+    hoy = reloj.hoy_santiago_ts()
     resumen = _resumen_de_etfs(precios, macro, hoy) if len(precios) else None
     if resumen is None:
         _sin_datos("los ETFs de bonos")
@@ -613,7 +614,7 @@ def _paso_riesgo_mercado(macro: pd.DataFrame, precios: pd.DataFrame) -> None:
         "tenemos los bonos de cada fondo, así que se **estima una sensibilidad empírica**: cuánto se movió de verdad el precio de cada "
         "ETF cuando se movió la tasa del Tesoro. Puede parecerse a la duración en fondos del Tesoro, pero no es lo mismo."
     )
-    resumen = _resumen_de_etfs(precios, macro, pd.Timestamp.now().normalize()) if len(precios) else None
+    resumen = _resumen_de_etfs(precios, macro, reloj.hoy_santiago_ts()) if len(precios) else None
     if resumen is None:
         _sin_datos("los ETFs de bonos")
         return
@@ -823,7 +824,7 @@ def _paso_banco_central(macro: pd.DataFrame) -> None:
             st.metric(etiqueta, f"{_fmt(dif['diferencial'])} pp")
         else:
             st.metric(etiqueta, "—")
-        st.caption(texto_diferencial_tpm_fed(dif, pd.Timestamp.now().normalize()))
+        st.caption(texto_diferencial_tpm_fed(dif, reloj.hoy_santiago_ts()))
         st.caption(NOTA_DIFERENCIAL_TPM_FED)
 
     ventana = st.radio("Período", list(VENTANAS), horizontal=True, index=1, key="rf_ventana_tasas")
@@ -972,7 +973,7 @@ def _paso_curva(macro: pd.DataFrame, precios: pd.DataFrame) -> None:
         "- **Barbell:** en los extremos (SHY, 1 a 3 años, y TLT, 20 años o más), con pesos elegidos para que tenga **la misma sensibilidad empírica** que el bullet.\n"
         "- **Escalera (ladder):** partes iguales en SHY, IEI, IEF y TLT."
     )
-    resumen = _resumen_de_etfs(precios, macro, pd.Timestamp.now().normalize()) if len(precios) else None
+    resumen = _resumen_de_etfs(precios, macro, reloj.hoy_santiago_ts()) if len(precios) else None
     necesarios = {"SHY", "IEI", "IEF", "TLT"}
     if resumen is None or not necesarios <= set(resumen.index) or resumen.loc[list(necesarios), "Duración medida (años)"].isna().any():
         _sin_datos("los ETFs del Tesoro (SHY, IEI, IEF y TLT) o su sensibilidad empírica")
@@ -1087,7 +1088,7 @@ def _descarga_del_informe(macro: pd.DataFrame, precios: pd.DataFrame) -> None:
         if preparado and preparado[0] == periodo:
             st.download_button(
                 "Descargar PDF", data=preparado[1], mime="application/pdf", key="rf_descargar_informe",
-                file_name=f"informe-renta-fija-{pd.Timestamp.now():%Y-%m-%d}.pdf",
+                file_name=f"informe-renta-fija-{reloj.hoy_santiago():%Y-%m-%d}.pdf",
             )
         elif preparado:
             st.caption(f"El informe preparado es de «{preparado[0].lower()}». Vuelve a prepararlo para el período elegido.")

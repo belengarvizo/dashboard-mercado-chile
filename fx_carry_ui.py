@@ -37,6 +37,7 @@ import fx_carry as fx
 import glosario_fx as gl
 import renta_fija as rf
 import calendarios_financieros as calf
+import reloj
 import renta_fija_ui as rfui
 from catalogo_fx import (
     MONEDAS_CARRY, MONEDAS_SIN_TASA, NOMBRE_COBRE, NOMBRE_TASA_CHILE, NOMBRE_TASA_EEUU, NOMBRE_TIPO_DE_CAMBIO_OBSERVADO,
@@ -175,7 +176,7 @@ def _paso_mercado(precios: pd.DataFrame) -> None:
         "de compra y venta ni los *forwards* (precios a futuro) de las divisas, y por eso la pantalla no los muestra."
     )
     st.subheader("Los pares de divisas (datos reales)")
-    resumen = _resumen_de_pares(precios, pd.Timestamp.now().normalize())
+    resumen = _resumen_de_pares(precios, reloj.hoy_santiago_ts())
     if resumen is None:
         rfui._sin_datos("los pares de divisas")
         return
@@ -332,7 +333,7 @@ def _paso_carry(macro: pd.DataFrame, precios: pd.DataFrame) -> None:
         "resultado del año es el **spot** (cuánto se movió la moneda frente al dólar) más el **carry** (el diferencial de tasas)."
     )
     st.subheader("Carry de cada moneda contra el dólar (datos reales)")
-    resumen = _resumen_del_carry(macro, precios, pd.Timestamp.now().normalize())
+    resumen = _resumen_del_carry(macro, precios, reloj.hoy_santiago_ts())
     if resumen is None:
         rfui._sin_datos("tasas y tipos de cambio para calcular el carry")
         return

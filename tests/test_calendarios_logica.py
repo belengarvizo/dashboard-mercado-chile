@@ -195,13 +195,10 @@ def test_un_calendario_no_verificado_no_produce_afirmaciones_categoricas():
     # Apagón con la Bolsa de Santiago (calendario no verificado): el resultado se marca como aproximado.
     fechas = pd.bdate_range("2030-01-01", periods=10)
     df = pd.DataFrame([{"ticker": t, "fecha": f, "precio_cierre": 1.0} for t in ("A.SN", "B.SN") for f in fechas])
-    import market_data
-    original = market_data.pd.Timestamp.now
-    try:
-        market_data.pd.Timestamp.now = staticmethod(lambda *a, **k: pd.Timestamp("2030-02-15"))
+    import reloj
+    from datetime import datetime, timezone
+    with reloj.fijar(datetime(2030, 2, 15, 15, 0, tzinfo=timezone.utc)):     # H3-D2: el detector lee el reloj central
         apagon = md.detectar_apagon_mercado(df, ["A.SN", "B.SN"])
-    finally:
-        market_data.pd.Timestamp.now = original
     assert apagon is not None and apagon["aproximado"] is True
     fuente = open(os.path.join(RAIZ, "app", "dashboard.py"), encoding="utf-8").read()
     assert "Posible apagón de datos" in fuente
