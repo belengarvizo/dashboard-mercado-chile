@@ -206,6 +206,7 @@ def yahoo(monkeypatch):
     ui._precio_en_vivo_con_hora.clear()
 
 
+@pytest.mark.simulada  # Yahoo Finance simulado (_YahooSimulado), sin red
 def test_una_sola_consulta_liviana_por_subyacente_y_sin_redundancia(yahoo):
     ui = yahoo()
     with reloj.fijar(_ny(2026, 11, 20, 16, 30)):
@@ -216,6 +217,7 @@ def test_una_sola_consulta_liviana_por_subyacente_y_sin_redundancia(yahoo):
     assert instante == _ny(2026, 11, 20, 16, 0)                                  # barra de las 15:59 → precio de las 16:00
 
 
+@pytest.mark.simulada  # Yahoo Finance simulado (_YahooSimulado), sin red
 def test_cinco_dias_solo_si_el_dia_viene_vacio(yahoo):
     ui = yahoo(vacio_primero=True)
     with reloj.fijar(_ny(2026, 11, 23, 8, 0)):
@@ -223,6 +225,7 @@ def test_cinco_dias_solo_si_el_dia_viene_vacio(yahoo):
     assert _YahooSimulado.llamadas == [("SPY", "1d", "1m"), ("SPY", "5d", "1m")]
 
 
+@pytest.mark.simulada  # Yahoo Finance simulado (_YahooSimulado), sin red
 def test_sin_zona_horaria_no_se_inventa_la_hora(yahoo):
     ui = yahoo(sin_zona=True)
     precio, instante = ui._precio_en_vivo_con_hora("SPY")
